@@ -153,7 +153,23 @@ let named_record_with_value_arguments record values =
   let argument_for_value parameter ((field : field), value) =
     match value_type value with
     | None -> None
-    | Some value_ty -> argument_for parameter field.ty value_ty
+    | Some value_ty ->
+        let value_ty =
+          (* `field_expr` annotates a projection `(r : (_, _) record).f`
+             with the record type, not the field type. Recover the
+             field's actual type by instantiating field.ty with the
+             projected record's arguments. *)
+          match value_ty with
+          | TNamed_record projected
+            when String.equal projected.type_name record.type_name ->
+              Types.instantiate_type
+                ~templates:
+                  (List.map (fun parameter -> TVar parameter)
+                     record.type_parameters)
+                ~actuals:projected.type_arguments field.ty
+          | _ -> value_ty
+        in
+        argument_for parameter field.ty value_ty
   in
   if record.nominal || record.type_parameters = [] then record
   else

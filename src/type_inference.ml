@@ -69,7 +69,13 @@ let static_sequential_element_type ty =
 let into_source_element_type ty =
   match Types.dynamic_map_types (Types.constraint_value_type ty) with
   | Some (key, value) -> Some (TTuple [ key; value ])
-  | None -> static_seqable_element_type ty
+  | None -> (
+      match ty with
+      (* An empty keyword-map or open map target accepts any key-value
+         pair entry; fresh metas let the source pin both sides. *)
+      | TRecord [] | TMap_keys ->
+          Some (TTuple [ Type_solver.fresh (); Type_solver.fresh () ])
+      | _ -> static_seqable_element_type ty)
 
 let nested_seqable_map_entry_type ty =
   Option.bind (Types.seqable_constraint_info ty)
@@ -2501,6 +2507,18 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     | Some (TFn _ as ty) -> Some ty
     | Some _ | None -> None
   in
+  (* A few `__lg_*` builtins have no dedicated inference case and reuse
+     their source function's signature (comp/juxt/partial/rest/concat).
+     All other `__lg_*` names either have a dedicated case below (which
+     encodes the builtin's real, usually looser, semantics) or get plain
+     inference; borrowing the source signature there would over-constrain
+     them (e.g. `__lg_some`'s callback must not inherit `some`'s
+     option-returning predicate signature). *)
+  let signature_fallback_builtin = function
+    | "__lg_comp" | "__lg_concat" | "__lg_juxt" | "__lg_partial"
+    | "__lg_rest" -> true
+    | _ -> false
+  in
   let lookup_inference_function_type params name args =
     let inferred = inference_function_type params name in
     match inferred with
@@ -2509,7 +2527,22 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         (match lookup_call_ty name args with
          | Some ty -> Ok (freshen_call_type name ty)
          | None ->
-             Result.map (freshen_call_type name) (lookup_function_ty name))
+             let ty =
+               match
+                 ( lookup_function_ty name,
+                   signature_fallback_builtin name )
+               with
+               | Error _, true -> (
+                   let source_name =
+                     String.sub name 5 (String.length name - 5)
+                   in
+                   match lookup_function_ty source_name with
+                   | Error _ ->
+                       lookup_function_ty ("clojure.core/" ^ source_name)
+                   | ok -> ok)
+               | result, _ -> result
+             in
+             Result.map (freshen_call_type name) ty)
   in
   let inferred_hof_argument_type params form =
     let inferred =
@@ -2614,7 +2647,27 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                       infer_form params collection
                   | _ -> infer_expected (Types.seqable_constraint element_ty) params collection))
               (Ok params) collections
-        | Some _ | None -> infer_all params collections)
+        | Some _ | None ->
+            let element_ty = fresh_type_variable "concat_element" in
+            List.fold_left
+              (fun result collection ->
+                Result.bind result (fun params ->
+                    let actual =
+                      inferred_form_or_call_type ~lookup_function_ty params
+                        collection
+                    in
+                    match static_seqable_element_type actual with
+                    | Some known
+                      when not (Type_solver.is_open known)
+                           &&
+                           (match known with TRecord _ -> false | _ -> true) ->
+                        infer_form params collection
+                    | _ ->
+                        infer_expected
+                          (Types.optional_seqable_constraint element_ty
+                             (fresh_type_variable "concat_storage"))
+                          params collection))
+              (Ok params) collections)
     | FSymbol name ->
         Option.iter (fun observe ->
             Option.iter (observe expected_ty) (string_assoc_opt name params))
@@ -3072,9 +3125,18 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
           | TVector element_ty -> Some element_ty
           | _ -> Types.seqable_constraint_element expected_ty
         in
-        match element_ty with
-        | Some element_ty -> infer_expected_all element_ty params values
-        | None -> infer_all params values)
+        match (element_ty, expected_ty) with
+        | _, TTuple item_tys when List.length item_tys = List.length values ->
+            (* A vector literal may stand in for a pair/entry value
+               (e.g. map-entry results feeding `into`), so constrain
+               its elements pairwise. *)
+            List.fold_left2
+              (fun result item_ty value ->
+                Result.bind result (fun params ->
+                    infer_expected item_ty params value))
+              (Ok params) item_tys values
+        | Some element_ty, _ -> infer_expected_all element_ty params values
+        | None, _ -> infer_all params values)
     | FList [ FSymbol "weak-ref"; value ] -> (
         match Types.weak_element expected_ty with
         | Some value_ty -> infer_expected value_ty params value
@@ -7053,6 +7115,23 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         | FSymbol name -> constrain_seqable TUnknown params name
         | form ->
             infer_expected (Types.seqable_constraint TUnknown) params form)
+    | FList [ FSymbol "__lg_name"; FSymbol name ] -> (
+        match lookup_protocol_constraint "INameCoercion" with
+        | Some constraint_ty -> constrain_symbol constraint_ty params name
+        | None -> infer_expected TString params (FSymbol name))
+    | FList [ FSymbol "__lg_name"; value ] ->
+        infer_expected
+          (match lookup_protocol_constraint "INameCoercion" with
+          | Some constraint_ty -> constraint_ty
+          | None -> TString)
+          params value
+    | FList [ FSymbol "__lg_namespace"; FSymbol name ] -> (
+        match lookup_protocol_constraint "INamed" with
+        | Some constraint_ty -> constrain_symbol constraint_ty params name
+        | None -> infer_expected TString params (FSymbol name))
+    | FList [ FSymbol "__lg_re-find"; expression; source ] ->
+        Result.bind (infer_expected TRegex params expression)
+          (fun params -> infer_expected TString params source)
     | FList (FSymbol "__lg_merge" :: maps) ->
         let key_ty, value_ty =
           maps
@@ -7553,26 +7632,43 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                 (inferred_form_type params function_form)
         in
         if dynamic_function then
+          let value_ty = fresh_type_variable "apply_value" in
+          let result_ty = fresh_type_variable "apply_result" in
+          let variadic_fn_ty =
+            (* apply may call f with any number of arguments, so the
+               demanded shape is a single variadic arity; concrete
+               overload sets adapt through the variadic wrapper. *)
+            TOverloaded_fn
+              [
+                {
+                  fixed_params = [];
+                  rest_param = Some value_ty;
+                  return_ty = result_ty;
+                };
+              ]
+          in
           let params =
             match function_form with
             | FSymbol name -> (
                 match string_assoc_opt name params with
                 | Some (TUnknown | TMeta _ | TVar _) ->
-                    constrain_symbol (Types.dynamic_constraint TUnknown) params
-                      name
+                    constrain_symbol variadic_fn_ty params name
                 | _ -> Ok params)
             | _ -> Ok params
           in
           Result.bind params (fun params ->
               match List.rev arguments with
               | collection :: reversed_fixed ->
-                  let dynamic = Types.dynamic_constraint TUnknown in
                   Result.bind
-                    (infer_expected_all dynamic params (List.rev reversed_fixed))
+                    (infer_expected_all value_ty params
+                       (List.rev reversed_fixed))
                     (fun params ->
                       match collection with
-                      | FSymbol name -> constrain_seqable dynamic params name
-                      | collection -> infer_form params collection)
+                      | FSymbol name -> constrain_seqable value_ty params name
+                      | collection ->
+                          infer_expected
+                            (Types.seqable_constraint value_ty)
+                            params collection)
               | [] -> Ok params)
         else (
           match List.rev arguments with
@@ -8254,11 +8350,22 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
             add_record_field_constraint record keyword
               (Types.dynamic_map key_ty value_ty)
               params)
-    | FList [ FSymbol "__lg_select-keys"; FSymbol target; FSymbol keys ] ->
+    | FList [ FSymbol "__lg_select-keys"; FSymbol target; keys ] -> (
         let key_ty = fresh_type_variable "select_keys_key" in
         let value_ty = fresh_type_variable "select_keys_value" in
-        Result.bind (constrain_seqable key_ty params keys) (fun params ->
-            constrain_symbol (Types.dynamic_map key_ty value_ty) params target)
+        match keys with
+        | FSymbol name ->
+            Result.bind (constrain_seqable key_ty params name) (fun params ->
+                constrain_symbol (Types.dynamic_map key_ty value_ty) params
+                  target)
+        | form ->
+            Result.bind
+              (infer_expected
+                 (Types.seqable_constraint key_ty)
+                 params form)
+              (fun params ->
+                constrain_symbol (Types.dynamic_map key_ty value_ty) params
+                  target))
     | FList
         [ FKeyword nested_keyword; FList [ FKeyword keyword; FSymbol name ] ] ->
         add_record_field_constraint name keyword
@@ -8412,7 +8519,17 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         | Some (key_ty, _) ->
             Result.bind (infer_form params target) (fun params ->
                 infer_expected_all key_ty params keys)
-        | None -> infer_all params (target :: keys))
+        | None -> (
+            let key_ty = fresh_type_variable "dissoc_key" in
+            let value_ty = fresh_type_variable "dissoc_value" in
+            match target with
+            | FSymbol name ->
+                Result.bind
+                  (constrain_symbol
+                     (Types.dynamic_map key_ty value_ty)
+                     params name)
+                  (fun params -> infer_expected_all key_ty params keys)
+            | _ -> infer_all params (target :: keys)))
     | FList (FSymbol "__lg_assoc" :: target :: pairs) ->
         infer_assoc params target pairs
     | FList (FSymbol "__lg_subvec" :: collection :: indexes)

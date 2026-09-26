@@ -578,7 +578,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           ] ) ) )))
     | _ -> Ok callable
   in
-  let compile_function_arg_for_collection scope env element_ty form =
+  let compile_function_arg_for_collection scope env ?expected_return_ty
+      element_ty form =
     let element_ty =
       Collection_capability.resolve_callback_record env element_ty
     in
@@ -627,12 +628,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                    apply "Rrbvec.of_list" [ Semantic_ir.List values ] )))
           (compile_keywords [] keyword_forms)
     | FList (FSymbol "fn" :: (FVector [ _ ] as params) :: body_forms) ->
-        compile_contextual_fn scope env
+        compile_contextual_fn scope env ?expected_return_ty
           ~param_type_overrides:[ Some element_ty ] params body_forms
     | FList
         (FSymbol "fn" :: FSymbol name :: (FVector [ _ ] as params)
         :: body_forms) ->
-        compile_contextual_fn scope env ~name
+        compile_contextual_fn scope env ~name ?expected_return_ty
           ~param_type_overrides:[ Some element_ty ] params body_forms
     | FList (FSymbol "__lg_hash-set" :: _) as form ->
         Result.bind
@@ -1883,8 +1884,27 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                     ("map expects a seqable value, got "
                     ^ Types.source_name collection.ty)
               | Ok (inner, sequence) -> (
+                  let expected_return_ty =
+                    match Env.expected_type env with
+                    | Some expected -> (
+                        match
+                          match expected with
+                          | TSeq element | TList element | TVector element ->
+                              Some element
+                          | _ -> Types.seqable_constraint_element expected
+                        with
+                        | Some element
+                          when not
+                                 (match element with
+                                 | TUnknown | TMeta _ | TVar _ -> true
+                                 | _ -> false) ->
+                            Some element
+                        | Some _ | None -> None)
+                    | None -> None
+                  in
                   match
-                    compile_function_arg_for_collection scope env inner fn_form
+                    compile_function_arg_for_collection scope env
+                      ?expected_return_ty inner fn_form
                   with
                   | Error _ as err -> err
                   | Ok ({ ty = TFn ([ param_ty ], ret); _ } as fn)

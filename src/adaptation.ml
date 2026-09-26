@@ -455,15 +455,19 @@ let identity_compatible expected actual =
   compatible [] expected actual
 
 let overload_covers_variadic_identity expected_arity actual_arities =
+  (* An unresolved expected type (inference variable) accepts anything. *)
+  let compatible_with expected actual =
+    open_leaf expected || identity_compatible expected actual
+  in
   match expected_arity.rest_param with
   | None -> false
   | Some expected_rest ->
       let compatible (actual : fn_arity) =
-        List.for_all (identity_compatible expected_rest) actual.fixed_params
+        List.for_all (compatible_with expected_rest) actual.fixed_params
         && Option.fold ~none:true
-             ~some:(identity_compatible expected_rest)
+             ~some:(compatible_with expected_rest)
              actual.rest_param
-        && identity_compatible expected_arity.return_ty actual.return_ty
+        && compatible_with expected_arity.return_ty actual.return_ty
       in
       let variadic_fixed_count =
         actual_arities

@@ -827,26 +827,95 @@ let rec argument_compatible expected actual =
           (fun expected -> generic_function_compatible (function_type expected))
           expected_arities
     | TOverloaded_fn expected_arities, TOverloaded_fn actual_arities ->
-        let function_type (arity : fn_arity) =
-          let parameters =
-            match arity.rest_param with
-            | None -> arity.fixed_params
-            | Some rest_ty -> arity.fixed_params @ [ TSeq rest_ty ]
-          in
-          TFn (parameters, arity.return_ty)
+        let parameter_compatible expected actual =
+          argument_compatible expected actual
+          || Result.is_ok (Type_solver.unify Type_solver.empty actual expected)
+          || Result.is_ok (Type_solver.unify Type_solver.empty expected actual)
         in
-        List.for_all
-          (fun (expected : fn_arity) ->
-            actual_arities
-            |> List.find_opt (fun (actual : fn_arity) ->
-                   List.length actual.fixed_params
-                   = List.length expected.fixed_params
-                   && Option.is_some actual.rest_param
-                      = Option.is_some expected.rest_param)
-            |> Option.fold ~none:false ~some:(fun actual ->
-                   argument_compatible (function_type expected)
-                     (function_type actual)))
-          expected_arities
+        (* An actual arity covers a call of `count` arguments when it is a
+           fixed arity of that length or a variadic arity that accepts at
+           most `count` fixed arguments. *)
+        let actual_covers (actual : fn_arity) count =
+          (Option.is_none actual.rest_param
+           && List.length actual.fixed_params = count)
+          || (Option.is_some actual.rest_param
+              && List.length actual.fixed_params <= count)
+        in
+        let actual_param (actual : fn_arity) index =
+          match List.nth_opt actual.fixed_params index with
+          | Some parameter -> parameter
+          | None -> (
+              match actual.rest_param with
+              | Some rest -> rest
+              | None -> TUnknown)
+        in
+        let expected_param_at (expected : fn_arity) index =
+          match List.nth_opt expected.fixed_params index with
+          | Some parameter -> parameter
+          | None -> Option.value ~default:TUnknown expected.rest_param
+        in
+        let arity_compatible (expected : fn_arity) =
+          let expected_count = List.length expected.fixed_params in
+          (* A variadic expected arity demands every count >= its fixed
+             length: a variadic actual covers the tail, fixed actuals must
+             cover the gap below it. *)
+          let smallest_variadic =
+            List.fold_left
+              (fun smallest (actual : fn_arity) ->
+                match actual.rest_param with
+                | Some _ -> min smallest (List.length actual.fixed_params)
+                | None -> smallest)
+              max_int actual_arities
+          in
+          let covered =
+            match expected.rest_param with
+            | None ->
+                List.exists
+                  (fun actual -> actual_covers actual expected_count)
+                  actual_arities
+            | Some _ ->
+                smallest_variadic <> max_int
+                && (expected_count >= smallest_variadic
+                    || List.init (smallest_variadic - expected_count)
+                         (fun index -> expected_count + index)
+                       |> List.for_all (fun count ->
+                              List.exists
+                                (fun actual -> actual_covers actual count)
+                                actual_arities))
+          in
+          (* An actual arity participates when it accepts some call shape
+             the expected arity demands. *)
+          let relevant (actual : fn_arity) =
+            match (expected.rest_param, actual.rest_param) with
+            | Some _, Some _ -> true
+            | Some _, None ->
+                List.length actual.fixed_params >= expected_count
+            | None, _ -> actual_covers actual expected_count
+          in
+          covered
+          && List.for_all
+               (fun (actual : fn_arity) ->
+                 (not (relevant actual))
+                 ||
+                 let positions =
+                   max expected_count (List.length actual.fixed_params)
+                 in
+                 List.init positions Fun.id
+                   |> List.for_all (fun index ->
+                          parameter_compatible
+                            (expected_param_at expected index)
+                            (actual_param actual index))
+                 &&
+                 match (expected.rest_param, actual.rest_param) with
+                 | Some expected_rest, Some actual_rest ->
+                     parameter_compatible expected_rest actual_rest
+                 | _ -> true
+                 && (Type_solver.is_open expected.return_ty
+                     || parameter_compatible expected.return_ty
+                          actual.return_ty))
+               actual_arities
+        in
+        List.for_all arity_compatible expected_arities
     | _ -> false
 
 let named_argument_compatible expected actual =
@@ -17685,7 +17754,14 @@ let create ~compile_expr =
           Env.with_expected_type
             (Some (Types.seqable_constraint element_ty))
             expression_env
-      | _ -> expression_env
+      | target_ty -> (
+          match Types.dynamic_map_types target_ty with
+          | Some (key_ty, value_ty) ->
+              Env.with_expected_type
+                (Some
+                   (Types.seqable_constraint (TTuple [ key_ty; value_ty ])))
+                expression_env
+          | None -> expression_env)
     in
     let target_element_type target =
       match target.ty with
@@ -22764,6 +22840,22 @@ let create ~compile_expr =
                                 (fun argument -> Types.source_name argument.ty)
                                 args)
                          ^ ")")))
+            | ty
+              when (match
+                      match ty with
+                      | TNullable inner | TOcaml_app ("option", [ inner ]) ->
+                          inner
+                      | _ -> ty
+                    with
+                    | TKeyword | TSymbol -> true
+                    | _ -> false) -> (
+                (* Keywords and symbols are callable: (kw m) looks the key
+                   up in m, like a literal (:kw m). *)
+                match arg_forms with
+                | target :: defaults ->
+                    compile_static_get scope env
+                      (target :: FSymbol name :: defaults)
+                | [] -> Error.error (name ^ " expects a collection argument"))
             | _ -> Error.error (name ^ " is not callable")))
   and compile_protocol_call scope env name arg_forms =
     let contextual_return_ty ty =
