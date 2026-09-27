@@ -1283,6 +1283,184 @@ let remove_unused_anonymous_types structure =
       | None -> true)
     structure
 
+(* Emission invariant: each lg.node_id attribute names a distinct generated
+   node so language-service lookups hit exactly one occurrence. Lowering
+   transforms may duplicate a subtree (e.g. inlining a shared binding), so a
+   repeated id is re-minted with a fresh generated path — same source span
+   and origins, distinct identity. Only Semantic_ir nodes are walked:
+   per-item identity metadata belongs to elaboration, not transforms. *)
+type reuniquifier = {
+  seen_ids : (string, unit) Hashtbl.t;
+  mutable next_id : int;
+}
+
+let reuniquify_node_id ctx (id : Source_node_id.t) =
+  let key = Source_node_id.to_string id in
+  if not (Hashtbl.mem ctx.seen_ids key) then (
+    Hashtbl.replace ctx.seen_ids key ();
+    id)
+  else
+    let rec fresh () =
+      ctx.next_id <- ctx.next_id + 1;
+      let candidate =
+        Source_node_id.generated ~source_unit:id.source_unit
+          ~location:id.location
+          ~path:(id.generated_path @ [ ctx.next_id ])
+          ~origins:id.origins
+      in
+      let candidate_key = Source_node_id.to_string candidate in
+      if Hashtbl.mem ctx.seen_ids candidate_key then fresh ()
+      else (
+        Hashtbl.replace ctx.seen_ids candidate_key ();
+        candidate)
+    in
+    fresh ()
+
+let rec reuniquify_expression ctx (expression : Semantic_ir.t) :
+    Semantic_ir.t =
+  let expr = reuniquify_expression ctx in
+  let pattern = reuniquify_pattern ctx in
+  let binding (pat, value) = (pattern pat, expr value) in
+  let case (pat, body) = (pattern pat, expr body) in
+  let guarded (pat, guard, body) =
+    (pattern pat, Option.map expr guard, expr body)
+  in
+  match expression with
+  | Semantic_ir.Located (node_id, location, value) ->
+      Semantic_ir.Located
+        (reuniquify_node_id ctx node_id, location, expr value)
+  | Typed (ty, value) -> Typed (ty, expr value)
+  | GadtScope value -> GadtScope (expr value)
+  | SharedValue (name, value) -> SharedValue (name, expr value)
+  | PolyTag (name, value) -> PolyTag (name, Option.map expr value)
+  | Constructor (name, value) -> Constructor (name, Option.map expr value)
+  | Tuple values -> Tuple (List.map expr values)
+  | List values -> List (List.map expr values)
+  | Array values -> Array (List.map expr values)
+  | Apply (fn, arguments) -> Apply (expr fn, List.map expr arguments)
+  | Uncurried_apply (fn, arguments) ->
+      Uncurried_apply (expr fn, List.map expr arguments)
+  | Labelled_apply (fn, arguments) ->
+      Labelled_apply
+        (expr fn, List.map (fun (label, value) -> (label, expr value)) arguments)
+  | If (condition, then_expr, else_expr) ->
+      If (expr condition, expr then_expr, expr else_expr)
+  | Fun (patterns, body) -> Fun (List.map pattern patterns, expr body)
+  | Labelled_fun (patterns, body) ->
+      Labelled_fun
+        (List.map (fun (label, pat) -> (label, pattern pat)) patterns, expr body)
+  | Sequence values -> Sequence (List.map expr values)
+  | Let (bindings, body) -> Let (List.map binding bindings, expr body)
+  | EvaluateOnce (name, value, body) ->
+      EvaluateOnce (name, expr value, expr body)
+  | LetRec (name, patterns, body, next) ->
+      LetRec (name, List.map pattern patterns, expr body, List.map expr next)
+  | LetRecIn (name, patterns, body, next) ->
+      LetRecIn (name, List.map pattern patterns, expr body, expr next)
+  | LetRecGroup (bindings, body) ->
+      LetRecGroup (List.map binding bindings, expr body)
+  | UnpackModule (a, b, value, body) ->
+      UnpackModule (a, b, expr value, expr body)
+  | Match (target, cases) -> Match (expr target, List.map case cases)
+  | Match_guarded (target, cases) ->
+      Match_guarded (expr target, List.map guarded cases)
+  | Try (target, cases) -> Try (expr target, List.map guarded cases)
+  | Infix (operator, left, right) -> Infix (operator, expr left, expr right)
+  | Prefix (operator, value) -> Prefix (operator, expr value)
+  | Constraint (value, ty) -> Constraint (expr value, ty)
+  | Field (value, name) -> Field (expr value, name)
+  | SetField (target, name, value) -> SetField (expr target, name, expr value)
+  | Cons (head, tail) -> Cons (expr head, expr tail)
+  | Record (fields, extends) ->
+      Record (List.map (fun (name, value) -> (name, expr value)) fields, extends)
+  | RecordUpdate (base, fields) ->
+      RecordUpdate
+        (expr base, List.map (fun (name, value) -> (name, expr value)) fields)
+  | PackDynamic conversion -> PackDynamic { conversion with conversion = expr conversion.conversion }
+  | UnpackDynamic conversion ->
+      UnpackDynamic { conversion with conversion = expr conversion.conversion }
+  | NullableToSeq conversion ->
+      NullableToSeq { conversion with conversion = expr conversion.conversion }
+  | Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit | Ident _
+  | PackModule _ ->
+      expression
+
+and reuniquify_pattern ctx (pat : Semantic_ir.pattern) :
+    Semantic_ir.pattern =
+  let pattern = reuniquify_pattern ctx in
+  match pat with
+  | Semantic_ir.PLocated (node_id, location, inner) ->
+      Semantic_ir.PLocated (reuniquify_node_id ctx node_id, location, pattern inner)
+  | PPolyTag (name, payload) -> PPolyTag (name, Option.map pattern payload)
+  | PConstructor (name, payload) ->
+      PConstructor (name, Option.map pattern payload)
+  | PTuple patterns -> PTuple (List.map pattern patterns)
+  | PList patterns -> PList (List.map pattern patterns)
+  | PCons (head, tail) -> PCons (pattern head, pattern tail)
+  | PRecord fields ->
+      PRecord (List.map (fun (name, pat) -> (name, pattern pat)) fields)
+  | PAlias (inner, name) -> PAlias (pattern inner, name)
+  | POr (left, right) -> POr (pattern left, pattern right)
+  | PConstraint (inner, ty) -> PConstraint (pattern inner, ty)
+  | PTyped (inner, ty) -> PTyped (pattern inner, ty)
+  | PVar _ | PAny | PUnit | PInt _ | PInt64 _ | PString _ | PBool _ -> pat
+
+let rec reuniquify_item ctx (item : compiled_item) : compiled_item =
+  match item with
+  | Value_binding ({ expression; _ } as binding) ->
+      Value_binding
+        { binding with expression = reuniquify_expression ctx expression }
+  | Recursive_value_binding ({ expression; _ } as binding) ->
+      Recursive_value_binding
+        { binding with expression = reuniquify_expression ctx expression }
+  | Recursive_value_bindings values ->
+      Recursive_value_bindings
+        (List.map
+           (fun (value : recursive_value) ->
+             {
+               value with
+               expression = reuniquify_expression ctx value.expression;
+             })
+           values)
+  | Deferred_value_binding binding ->
+      Deferred_value_binding
+        { binding with expression = reuniquify_expression ctx binding.expression }
+  | Record_def ({ values; _ } as record) ->
+      Record_def
+        {
+          record with
+          values =
+            List.map
+              (fun (field, value) -> (field, reuniquify_expression ctx value))
+              values;
+        }
+  | Projected_record_def ({ source; _ } as record) ->
+      Projected_record_def
+        { record with source = reuniquify_expression ctx source }
+  | Group items -> Group (List.map (reuniquify_item ctx) items)
+  | Module_def module_def ->
+      Module_def
+        { module_def with
+          items = List.map (reuniquify_item ctx) module_def.items }
+  | Module_functor functor_ ->
+      Module_functor
+        { functor_ with
+          items = List.map (reuniquify_item ctx) functor_.items }
+  | Foreign_binding _ | Polymorphic_holder_type _ | Comment _ | Type_def _
+  | Opaque_type _ | Type_alias _ | Type_variant _ | Module_alias _
+  | Module_apply _ | Module_signature _ | Open_module _ | Include_module _ ->
+      item
+
+let reuniquify_items items =
+  let ctx = { seen_ids = Hashtbl.create 1024; next_id = 0 } in
+  List.map (reuniquify_item ctx) items
+
+let reuniquify_located_items items =
+  let ctx = { seen_ids = Hashtbl.create 1024; next_id = 0 } in
+  List.map
+    (fun (location, item) -> (location, reuniquify_item ctx item))
+    items
+
 let rec structure_of_item_with_sets requested_sets module_path = function
   | Foreign_binding foreign ->
       (match foreign.backend with
@@ -1776,6 +1954,7 @@ let missing_root_set_definitions requested_sets items =
     requested_sets []
 
 let structure_of_items items =
+  let items = reuniquify_items items in
   let requested_sets =
     collect_set_modules_from_items [] String_map.empty items
   in
@@ -1815,6 +1994,7 @@ let requested_set_modules_from_located_items items =
   |> String_map.bindings |> List.map fst
 
 let structure_of_located_items_excluding excluded_sets items =
+  let items = reuniquify_located_items items in
   let plain_items = List.map snd items in
   let requested_sets =
     collect_set_modules_from_items [] String_map.empty plain_items
