@@ -17450,11 +17450,22 @@ let create ~compile_expr =
                 in
                 Result.map
                   (fun sequences ->
+                    (* A sole non-stable sequence inlines: with one effectful
+                       element the unspecified evaluation order is
+                       unobservable. *)
+                    let inline_sole =
+                      List.length
+                        (List.filter
+                           (fun sequence ->
+                             not (Semantic_ir.is_stable sequence))
+                           sequences)
+                      <= 1
+                    in
                     let bindings, elements =
                       sequences
                       |> List.mapi (fun index sequence ->
-                             if Semantic_ir.is_stable sequence then
-                               (None, sequence)
+                             if Semantic_ir.is_stable sequence || inline_sole
+                             then (None, sequence)
                              else
                                let name =
                                  "__lg_concat_sequence_"
