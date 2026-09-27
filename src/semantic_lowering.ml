@@ -70,16 +70,30 @@ let liftable_bindings bindings =
 let rec collapse_identity_lets = function
   | Ocaml_ir.Let ([ (pattern, bound) ], body) -> (
       let rec bound_name = function
-        | Ocaml_ir.PVar name -> Some name
+        | Ocaml_ir.PVar name -> Some (name, None)
         | PLocated (_, _, pat) -> bound_name pat
+        | PConstraint (pat, ty) -> (
+            match bound_name pat with
+            | Some (name, None) -> Some (name, Some ty)
+            | other -> other)
         | _ -> None
       in
-      match (bound_name pattern, collapse_identity_lets body) with
-      | Some name, Ocaml_ir.Ident name'
+      let rec body_name = function
+        | Ocaml_ir.Ident name -> Some name
+        | Located (_, _, expr) -> body_name expr
+        | _ -> None
+      in
+      match (bound_name pattern, body_name (collapse_identity_lets body)) with
+      | Some (name, ty), Some name'
         when name = name'
              && String.length name >= 4
-             && String.sub name 0 4 = "__lg" ->
-          collapse_identity_lets bound
+             && String.sub name 0 4 = "__lg" -> (
+          (* The pattern annotation pins the result type, so it moves onto
+             the bound expression. *)
+          match ty with
+          | Some ty ->
+              collapse_identity_lets (Ocaml_ir.Constraint (bound, ty))
+          | None -> collapse_identity_lets bound)
       | _ ->
           Ocaml_ir.Let ([ (pattern, bound) ], collapse_identity_lets body))
   | expr -> expr
@@ -106,7 +120,7 @@ let lift_lets fn args =
 let lifted_expression bindings expr =
   match bindings with [] -> expr | _ -> Ocaml_ir.Let (bindings, expr)
 
-let rec expression = function
+let rec lower_node = function
   | Semantic_ir.Typed (_, value) -> expression value
   | Semantic_ir.GadtScope value -> Ocaml_ir.GadtScope (expression value)
   | Semantic_ir.Located (node_id, location, value) ->
@@ -181,11 +195,12 @@ let rec expression = function
       match Semantic_ir.scoped_let bindings body with
       | Some scoped -> expression scoped
       | None ->
-          Let
-            ( List.map
-                (fun (pat, value) -> (pattern pat, expression value))
-                bindings,
-              expression body ))
+          collapse_identity_lets
+            (Let
+               ( List.map
+                   (fun (pat, value) -> (pattern pat, expression value))
+                   bindings,
+                 expression body )))
   | EvaluateOnce (name, value, body) ->
       Let
         ( [
@@ -253,3 +268,7 @@ let rec expression = function
   | UnpackDynamic { conversion; _ }
   | NullableToSeq { conversion; _ } ->
       expression conversion
+
+(* `collapse_identity_lets` runs on every lowered subexpression so identity
+   temporaries fold regardless of which construct produced them. *)
+and expression value = collapse_identity_lets (lower_node value)
