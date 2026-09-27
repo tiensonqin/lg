@@ -870,6 +870,15 @@ let extract_compilation_options args =
   in
   loop Lg.Target.default None [] args
 
+(* `--no-redef` emits plain OCaml bindings for top-level definitions instead
+   of the redefinition cell + wrapper pair, shrinking batch output. Redefining
+   or `with-redefs`-patching those bindings later stops working. *)
+let strip_no_redef args =
+  if List.mem "--no-redef" args then (
+    Lg.Top_level_elaborator.redefable_roots := false;
+    List.filter (fun arg -> arg <> "--no-redef") args)
+  else args
+
 let parse_args argv =
   let target, reader_target, args =
     extract_compilation_options (Array.to_list argv)
@@ -893,12 +902,14 @@ let parse_args argv =
     | [ _program; "--run-from"; state_path; implementation_path; input_path ] ->
         Run_from { state_path; implementation_path; input_path }
     | _program :: "--compile-files" :: args -> (
+        let args = strip_no_redef args in
         match List.rev args with
         | output_path :: "-o" :: reversed_inputs ->
             Compile_files
               { input_paths = List.rev reversed_inputs; output_path }
         | _ -> usage ())
     | _program :: "--compile-files-state" :: state_path :: args -> (
+        let args = strip_no_redef args in
         match List.rev args with
         | output_path :: "-o" :: reversed_inputs ->
             Compile_files_state
@@ -909,6 +920,7 @@ let parse_args argv =
               }
         | _ -> usage ())
     | _program :: "--compile-files-from" :: state_path :: args -> (
+        let args = strip_no_redef args in
         let emit_state_path, args =
           match args with
           | "--emit-state" :: path :: rest -> (Some path, rest)
@@ -928,6 +940,7 @@ let parse_args argv =
               }
         | _ -> usage ())
     | _program :: "--compile-files-chunk-from" :: state_path :: args -> (
+        let args = strip_no_redef args in
         let prefix_interface, args =
           match args with
           | "--prefix-interface" :: path :: rest -> (Some path, rest)

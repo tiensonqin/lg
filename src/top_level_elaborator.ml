@@ -775,8 +775,11 @@ let rec contains_unresolved_type = function
   | TBool | TUnit | TOcaml _ ->
       false
 
+let redefable_roots = ref true
+
 let source_scope_redefable_roots scope =
-  (not (String.equal scope ""))
+  !redefable_roots
+  && (not (String.equal scope ""))
   &&
   not
     (String.equal scope "clojure.core"
