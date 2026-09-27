@@ -200,3 +200,24 @@ compiles to OCaml without new errors vs. the annotated baseline.
   bumps; old `.lg-cache` invalidates.
 - `defrecord` polymorphism (fields inferred per use site today) interacts with
   structural rows; keep `defrecord` nominal, only anonymous rows change.
+
+## Deferred work and measured status
+
+- **Two-phase collect-then-solve kernel** (the full "stabilize as
+  assertion only" end state): still open. The commit-discipline slice
+  landed (`?commit` modes, solve-from-empty sites publish), and module-level
+  stabilization is already one-pass for non-recursive files, but the
+  per-definition `infer_params` loop still re-walks the body because
+  constraint collection is sequential. Removing it needs the constraint
+  generation / solving split in the target architecture.
+- **Declarative stdlib elaboration table** (`call_elaborator.ml`, ~24k
+  lines): analyzed and deferred. The dispatch holds 217 name arms, ~150
+  under 30 lines, but every arm carries bespoke type-dependent emission
+  (per-target runtime choices, closed-sum handling, capability checks) —
+  there is no large uniform family to lift into data, and the *type* layer
+  is already declarative via `.lgi` signatures. Splitting the module is a
+  mechanical refactor with regression risk and no behaviour payoff; revisit
+  only if stdlib additions start requiring frequent dispatch edits.
+- **ABI-level write amplification** (capability pairs still used when the
+  adapter IS consumed, per-expression ` : T` annotations, redef
+  indirection): requires emission-strategy changes; tracked under A6.
