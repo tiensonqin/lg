@@ -14859,22 +14859,12 @@ let create ~compile_expr =
         match compile_args () with
         | Error _ as error -> error
         | Ok (format :: values) when Types.equal format.ty TString ->
-            (* A sole non-stable operand (format or value) inlines: with one
-               effectful element the unspecified order is unobservable. *)
-            let effectful =
-              (if Semantic_ir.is_stable format.semantic_expr then 0 else 1)
-              + List.length
-                  (List.filter
-                     (fun value ->
-                       not (Semantic_ir.is_stable value.semantic_expr))
-                     values)
-            in
-            let inline_sole = effectful <= 1 in
+            (* Non-stable operands bind temporaries; the lowering layer
+               inlines any whose use ends up as the sole effectful site. *)
             let rec encode index bindings encoded = function
               | [] ->
                   let bindings, format_string =
-                    if Semantic_ir.is_stable format.semantic_expr
-                       || inline_sole then
+                    if Semantic_ir.is_stable format.semantic_expr then
                       (List.rev bindings, format.semantic_expr)
                     else
                       ( (Semantic_ir.PVar "__lg_format_string",
@@ -14892,8 +14882,7 @@ let create ~compile_expr =
                     Error.error "format arguments require concrete static types"
                   else
                     let expression, bindings =
-                      if Semantic_ir.is_stable value.semantic_expr
-                         || inline_sole then
+                      if Semantic_ir.is_stable value.semantic_expr then
                         (value.semantic_expr, bindings)
                       else
                         let name = "__lg_format_value_" ^ string_of_int index in
@@ -14962,10 +14951,9 @@ let create ~compile_expr =
               | [] -> Semantic_ir.String ""
               | _ ->
                   (* Stable rendered arguments inline into the list literal;
-                     non-stable ones keep an ordered binding so effects
-                     still run left to right. A sole non-stable argument can
-                     inline: with one effectful element the unspecified
-                     evaluation order is unobservable. *)
+                     non-stable ones keep an ordered binding so effects run
+                     left to right — the lowering layer inlines a sole
+                     effectful use back. *)
                   let rendereds =
                     List.map
                       (fun argument ->
@@ -14973,16 +14961,10 @@ let create ~compile_expr =
                           ?print_length ?print_level argument)
                       args
                   in
-                  let non_stable =
-                    List.filter
-                      (fun rendered -> not (Semantic_ir.is_stable rendered))
-                      rendereds
-                  in
-                  let inline_sole = List.length non_stable <= 1 in
                   let bindings, values =
                     rendereds
                     |> List.mapi (fun index rendered ->
-                           if Semantic_ir.is_stable rendered || inline_sole
+                           if Semantic_ir.is_stable rendered
                            then (None, rendered)
                            else
                              let name =
@@ -17463,21 +17445,12 @@ let create ~compile_expr =
                 in
                 Result.map
                   (fun sequences ->
-                    (* A sole non-stable sequence inlines: with one effectful
-                       element the unspecified evaluation order is
-                       unobservable. *)
-                    let inline_sole =
-                      List.length
-                        (List.filter
-                           (fun sequence ->
-                             not (Semantic_ir.is_stable sequence))
-                           sequences)
-                      <= 1
-                    in
+                    (* Non-stable sequences bind temporaries; the lowering
+                       layer inlines a sole effectful use back. *)
                     let bindings, elements =
                       sequences
                       |> List.mapi (fun index sequence ->
-                             if Semantic_ir.is_stable sequence || inline_sole
+                             if Semantic_ir.is_stable sequence
                              then (None, sequence)
                              else
                                let name =

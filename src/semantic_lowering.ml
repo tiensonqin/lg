@@ -107,6 +107,14 @@ let rec ocaml_stable = function
   | Ocaml_ir.(Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit
              | Ident _) ->
       true
+  | Ocaml_ir.Apply
+      ( Ocaml_ir.Ident
+          ( "Lg_runtime.Runtime_reference.deref"
+          | "Lg_runtime.Runtime_slot.deref" ),
+        [ cell ] ) ->
+      (* A cell read commutes with any effectful sibling: it observes
+         whatever value is current either way. *)
+      ocaml_stable cell
   | Ocaml_ir.(GadtScope e | Located (_, _, e) | Constraint (e, _)
              | Prefix (_, e) | Field (e, _)) ->
       ocaml_stable e
@@ -115,6 +123,7 @@ let rec ocaml_stable = function
       Option.fold ~none:true ~some:ocaml_stable e
   | Ocaml_ir.Record (fields, _) ->
       List.for_all (fun (_, value) -> ocaml_stable value) fields
+  | Ocaml_ir.(Fun _ | Labelled_fun _) -> true (* closure allocation is pure *)
   | _ -> false
 
 let rec count_uses name expression =
@@ -335,7 +344,8 @@ let rec sole_effect_site name expression =
       unordered (fn :: args)
   | Ocaml_ir.Labelled_apply (fn, args) ->
       unordered (fn :: List.map snd args)
-  | Ocaml_ir.(Infix ("&&", left, _) | Infix ("||", left, _)) ->
+  | Ocaml_ir.(Infix ("&&", left, _) | Infix ("||", left, _))
+    when uses left = 1 ->
       sole_effect_site name left
   | Ocaml_ir.(Infix (_, left, right) | Cons (left, right)) ->
       unordered [ left; right ]
@@ -376,9 +386,22 @@ let rec simplify_temp_lets = function
           | 0 when ocaml_stable bound -> body
           | 1 when ocaml_stable bound || sole_effect_site name body ->
               let bound =
+                (* The pattern's type pin travels onto the substituted
+                   expression only where it may still be needed for record
+                   label resolution; head forms whose type is fixed without
+                   it (calls, identifiers, literals, field reads) drop it. *)
+                let rec needs_pin = function
+                  | Ocaml_ir.Located (_, _, e) | GadtScope e -> needs_pin e
+                  | Ocaml_ir.(Constraint _ | Ident _ | Int _ | Int64 _
+                             | Float _ | String _ | Char _ | Bool _ | Unit
+                             | Apply _ | Uncurried_apply _ | Labelled_apply _
+                             | Infix _ | Prefix _ | Field _ | SetField _) ->
+                      false
+                  | _ -> true
+                in
                 match ty with
-                | Some ty -> Ocaml_ir.Constraint (bound, ty)
-                | None -> bound
+                | Some ty when needs_pin bound -> Ocaml_ir.Constraint (bound, ty)
+                | _ -> bound
               in
               simplify_temp_lets (subst_ident name bound body)
           | _ -> Ocaml_ir.Let ([ (pattern, bound) ], body))
@@ -431,15 +454,11 @@ let rec lower_node = function
         | Semantic_ir.Located (_, _, value) | GadtScope value -> binding_pattern name value
         | Typed (ty, _) -> pattern (Semantic_ir.PTyped (Semantic_ir.PVar name, ty))
         | _ -> Ocaml_ir.PVar name in
-      let non_stable =
-        List.filter (fun value -> not (stable value)) values
-      in
-      (* With a single effectful element the unspecified element order is
-         unobservable, so it can be inlined without a temporary. *)
-      let inline_sole = List.length non_stable <= 1 in
+      (* Non-stable elements bind temporaries; [simplify_temp_lets] inlines
+         any whose use ends up as the sole effectful site. *)
       let bindings, values =
         List.mapi (fun index value ->
-          if stable value || inline_sole then None, expression value
+          if stable value then None, expression value
           else
             let name = "__lg_list_value'" ^ string_of_int index in
             Some (binding_pattern name value, expression value), Ocaml_ir.Ident name) values
