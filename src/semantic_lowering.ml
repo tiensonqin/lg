@@ -300,18 +300,81 @@ let rec subst_ident name replacement expression =
       UnpackModule (a, b, subst value, subst body)
   | leaf -> leaf
 
-(* `let __lg_x = stable in ... __lg_x ...` with a single use folds into the
-   use site; an unused stable binding drops entirely. The pattern's type
-   annotation moves onto the substituted expression so pins survive. *)
+(* True when [name]'s single use sits at a strict evaluation position and
+   everything that may evaluate before it is pure — earlier sequence
+   elements, earlier let bindings, and all unordered siblings — so moving
+   a side effect into that position preserves observable order. Subterms
+   evaluated only after the hole (later sequence elements, let bodies,
+   match arms, branches, exception handlers) need no purity: they still
+   run after the moved effect. Deferred positions (function bodies, letrec
+   bound values) reject, since the use would no longer be strict. *)
+let rec sole_effect_site name expression =
+  let uses = count_uses name in
+  let rec ordered prev_stable = function
+    | [] -> prev_stable
+    | e :: rest ->
+        if uses e > 0 then prev_stable && sole_effect_site name e
+        else ordered (prev_stable && ocaml_stable e) rest
+  and unordered es =
+    List.for_all
+      (fun e -> if uses e > 0 then sole_effect_site name e
+                else ocaml_stable e)
+      es
+  in
+  match expression with
+  | Ocaml_ir.Ident n -> String.equal n name
+  | e when uses e = 0 -> ocaml_stable e
+  | Ocaml_ir.(GadtScope e | Located (_, _, e) | Constraint (e, _)
+             | Prefix (_, e) | Field (e, _)) ->
+      sole_effect_site name e
+  | Ocaml_ir.(PolyTag (_, e) | Constructor (_, e)) ->
+      Option.fold ~none:false ~some:(sole_effect_site name) e
+  | Ocaml_ir.(Tuple es | List es | Array es) -> unordered es
+  | Ocaml_ir.Sequence es -> ordered true es
+  | Ocaml_ir.(Apply (fn, args) | Uncurried_apply (fn, args)) ->
+      unordered (fn :: args)
+  | Ocaml_ir.Labelled_apply (fn, args) ->
+      unordered (fn :: List.map snd args)
+  | Ocaml_ir.(Infix ("&&", left, _) | Infix ("||", left, _)) ->
+      sole_effect_site name left
+  | Ocaml_ir.(Infix (_, left, right) | Cons (left, right)) ->
+      unordered [ left; right ]
+  | Ocaml_ir.SetField (target, _, value) -> unordered [ target; value ]
+  | Ocaml_ir.If (cond, _, _) when uses cond = 1 ->
+      sole_effect_site name cond
+  | Ocaml_ir.(Match (target, _) | Match_guarded (target, _)
+             | Try (target, _))
+    when uses target = 1 ->
+      sole_effect_site name target
+  | Ocaml_ir.Record (fields, _) -> unordered (List.map snd fields)
+  | Ocaml_ir.RecordUpdate (record, fields) ->
+      unordered (record :: List.map snd fields)
+  | Ocaml_ir.UnpackModule (_, _, value, body) ->
+      if uses value > 0 then sole_effect_site name value
+      else ocaml_stable value && sole_effect_site name body
+  | Ocaml_ir.Let (bindings, body) ->
+      let rec loop prev_stable = function
+        | [] -> prev_stable && sole_effect_site name body
+        | (_, value) :: rest ->
+            if uses value > 0 then prev_stable && sole_effect_site name value
+            else loop (prev_stable && ocaml_stable value) rest
+      in
+      loop true bindings
+  | _ -> false
+
+(* `let __lg_x = e in ... __lg_x ...` folds into the use site when safe: a
+   single use of a pure value anywhere, or of an effectful one at the sole
+   effect position (per [sole_effect_site]); an unused pure binding drops
+   entirely. The pattern's type annotation moves onto the substituted
+   expression so pins survive. *)
 let rec simplify_temp_lets = function
   | Ocaml_ir.Let ((pattern, bound) :: rest, body) -> (
       let body = simplify_temp_lets (Ocaml_ir.Let (rest, body)) in
       match bound_pattern_name pattern with
-      | Some (name, ty)
-        when is_generated_temp name && ocaml_stable bound -> (
+      | Some (name, ty) when is_generated_temp name -> (
           match count_uses name body with
-          | 0 -> body
-          | 1 ->
+          | 0 when ocaml_stable bound -> body
+          | 1 when ocaml_stable bound || sole_effect_site name body ->
               let bound =
                 match ty with
                 | Some ty -> Ocaml_ir.Constraint (bound, ty)
