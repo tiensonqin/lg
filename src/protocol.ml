@@ -440,7 +440,7 @@ let rec merge_method_return_types env left right =
   match (left, right) with
   | Types.TUnknown, ty | ty, Types.TUnknown -> Some ty
   | Types.TMeta _, ty | ty, Types.TMeta _ -> (
-      match Type_solver.unify Type_solver.empty left right with
+      match Type_solver.unify ~commit:true Type_solver.empty left right with
       | Ok substitutions -> Some (Type_solver.apply substitutions ty)
       | Error _ -> None)
   | Types.TVar left, Types.TVar right when String.equal left right ->

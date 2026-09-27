@@ -784,9 +784,13 @@ let resolve_anonymous_record_patterns env items =
     | Semantic_ir.PTyped (pattern, Types.TRecord fields) -> (
         let owner = Source_context.anonymous_record_owner "" in
         let record =
-          match Compiler_environment.find_anonymous_record ~owner fields env with
+          match
+            Compiler_environment.find_oldest_anonymous_record ~owner fields env
+          with
           | Some _ as record -> record
-          | None -> Compiler_environment.find_anonymous_record_by_layout ~owner fields env
+          | None ->
+              Compiler_environment.find_oldest_anonymous_record_by_layout
+                ~owner fields env
         in
         match record with
         | Some record ->

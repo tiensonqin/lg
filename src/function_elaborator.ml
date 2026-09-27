@@ -97,7 +97,13 @@ let rec record_inference_compatible env ~allow_expected_dynamic expected_fields
 
 let structural_named_record_can_rematch (record : named_record) =
   (not record.nominal)
-  && Type_id.owner record.type_id = []
+  && (Type_id.owner record.type_id = []
+      ||
+      (String.length record.type_name > 1
+       && record.type_name.[0] = 't'
+       && String.for_all
+            (fun character -> character >= '0' && character <= '9')
+            (String.sub record.type_name 1 (String.length record.type_name - 1))))
   && not (String.contains record.type_name '.')
 
 let rec infer_named_record ?(allow_dynamic_fields = false) ?preferred_record
@@ -431,7 +437,15 @@ let rec infer_named_record ?(allow_dynamic_fields = false) ?preferred_record
           in
           let templates, actuals = List.split matched_fields in
           Types.instantiate_type ~templates ~actuals (TNamed_record record)
-      | None -> inferred)
+      | None -> (
+          (* No declared record matched: reuse the oldest anonymous record
+             with this exact shape instead of materializing a duplicate one. *)
+          match
+            Env.find_oldest_anonymous_record
+              ~owner:(Source_context.anonymous_record_owner "") fields env
+          with
+          | Some record -> TNamed_record record
+          | None -> inferred))
   | TConstraint constraint_ ->
       TConstraint
         (Types.map_constraint
@@ -1000,6 +1014,8 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
           ~lookup_closed_sum_constructors
           ~lookup_successful_call_refinement
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
+          ~lookup_key_record_type:
+            (Expression_support.record_type_for_keyword ~scope env)
           ~resolve_named_record
           parameters body_forms
       in
@@ -1578,7 +1594,7 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
             let refine_from_local name ty =
               let inferred_ty = lookup_inferred name in
               let refine ty inferred_ty =
-                Type_solver.unify Type_solver.empty ty inferred_ty
+                Type_solver.unify ~commit:true Type_solver.empty ty inferred_ty
                 |> Result.map (fun substitutions ->
                        Type_solver.apply substitutions ty)
                 |> Result.value ~default:ty
@@ -1956,7 +1972,194 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
                           body;
                         }))))
 
-let fn_code ?(row_param_type_names = []) parts =
+let rec semantic_pattern_bound_names = function
+  | Semantic_ir.PVar name -> [ name ]
+  | Semantic_ir.PAlias (pattern, name) ->
+      name :: semantic_pattern_bound_names pattern
+  | Semantic_ir.PTuple patterns | Semantic_ir.PList patterns ->
+      List.concat_map semantic_pattern_bound_names patterns
+  | Semantic_ir.PCons (head, tail) ->
+      semantic_pattern_bound_names head @ semantic_pattern_bound_names tail
+  | Semantic_ir.PRecord fields ->
+      List.concat_map
+        (fun (_, pattern) -> semantic_pattern_bound_names pattern)
+        fields
+  | Semantic_ir.POr (left, right) ->
+      semantic_pattern_bound_names left @ semantic_pattern_bound_names right
+  | Semantic_ir.PConstructor (_, pattern)
+  | Semantic_ir.PPolyTag (_, pattern) ->
+      Option.fold ~none:[] ~some:semantic_pattern_bound_names pattern
+  | Semantic_ir.PConstraint (pattern, _)
+  | Semantic_ir.PLocated (_, _, pattern)
+  | Semantic_ir.PTyped (pattern, _) ->
+      semantic_pattern_bound_names pattern
+  | _ -> []
+
+(* A seqable parameter may be lowered to a plain `Seq.t` interface — with no
+   (adapter, value) witness pair — only when its storage type carries no
+   other capability that would still need a witness. *)
+let rec storage_is_constraint_free ty =
+  (not (Types.is_dynamic ty))
+  && Option.is_none (Types.seqable_constraint_info ty)
+  && Option.is_none (Types.capability_constraint_value ty)
+  &&
+  match ty with
+  | TTuple arguments | TOcaml_app ("result", arguments) ->
+      List.for_all storage_is_constraint_free arguments
+  | _ -> true
+
+(* The demotion is sound when every occurrence of the parameter is an
+   adapter application `p__seq p` (which the rewrite below folds back to the
+   sequence itself). Any other use of `p`, a `p__seq_optional` adapter, or a
+   rebinding of those names keeps the pair ABI. *)
+let seqable_param_demotable name body =
+  let seq_name = name ^ "__seq" in
+  let reserved = [ name; seq_name; name ^ "__seq_optional" ] in
+  let shadowed patterns =
+    List.exists
+      (fun pattern ->
+        List.exists
+          (fun bound -> List.mem bound reserved)
+          (semantic_pattern_bound_names pattern))
+      patterns
+  in
+  let rec check expression =
+    let open Semantic_ir in
+    match unlocated expression with
+    | Apply (callee, [ argument ]) -> (
+        match (unlocated callee, unlocated argument) with
+        | Ident adapter, _ when String.equal adapter seq_name -> (
+            match unlocated argument with
+            | Ident value -> String.equal value name
+            | _ -> false)
+        | _ -> check callee && check argument)
+    | Apply (callee, arguments) | Uncurried_apply (callee, arguments) ->
+        check callee && List.for_all check arguments
+    | Labelled_apply (callee, arguments) ->
+        check callee && List.for_all (fun (_, value) -> check value) arguments
+    | Ident other -> not (List.mem other reserved)
+    | Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit
+    | PackModule _ ->
+        true
+    | PolyTag (_, value) | Constructor (_, value) ->
+        Option.fold ~none:true ~some:check value
+    | Tuple values | List values | Array values | Sequence values ->
+        List.for_all check values
+    | If (condition, then_expr, else_expr) ->
+        check condition && check then_expr && check else_expr
+    | Infix (_, left, right) | Cons (left, right) -> check left && check right
+    | Prefix (_, value) | Constraint (value, _) | Field (value, _) ->
+        check value
+    | SetField (target, _, value) -> check target && check value
+    | Fun (patterns, body) -> (not (shadowed patterns)) && check body
+    | Labelled_fun (patterns, body) ->
+        (not (shadowed (List.map snd patterns))) && check body
+    | Let (bindings, body) | LetRecGroup (bindings, body) ->
+        (not (shadowed (List.map fst bindings)))
+        && List.for_all (fun (_, value) -> check value) bindings
+        && check body
+    | EvaluateOnce (bound, value, body) ->
+        (not (List.mem bound reserved)) && check value && check body
+    | LetRec (bound, patterns, body, arguments) ->
+        (not (List.mem bound reserved))
+        && (not (shadowed patterns))
+        && check body && List.for_all check arguments
+    | LetRecIn (bound, patterns, body, next) ->
+        (not (List.mem bound reserved))
+        && (not (shadowed patterns))
+        && check body && check next
+    | UnpackModule (bound, _, value, body) ->
+        (not (List.mem bound reserved)) && check value && check body
+    | SharedValue (bound, value) ->
+        (not (List.mem bound reserved)) && check value
+    | Match (target, cases) ->
+        check target
+        && List.for_all
+             (fun (pattern, case) ->
+               (not (shadowed [ pattern ])) && check case)
+             cases
+    | Match_guarded (target, cases) ->
+        check target
+        && List.for_all
+             (fun (pattern, guard, case) ->
+               (not (shadowed [ pattern ]))
+               && Option.fold ~none:true ~some:check guard && check case)
+             cases
+    | Try (body, cases) ->
+        check body
+        && List.for_all
+             (fun (pattern, guard, case) ->
+               (not (shadowed [ pattern ]))
+               && Option.fold ~none:true ~some:check guard && check case)
+             cases
+    | Record (fields, _) ->
+        List.for_all (fun (_, value) -> check value) fields
+    | RecordUpdate (record, fields) ->
+        check record
+        && List.for_all (fun (_, value) -> check value) fields
+    | GadtScope value | Typed (_, value) | Located (_, _, value) ->
+        check value
+    | PackDynamic { conversion; _ } | UnpackDynamic { conversion; _ }
+    | NullableToSeq { conversion; _ } ->
+        check conversion
+  in
+  check body
+
+let rewrite_seqable_param name body =
+  let seq_name = name ^ "__seq" in
+  Semantic_ir.rewrite
+    (fun node ->
+      match node with
+      | Semantic_ir.Apply (callee, [ argument ])
+        when (match
+                ( Semantic_ir.unlocated callee,
+                  Semantic_ir.unlocated argument )
+              with
+             | Semantic_ir.Ident adapter, Semantic_ir.Ident value ->
+                 String.equal adapter seq_name && String.equal value name
+             | _ -> false) ->
+          argument
+      | _ -> node)
+    body
+
+(* `recur` and direct self-calls are emitted while the function still carries
+   its constraint-typed signature, so arguments bound for demoted parameters
+   arrive packed as `(adapter, value)` witness pairs. A tuple literal can
+   never inhabit a `Seq.t` parameter, so at demoted positions the pair is
+   always the pack: applying the adapter recovers the plain sequence. *)
+let rewrite_self_seqable_packing self_name demoted_names param_names body =
+  let demoted_index index =
+    match List.nth_opt param_names index with
+    | Some name -> List.mem name demoted_names
+    | None -> false
+  in
+  let is_self_call callee =
+    String.equal callee self_name
+    || String.starts_with ~prefix:(self_name ^ "__") callee
+  in
+  Semantic_ir.rewrite
+    (fun node ->
+      match node with
+      | Semantic_ir.Apply (callee, arguments) -> (
+          match Semantic_ir.unlocated callee with
+          | Semantic_ir.Ident name when is_self_call name ->
+              Semantic_ir.Apply
+                ( callee,
+                  List.mapi
+                    (fun index argument ->
+                      match
+                        ( demoted_index index,
+                          Semantic_ir.unlocated argument )
+                      with
+                      | true, Semantic_ir.Tuple [ adapter; value ] ->
+                          Semantic_ir.Apply (adapter, [ value ])
+                      | _ -> argument)
+                    arguments )
+          | _ -> node)
+      | _ -> node)
+    body
+
+let fn_code ?(demote = false) ?self_name ?(row_param_type_names = []) parts =
   let param_names =
     parts.param_bindings |> List.map (fun (_key, binding) -> binding.ocaml_name)
   in
@@ -2002,6 +2205,46 @@ let fn_code ?(row_param_type_names = []) parts =
         | None -> (param_tys, parts.body.ty, parts.body.semantic_expr))
     | return_ty, _ ->
         (param_tys, array_storage_type return_ty, parts.body.semantic_expr)
+  in
+  let param_tys, body_semantic_expr =
+    let demoted =
+      if demote && parts.destructured_bindings = [] then
+        List.filter_map
+          (fun (name, ty) ->
+            match ty with
+            | TConstraint
+                (Seqable_constraint
+                   { requirement = Required; element; storage } )
+              when storage_is_constraint_free storage
+                   && seqable_param_demotable name body_semantic_expr
+                   && not (Type_solver.is_open element) ->
+                Some (name, element)
+            | _ -> None)
+          (List.combine param_names param_tys)
+      else []
+    in
+    match demoted with
+    | [] -> (param_tys, body_semantic_expr)
+    | entries ->
+        let body_semantic_expr =
+          List.fold_left
+            (fun body (name, _) -> rewrite_seqable_param name body)
+            body_semantic_expr entries
+        in
+        let body_semantic_expr =
+          match self_name with
+          | Some self_name ->
+              rewrite_self_seqable_packing self_name
+                (List.map fst entries) param_names body_semantic_expr
+          | None -> body_semantic_expr
+        in
+        ( List.map2
+            (fun name ty ->
+              match List.assoc_opt name entries with
+              | Some element -> TSeq element
+              | None -> ty)
+            param_names param_tys,
+          body_semantic_expr )
   in
   let return_ty = body_storage_ty in
   let rec capability_pattern ?value_type name ty =
@@ -2170,7 +2413,8 @@ let fn_code ?(row_param_type_names = []) parts =
             | _ -> (
                 match ty with
                 | TRecord _ | TNamed_record _
-                | TNullable (TRecord _ | TNamed_record _) ->
+                | TNullable (TRecord _ | TNamed_record _)
+                | TSeq _ ->
                     Semantic_ir.PTyped (Semantic_ir.PVar name, ty)
                | TFn _ when not (contains_open_type ty) ->
                     Semantic_ir.PTyped (Semantic_ir.PVar name, ty)

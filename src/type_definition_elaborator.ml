@@ -178,8 +178,60 @@ let compile_type_record ?location ?(allow_empty = false) ?emitted_name
   match parse [] field_forms with
   | Error _ as err -> err
   | Ok fields ->
+      (* Field annotations can reference parametric records without arguments
+         (e.g. :option<fn<string;model/CacheModel>>); the resulting free type
+         variables become implicit type parameters of the record, matching
+         how deftype generalizes unannotated field types. Field-level forall
+         quantifiers stay field-scoped. *)
+      let rec free_variables bound ty =
+        let free_in_fields fields =
+          List.concat_map
+            (fun (field : field) ->
+              free_variables (field.quantified @ bound) field.ty)
+            fields
+        in
+        match ty with
+        | TVar name when not (List.mem name bound) -> [ name ]
+        | TPoly_variant row ->
+            List.concat_map (free_variables bound) (List.filter_map snd row.tags)
+        | TNullable ty | TArray ty | TRef ty | TList ty | TVector ty | TSet ty
+        | TSeq ty ->
+            free_variables bound ty
+        | TOcaml_app (_, arguments) | TTuple arguments ->
+            List.concat_map (free_variables bound) arguments
+        | TConstraint constraint_ ->
+            List.concat_map (free_variables bound)
+              (Types.constraint_children constraint_)
+        | TFn (parameters, return_ty) ->
+            List.concat_map (free_variables bound) (return_ty :: parameters)
+        | TOverloaded_fn arities ->
+            List.concat_map
+              (fun (arity : fn_arity) ->
+                free_variables bound arity.return_ty
+                @ List.concat_map (free_variables bound) arity.fixed_params
+                @ Option.fold ~none:[] ~some:(free_variables bound)
+                    arity.rest_param)
+              arities
+        | TRecord fields -> free_in_fields fields
+        | TNamed_record record ->
+            List.concat_map (free_variables bound) record.type_arguments
+        | _ -> []
+      in
+      let fields, implicit_parameters =
+        fields
+        |> List.map (fun (field : field) ->
+               let ty = (Type_solver.generalize field.ty).body in
+               ( { field with ty },
+                 free_variables (field.quantified @ type_parameters) ty ))
+        |> List.split
+      in
+      let implicit_parameters =
+        List.concat implicit_parameters |> List.sort_uniq String.compare
+      in
       compile_type_record_fields ?location ~allow_empty ?emitted_name ~nominal
-        scope env next_type name type_parameters fields
+        scope env next_type name
+        (type_parameters @ implicit_parameters)
+        fields
 
 let record_type_public_binding module_path name env =
   let key = record_type_key module_path name in

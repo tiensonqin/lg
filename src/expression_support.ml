@@ -474,14 +474,21 @@ let rec truthiness_expression ?(constrained_identifier = true) ?env ty
           Semantic_ir.Apply
             (Semantic_ir.Ident (name ^ "__truthy"), [ expression ])
       | _ ->
-          let value_name = "__lg_truthy_constrained_value" in
-          let value = Semantic_ir.Ident value_name in
-          Semantic_ir.Let
-            ( [ (Semantic_ir.PVar value_name, expression) ],
-              Semantic_ir.Apply
-                ( Semantic_ir.Apply
-                    (Semantic_ir.Ident "fst", [ value ]),
-                  [ Semantic_ir.Apply (Semantic_ir.Ident "snd", [ value ]) ] ) ))
+          (* Stable expressions are pure projections safe to duplicate;
+             effectful ones get a single-use binding. *)
+          if Semantic_ir.is_stable expression then
+            Semantic_ir.Apply
+              ( Semantic_ir.Apply (Semantic_ir.Ident "fst", [ expression ]),
+                [ Semantic_ir.Apply (Semantic_ir.Ident "snd", [ expression ]) ] )
+          else
+            let value_name = "__lg_truthy_constrained_value" in
+            let value = Semantic_ir.Ident value_name in
+            Semantic_ir.Let
+              ( [ (Semantic_ir.PVar value_name, expression) ],
+                Semantic_ir.Apply
+                  ( Semantic_ir.Apply
+                      (Semantic_ir.Ident "fst", [ value ]),
+                    [ Semantic_ir.Apply (Semantic_ir.Ident "snd", [ value ]) ] ) ))
   | TBool -> expression
   | TNil -> Semantic_ir.Sequence [ expression; Semantic_ir.Bool false ]
   | TNullable payload_ty | TOcaml_app ("option", [ payload_ty ]) ->
@@ -1605,62 +1612,95 @@ type anonymous_record_allocation = {
   fresh : bool;
 }
 
-let anonymous_record_type_parameters fields =
+(* Replace unresolved positions with named type variables so the emitted
+   declaration actually binds them: each metavariable or declared var keeps one
+   parameter per identity, while unknowns/nils get independent parameters.
+   Also returns the site's own argument for each parameter so a reused
+   canonical record can be instantiated with the site's metavariables. *)
+let parameterize_anonymous_record_fields fields =
   let parameters = ref [] in
-  let add name =
-    if not (List.mem name !parameters) then parameters := !parameters @ [ name ]
+  let arguments = ref [] in
+  let next_unresolved = ref 0 in
+  let add name argument =
+    if not (List.mem name !parameters) then (
+      parameters := !parameters @ [ name ];
+      arguments := !arguments @ [ argument ])
   in
-  let rec visit = function
-    | TPoly_variant row -> List.iter visit (List.filter_map snd row.tags)
-    | TUnknown | TMeta _ | TNil -> add "a"
-    | TVar name -> add name
-    | TNullable ty | TArray ty | TRef ty | TList ty | TVector ty | TSet ty
-    | TSeq ty ->
-        visit ty
-    | TOcaml_app (_, arguments) | TTuple arguments -> List.iter visit arguments
-    | TConstraint constraint_ -> List.iter visit (constraint_children constraint_)
-    | TFn (parameters, return_ty) -> List.iter visit (return_ty :: parameters)
-    | TOverloaded_fn arities ->
-        List.iter
-          (fun (arity : fn_arity) ->
-            List.iter visit arity.fixed_params;
-            Option.iter visit arity.rest_param;
-            visit arity.return_ty)
-          arities
-    | TRecord fields ->
-        List.iter (fun (field : field) -> visit field.ty) fields
-    | TNamed_record record -> List.iter visit record.type_arguments
-    | TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol
-    | TKeyword | TBool | TUnit | TOcaml _ ->
-        ()
+  let rec parameterize = function
+    | TUnknown as ty ->
+        incr next_unresolved;
+        let name = "u" ^ string_of_int !next_unresolved in
+        add name ty;
+        TVar name
+    | TNil as ty ->
+        incr next_unresolved;
+        let name = "u" ^ string_of_int !next_unresolved in
+        add name ty;
+        TNullable (TVar name)
+    | TMeta meta as ty ->
+        let name = "m" ^ string_of_int meta.id in
+        add name ty;
+        TVar name
+    | TVar name as ty -> add name ty; TVar name
+    | ty -> Semantic_type.map_children parameterize ty
   in
-  List.iter (fun (field : field) -> visit field.ty) fields;
-  !parameters
+  let fields =
+    List.map
+      (fun (field : field) -> { field with ty = parameterize field.ty })
+      fields
+  in
+  (fields, !parameters, !arguments)
+
+(* Structural records are content-addressed: a site whose field shape matches
+   an already-allocated anonymous record reuses that nominal OCaml type
+   instead of minting another `tN`. The oldest match is preferred so the
+   declaration always precedes every use site. *)
+let find_canonical_anonymous_record fields env =
+  let canonical = Env.canonical_anonymous_fields fields in
+  env.Compiler_environment.anonymous_records
+  |> List.filter_map (fun (_, (record : Semantic_type.named_record)) ->
+         if
+           Env.anonymous_fields_equal canonical
+             (Env.canonical_anonymous_fields record.fields)
+         then Some record
+         else None)
+  |> Env.oldest_candidate
 
 let allocate_anonymous_record ~owner env next_type fields =
   let owner = Source_context.anonymous_record_owner owner in
-  let type_name = "t" ^ string_of_int next_type in
-  let set_module_name = "Set_" ^ type_name in
-  let type_id =
-    Type_id.create
-      ~owner:(if String.equal owner "" then [] else [ owner ])
-      ~name:type_name
+  let fields, type_parameters, site_arguments =
+    parameterize_anonymous_record_fields fields
   in
-  let record =
-    match
-      Types.named_record ~type_id ~extensible:true ~type_name ~set_module_name
-        ~type_parameters:(anonymous_record_type_parameters fields)
-        fields
-    with
-    | TNamed_record record -> record
-    | _ -> assert false
-  in
-  {
-    record;
-    env = Env.add_anonymous_record ~owner record env;
-    next_type = next_type + 1;
-    fresh = true;
-  }
+  match find_canonical_anonymous_record fields env with
+  | Some record ->
+      {
+        record = { record with type_arguments = site_arguments };
+        env;
+        next_type;
+        fresh = false;
+      }
+  | None ->
+      let type_name = "t" ^ string_of_int next_type in
+      let set_module_name = "Set_" ^ type_name in
+      let type_id =
+        Type_id.create
+          ~owner:(if String.equal owner "" then [] else [ owner ])
+          ~name:type_name
+      in
+      let record =
+        match
+          Types.named_record ~type_id ~extensible:true ~type_name
+            ~set_module_name ~type_parameters fields
+        with
+        | TNamed_record record -> record
+        | _ -> assert false
+      in
+      {
+        record;
+        env = Env.add_anonymous_record ~owner record env;
+        next_type = next_type + 1;
+        fresh = true;
+      }
 
 type nested_record_allocation = {
   nested_fields : field list;
@@ -1989,13 +2029,7 @@ let map_record_constructor_type scope env name =
       | Error _ -> None)
   | None -> None
 
-let dynamic_key_record_type env expected_field_ty =
-  let expected_field_ty =
-    match Types.dynamic_constraint_info expected_field_ty with
-    | Some capability when not (Types.equal capability TUnknown) -> capability
-    | Some _ | None -> expected_field_ty
-  in
-  let expected_field_ty = Types.constraint_value_type expected_field_ty in
+let named_records_in_scope env =
   let registered_records =
     Type_registry.bindings (Env.types env)
     |> List.filter_map
@@ -2014,18 +2048,70 @@ let dynamic_key_record_type env expected_field_ty =
                | Some _ | None -> None)
            | Type_registry.Alias | Type_registry.Variant | Type_registry.Opaque -> None)
   in
-  let named_records =
-    if registered_records <> [] then registered_records
-    else
-      Env.filter_record_bindings
-        (fun key (binding : binding) ->
-          if String.starts_with ~prefix:"__record/" key then
-            match binding.ty with
-            | TNamed_record record -> Some record
-            | _ -> None
-          else None)
-        env
+  if registered_records <> [] then registered_records
+  else
+    Env.filter_record_bindings
+      (fun key (binding : binding) ->
+        if String.starts_with ~prefix:"__record/" key then
+          match binding.ty with
+          | TNamed_record record -> Some record
+          | _ -> None
+        else None)
+      env
+
+(* A keyword read `(:key x)` on an open target resolves the field's declared
+   type via the unique named record declaring that field. When several
+   records share the field, a candidate named after the binding being read
+   (e.g. `session` for `:host`) wins; otherwise the read stays a row
+   constraint rather than committing to an arbitrary record. *)
+(* A unique keyword -> record match is only safe when the record is actually
+   visible to the module being inferred: corpus and namespace compilation share
+   one environment, so records from unrequired sibling modules must not
+   speculate. Host package records stay visible because they resolve through
+   implicit module paths rather than namespace aliases. *)
+let record_visible_in_scope ~scope env (record : named_record) =
+  match Type_id.owner record.type_id with
+  | [] -> true
+  | [ owner ] ->
+      String.equal owner scope
+      || String.starts_with ~prefix:"ocaml." owner
+      || Option.is_some (Env.resolve_namespace_alias ~scope owner env)
+      || List.exists
+           (fun target -> String.equal target owner)
+           (Env.namespace_alias_targets ~scope env)
+  | _ -> true
+
+let record_type_for_keyword ~scope env keyword preferred_name =
+  let candidates =
+    named_records_in_scope env
+    |> List.filter (record_visible_in_scope ~scope env)
+    |> List.filter_map (fun (record : named_record) ->
+           match Types.find_field keyword record.fields with
+           | Some field
+             when not (Types.is_record_extension_field field) ->
+               Some record
+           | Some _ | None -> None)
+    |> List.sort_uniq (fun left right ->
+           Type_id.compare left.type_id right.type_id)
   in
+  match candidates with
+  | [ record ] -> Some (TNamed_record record)
+  | [] -> None
+  | _ :: _ :: _ ->
+      candidates
+      |> List.find_opt (fun (record : named_record) ->
+             String.equal record.type_name preferred_name
+             || String.equal (Type_id.name record.type_id) preferred_name)
+      |> Option.map (fun record -> TNamed_record record)
+
+let dynamic_key_record_type env expected_field_ty =
+  let expected_field_ty =
+    match Types.dynamic_constraint_info expected_field_ty with
+    | Some capability when not (Types.equal capability TUnknown) -> capability
+    | Some _ | None -> expected_field_ty
+  in
+  let expected_field_ty = Types.constraint_value_type expected_field_ty in
+  let named_records = named_records_in_scope env in
   let record_index =
     let add name record index =
       String_map.update name
@@ -2353,8 +2439,9 @@ let parameterize_row_fields fields =
             type_arguments = List.map parameterize record.type_arguments;
             fields = List.map parameterize_field record.fields;
           }
+    | TNil -> TNullable (TVar (fresh_parameter ()))
     | (TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol
-      | TKeyword | TBool | TUnit | TNil | TOcaml _) as ty ->
+      | TKeyword | TBool | TUnit | TOcaml _) as ty ->
         ty
   and parameterize_field (field : field) =
     { field with ty = parameterize field.ty }
@@ -2393,6 +2480,68 @@ let row_param_fields ?(allow_nullable = false) = function
           | _ -> None))
   | _ -> None
 
+(* A parameter whose row position is already occupied by a named record type:
+   reusing that type's application keeps the emitted signature identical to the
+   stored one instead of minting a duplicate <fn>_row<N> declaration. *)
+let named_row_record param_ty =
+  (* Only nominal records have a declaration that is guaranteed to be
+     emitted; reusing an anonymous record's application would leave the
+     parameter referencing a type that may never be declared. *)
+  let tuple_record = function
+    | TNamed_record ({ nominal = true; _ } as record) -> Some record
+    | _ -> None
+  in
+  match param_ty with
+  | TConstraint (Seqable_constraint { element = element_ty; _ }) -> (
+      match element_ty with
+      | TNamed_record ({ nominal = true; _ } as record) -> Some record
+      | TTuple items -> (
+          match List.filter_map tuple_record items with
+          | [ record ] -> Some record
+          | [] | _ :: _ :: _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(* When a parameter's row type uniquely matches a declared named record, bind
+   it as that record: assoc and other whole-record operations then emit
+   nominal-typed OCaml instead of anonymous record literals that OCaml cannot
+   resolve to the intended type. Host type aliases (e.g. Datascript.attr =
+   string) are expanded before comparing field types. *)
+let canonical_row_named_record env fields =
+  let rec expand_host_aliases ty =
+    let ty = Semantic_type.map_children expand_host_aliases ty in
+    match ty with
+    | TOcaml name | TOcaml_app (name, []) -> (
+        match Ocaml_signature.transparent_manifest_alias name with
+        | Some manifest when not (Types.equal manifest ty) ->
+            expand_host_aliases manifest
+        | _ -> ty)
+    | _ -> ty
+  in
+  let expected_fields =
+    List.map
+      (fun (field : field) -> { field with ty = expand_host_aliases field.ty })
+      fields
+  in
+  let candidates =
+    named_records_in_scope env
+    |> List.filter_map (fun (record : named_record) ->
+           let actual_fields =
+             List.map
+               (fun (field : field) ->
+                 { field with ty = expand_host_aliases field.ty })
+               record.fields
+           in
+           if
+             Types.row_compatible ~expected:(TRecord expected_fields)
+               ~actual:(TRecord actual_fields)
+           then Some record
+           else None)
+  in
+  match candidates with
+  | [ record ] -> Some record
+  | _ -> None
+
 let row_param_type_names ?env ?(nullable_row_indices = []) prefix param_tys =
   let has_named_candidate fields =
     match env with
@@ -2417,7 +2566,11 @@ let row_param_type_names ?env ?(nullable_row_indices = []) prefix param_tys =
          match Types.contains_constraint_info param_ty with
          | Some (_, TNamed_record record) ->
              Some (Structural_map.record_type_application record)
-         | Some _ | None -> None
+         | Some _ | None -> (
+             match named_row_record param_ty with
+             | Some record ->
+                 Some (Structural_map.record_type_application record)
+             | None -> None)
        in
        let nullable_fields =
          match param_ty with
@@ -2442,8 +2595,17 @@ let row_param_type_names ?env ?(nullable_row_indices = []) prefix param_tys =
        with
        | Some fields ->
            let type_name = prefix ^ "_row" ^ string_of_int index in
-           let _, parameters = parameterize_row_fields fields in
-           let parameters = List.map (fun name -> "'" ^ name) parameters in
+           let _, parameters =
+             parameterize_row_fields fields
+           in
+           (* Application arguments must be distinct across a function's
+              parameters: OCaml unifies same-named type variables in one
+              signature, so reusing 'a0 in two row applications would
+              collapse unrelated metas. *)
+           let parameters =
+             List.map (fun name -> "'a" ^ string_of_int index ^ "_" ^ name)
+               parameters
+           in
            let applied_name =
              match parameters with
              | [] -> type_name
@@ -2456,6 +2618,9 @@ let row_param_type_names ?env ?(nullable_row_indices = []) prefix param_tys =
 let row_type_items row_type_names param_tys =
   List.map2
     (fun row_type_name param_ty ->
+      match named_row_record param_ty with
+      | Some _ -> None
+      | None -> (
       match (row_type_name, row_param_fields ~allow_nullable:true param_ty) with
       | Some applied_name, Some fields ->
           let type_name =
@@ -2465,7 +2630,9 @@ let row_type_items row_type_names param_tys =
                 String.sub applied_name (index + 1)
                   (String.length applied_name - index - 1)
           in
-          let fields, type_parameters = parameterize_row_fields fields in
+          let fields, type_parameters =
+            parameterize_row_fields fields
+          in
           Some
             (Type_def
                {
@@ -2476,7 +2643,7 @@ let row_type_items row_type_names param_tys =
                  nominal = false;
                  location = None;
                })
-      | _ -> None)
+      | _ -> None))
     row_type_names param_tys
   |> List.filter_map Fun.id
 

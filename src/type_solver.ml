@@ -39,6 +39,16 @@ type conflict = { left : ty; right : ty }
 
 let next_metavariable = ref 0
 
+(* Global metavariable solutions: successful unifications commit their
+   metavariable bindings here so a meta solved at one call site is visible
+   everywhere its `TMeta` node is read later — the union-find behaviour a
+   threaded substitution map cannot provide across isolated `unify` calls.
+   Only Metavariable bindings are committed; Declared names stay scoped to
+   the scheme they came from. *)
+let meta_solutions : (int, ty) Hashtbl.t = Hashtbl.create 1024
+
+let clear_meta_solutions () = Hashtbl.reset meta_solutions
+
 let fresh ?location () =
   let id = !next_metavariable in
   incr next_metavariable;
@@ -166,8 +176,16 @@ let may_contain_variable ?visited predicate ty =
   in
   affects ty
 
+let globally_bound variable =
+  match variable with
+  | Metavariable id -> Hashtbl.mem meta_solutions id
+  | Declared _ -> false
+
 let potentially_affected substitutions ty =
-  may_contain_variable (fun variable -> Variable_map.mem variable substitutions) ty
+  may_contain_variable
+    (fun variable ->
+      Variable_map.mem variable substitutions || globally_bound variable)
+    ty
 
 (* Quantified names may be included: this summary only proves absence.
    None means the traversal budget was exhausted, so substitution must run. *)
@@ -189,7 +207,6 @@ let rec apply substitutions ty =
   match ty with
   | TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol | TKeyword
   | TBool | TUnit | TNil | TUnknown | TOcaml _ -> ty
-  | _ when Variable_map.cardinal substitutions = 0 -> ty
   | (TMeta _ | TVar _) -> apply_with_substitutions substitutions ty
   | _ when not (potentially_affected substitutions ty) -> ty
   | _ -> apply_with_substitutions substitutions ty
@@ -297,10 +314,14 @@ and apply_with_substitutions substitutions ty =
       | TPoly_variant _ -> Semantic_type.map_children apply_ty ty
       | TMeta { id; _ } -> (
           match find_opt (Metavariable id) substitutions with
-          | None -> ty
           | Some (TMeta replacement) when replacement.id = id -> ty
           | Some replacement ->
-              apply_replacement (Metavariable id) ty replacement)
+              apply_replacement (Metavariable id) ty replacement
+          | None -> (
+              match Hashtbl.find_opt meta_solutions id with
+              | None -> ty
+              | Some replacement ->
+                  apply_replacement (Metavariable id) ty replacement))
       | TVar name -> (
           match find_opt (Declared name) substitutions with
           | None -> ty
@@ -480,6 +501,39 @@ let rec is_open = function
 
 let force substitutions variable ty = add variable ty substitutions
 
+(* Record field lists carry the declaration's type_parameters; substitute the
+   application site's type_arguments so field-wise unification binds the actual
+   arguments instead of the declaration variables. *)
+let applied_record_fields (record : named_record) =
+  if
+    record.type_parameters <> []
+    && List.length record.type_parameters
+       = List.length record.type_arguments
+    && not
+         (List.for_all2
+            (fun parameter -> function
+              | TVar name -> String.equal parameter name
+              | _ -> false)
+            record.type_parameters record.type_arguments)
+  then
+    let substitutions =
+      of_list
+        (List.map2
+           (fun parameter argument -> (Declared parameter, argument))
+           record.type_parameters record.type_arguments)
+    in
+    map_preserving_identity
+      (fun (field : field) ->
+        let ty = apply substitutions field.ty in
+        if ty == field.ty then field else { field with ty })
+      record.fields
+  else record.fields
+
+let record_unify_fields = function
+  | TRecord fields -> fields
+  | TNamed_record record -> applied_record_fields record
+  | _ -> []
+
 let matching_fields left right =
   let find_right =
     if List.compare_length_with left 8 >= 0
@@ -508,8 +562,14 @@ let resolve_head substitutions ty =
       if variable_mem variable visiting then ty
       else
         match find_opt variable substitutions with
-        | None -> ty
         | Some replacement -> resolve (variable :: visiting) replacement
+        | None -> (
+            match variable with
+            | Metavariable id -> (
+                match Hashtbl.find_opt meta_solutions id with
+                | None -> ty
+                | Some replacement -> resolve (variable :: visiting) replacement)
+            | Declared _ -> ty)
     in
     match ty with
     | TMeta meta -> resolve_variable (Metavariable meta.id)
@@ -518,8 +578,28 @@ let resolve_head substitutions ty =
   in
   resolve [] ty
 
-let unify ?(resolve_alias = fun _ -> None) substitutions left right =
+let unify ?(resolve_alias = fun _ -> None) ?commit substitutions left right =
  let active_alias_pairs = ref [] in
+ let pending_commits = ref [] in
+ (* Solving calls publish their metavariable bindings to `meta_solutions`;
+    probing calls compare two types in isolation and must not pin metas
+    globally. The default keeps the historical convention: a call that
+    threads a non-empty substitution is solving, a call starting from
+    `empty` is probing. Pass `~commit:true` for a solve that starts from
+    `empty` (its bindings must stay visible to later readers of the same
+    metas) or `~commit:false` for a probe that threads substitutions. *)
+ let committing =
+   match commit with
+   | Some flag -> flag
+   | None -> Variable_map.cardinal substitutions > 0
+ in
+ let bind_meta_tracked substitutions meta ty =
+   match bind_meta substitutions meta ty with
+   | Ok substitutions ->
+       pending_commits := (meta, ty) :: !pending_commits;
+       Ok substitutions
+   | Error _ as error -> error
+ in
  let rec unify substitutions left right =
   let left = resolve_head substitutions left in
   let right = resolve_head substitutions right in
@@ -552,7 +632,7 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
       ->
         Ok substitutions
     | TUnknown, _ | _, TUnknown -> Ok substitutions
-    | TMeta meta, ty | ty, TMeta meta -> bind_meta substitutions meta ty
+    | TMeta meta, ty | ty, TMeta meta -> bind_meta_tracked substitutions meta ty
     | TVar name, ty | ty, TVar name -> bind substitutions (Declared name) ty
     | ( TConstraint (Truthy_constraint left),
         TConstraint (Truthy_constraint right) ) ->
@@ -778,9 +858,11 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
                 Result.bind result (fun substitutions ->
                     unify substitutions value_ty field.ty))
               (Ok substitutions) fields)
-    | ( (TRecord left_fields | TNamed_record { fields = left_fields; _ }),
-        (TRecord right_fields | TNamed_record { fields = right_fields; _ }) ) ->
-        let fields = matching_fields left_fields right_fields in
+    | (TRecord _ | TNamed_record _), (TRecord _ | TNamed_record _) ->
+        let fields =
+          matching_fields (record_unify_fields left)
+            (record_unify_fields right)
+        in
         List.fold_left
           (fun result (left, right) ->
             Result.bind result (fun substitutions ->
@@ -832,7 +914,63 @@ and unify_arities substitutions left right =
         Result.bind rest (fun substitutions ->
             unify substitutions left.return_ty right.return_ty))
  in
- unify substitutions left right
+ match unify substitutions left right with
+ | Ok substitutions ->
+     (if committing then
+        let structural, aliases =
+          List.partition
+            (fun (_meta, ty) ->
+              match ty with
+              | TMeta _ | TVar _ | TUnknown -> false
+              | _ -> true)
+            !pending_commits
+        in
+        let commit meta ty = Hashtbl.replace meta_solutions meta.id ty in
+        (* Bare aliases (meta/var/unknown targets) do not commit on their
+           own: probing unifications that merely relate open variables must
+           not pin them globally. Structural solutions commit even while
+           they still hold inner metas — the inner metas are exactly the
+           links a pattern refinement established (e.g. `tag List values`
+           binds the scrutinee meta to an open variant row whose payload
+           meta must stay reachable). Aliases whose target meta occurs in a
+           committed structural solution commit as well, transitively, so a
+           result meta bound to such a payload keeps the link. *)
+        List.iter (fun (meta, ty) -> commit meta ty) structural;
+        let linked =
+          List.fold_left
+            (fun ids (_meta, ty) ->
+              variables ty
+              |> List.fold_left
+                   (fun ids variable ->
+                     match variable with
+                     | Metavariable id -> if List.mem id ids then ids else id :: ids
+                     | Declared _ -> ids)
+                   ids)
+            [] structural
+        in
+        let rec publish linked aliases =
+          let ready, rest =
+            List.partition
+              (fun (_meta, ty) ->
+                match ty with
+                | TMeta target -> List.mem target.id linked
+                | _ -> false)
+              aliases
+          in
+          match ready with
+          | [] -> ()
+          | _ ->
+              List.iter (fun (meta, ty) -> commit meta ty) ready;
+              publish
+                (List.fold_left
+                   (fun ids (meta, _ty) ->
+                     if List.mem meta.id ids then ids else meta.id :: ids)
+                   linked ready)
+                rest
+        in
+        publish linked aliases);
+     Ok substitutions
+ | Error _ as error -> error
 
 let unify_lists substitutions left right =
   List.fold_left2
@@ -912,6 +1050,10 @@ let generalize ty =
          (fun (quantified, substitutions) -> function
            | Declared name ->
                (Declared_variable name :: quantified, substitutions)
+           | Metavariable id when Hashtbl.mem meta_solutions id ->
+               (* Already solved globally: keep the meta so `apply` expands
+                  its solution instead of quantifying a pinned variable. *)
+               (quantified, substitutions)
            | Metavariable id ->
                let name = inferred_name id in
                ( Inferred_variable { metavariable_id = id; name } :: quantified,

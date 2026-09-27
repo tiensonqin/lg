@@ -791,6 +791,15 @@ let homogeneous_record_value_type fields =
     | ty when Option.is_some (seqable_constraint_info ty) -> None
     | ty -> Some ty
   in
+  let rec erase_holes ty =
+    let ty =
+      match ty with TMeta _ | TVar _ -> TUnknown | ty -> ty
+    in
+    Semantic_type.map_children erase_holes ty
+  in
+  let storage_equal left right =
+    equal (erase_holes left) (erase_holes right)
+  in
   if
     fields = []
     || not (List.for_all (fun (field : field) -> field.runtime_map) fields)
@@ -807,7 +816,7 @@ let homogeneous_record_value_type fields =
               List.for_all
                 (fun (field : field) ->
                   match concrete_storage_type field.ty with
-                  | Some field_ty -> equal first_ty field_ty
+                  | Some field_ty -> storage_equal first_ty field_ty
                   | None -> false)
                 rest
             then Some first_ty
@@ -857,8 +866,10 @@ let rec row_compatible ~expected ~actual =
         (fun expected actual -> row_compatible ~expected ~actual)
         expected_params actual_params
       && row_compatible ~expected:expected_return ~actual:actual_return
-  | TNamed_record expected, TNamed_record actual
-    when expected.nominal || actual.nominal ->
+  | TNamed_record expected, TNamed_record actual when expected.nominal ->
+      (* A nominal expected type is satisfied only by the same declared
+         record. A non-nominal (structural) expected row falls through to the
+         field check below even when the actual record is nominal. *)
       Type_id.equal expected.type_id actual.type_id
   | (TRecord expected_fields | TNamed_record { fields = expected_fields; _ }),
     (TRecord actual_fields | TNamed_record { fields = actual_fields; _ }) ->
@@ -1036,6 +1047,25 @@ let rec assignable ~policy ~expected ~actual =
       | Deferred_to_ocaml -> policy = Host_boundary
       | Incompatible -> false)
 
+(* Diagnostics render unbound metavariables and type parameters as fresh
+   'a/'b/... names; the internal ids must never reach user-facing output. *)
+let display_name_table : (string, string) Hashtbl.t = Hashtbl.create 63
+let display_name_count = ref 0
+
+let display_name key =
+  match Hashtbl.find_opt display_name_table key with
+  | Some name -> name
+  | None ->
+      let index = !display_name_count in
+      incr display_name_count;
+      let name =
+        "'"
+        ^ String.make 1 (Char.chr (Char.code 'a' + (index mod 26)))
+        ^ (if index < 26 then "" else string_of_int (index / 26))
+      in
+      Hashtbl.replace display_name_table key name;
+      name
+
 let rec source_name = function
   | TPoly_variant row ->
       (match row.bound with Exact_row -> "variant" | Lower_row -> "variant-open" | Upper_row -> "variant-upper" | Bounded_row tags -> "variant-required(" ^ String.concat "," tags ^ ")")
@@ -1056,8 +1086,8 @@ let rec source_name = function
   | TNil -> "nil"
   | TNullable inner -> "option<" ^ source_name inner ^ ">"
   | TUnknown -> "any"
-  | TMeta _ -> "inference-variable"
-  | TVar name -> "param/" ^ name
+  | TMeta meta -> display_name ("meta:" ^ string_of_int meta.id)
+  | TVar name -> display_name ("var:" ^ name)
   | TOcaml name -> name
   | TConstraint (Seqable_constraint { element; _ }) ->
       "seqable<" ^ source_name element ^ ">"
@@ -1157,8 +1187,9 @@ let rec diagnostic_type_term = function
   | TUnit -> Error.Type_atom "unit"
   | TNil -> Error.Type_atom "nil"
   | TUnknown -> Error.Type_atom "any"
-  | TMeta _ -> Error.Type_atom "inference-variable"
-  | TVar name -> Error.Type_atom ("param/" ^ name)
+  | TMeta meta ->
+      Error.Type_atom (display_name ("meta:" ^ string_of_int meta.id))
+  | TVar name -> Error.Type_atom (display_name ("var:" ^ name))
   | TOcaml name -> Error.Type_atom name
   | TNullable inner ->
       Error.Type_application ("option", [ diagnostic_type_term inner ])
@@ -1216,9 +1247,9 @@ let rec ocaml_name = function
   | TKeyword -> "string"
   | TBool -> "bool"
   | TUnit -> "unit"
-  | TNil -> "'a option"
+  | TNil -> "_ option"
   | TNullable inner -> ocaml_type_argument_name inner ^ " option"
-  | TUnknown -> "'a"
+  | TUnknown -> "_"
   | TMeta _ -> "_"
   | TVar name -> "'" ^ name
   | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->

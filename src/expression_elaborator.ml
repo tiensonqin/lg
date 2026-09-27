@@ -1961,6 +1961,8 @@ and prepare_inferred_recursive_fn_body ?explicit_return_ty ~ocaml_name scope env
           ~lookup_closed_sum_candidates
           ~lookup_closed_sum_constructors
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
+          ~lookup_key_record_type:
+            (Expression_support.record_type_for_keyword ~scope provisional_env)
           ~resolve_named_record
           inference_params body_forms
       with
@@ -2071,9 +2073,13 @@ and prepare_inferred_recursive_fn_body ?explicit_return_ty ~ocaml_name scope env
                           match
                             Type_inference.inferred_form_type params result
                           with
-                          | ty when Type_solver.is_open ty ->
-                              Type_inference.inferred_call_return_type
-                                ~lookup_function_ty params result
+                          | ty when Type_solver.is_open ty -> (
+                              match
+                                Type_inference.inferred_call_return_type
+                                  ~lookup_function_ty params result
+                              with
+                              | (TUnknown | TMeta _ | TVar _) -> ty
+                              | ty -> ty)
                           | ty -> ty
                         in
                         (match ty with
@@ -2266,8 +2272,8 @@ and prepare_inferred_recursive_fn_with_return ~ocaml_name scope env source_name
           ("recursive defn " ^ source_name ^ " must return "
          ^ Types.source_name return_ty))
 
-and fn_code ?(row_param_type_names = []) parts =
-  Function_elaborator.fn_code ~row_param_type_names parts
+and fn_code ?(demote = false) ?self_name ?(row_param_type_names = []) parts =
+  Function_elaborator.fn_code ~demote ?self_name ~row_param_type_names parts
 
 and compile_multi_arity_fn scope env clauses =
   incr multi_arity_fn_counter;

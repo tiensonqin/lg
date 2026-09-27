@@ -195,6 +195,8 @@ val prepare_inferred_recursive_fn_with_return :
   Ast.form ->
   Ast.form list -> (Expression_support.compiled_fn_parts, Error.t) result
 val fn_code :
+  ?demote:bool ->
+  ?self_name:string ->
   ?row_param_type_names:string option list ->
   Expression_support.compiled_fn_parts -> Types.typed_expr
 val compile_multi_arity_fn :

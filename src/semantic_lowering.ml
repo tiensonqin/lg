@@ -30,7 +30,408 @@ let rec pattern = function
       | Semantic_type.TRecord _ -> pattern value
       | _ -> PConstraint (pattern value, Types.ocaml_name ty))
 
-let rec expression = function
+(* A `let` nested in an application argument prints as a wrapped
+   `(let ... in ...)` argument, costing an extra line. Lifting the bindings
+   in front of the call keeps output flat and is a legal refinement of
+   OCaml's unspecified argument evaluation order. It is only safe when no
+   bound name can capture a free variable in a sibling expression, so we
+   require every bound name to be a compiler-generated `__lg_*` temporary
+   and pairwise distinct across the lifted groups. *)
+let rec strip_lets = function
+  | Ocaml_ir.Let (bindings, value) ->
+      let rest, value = strip_lets value in
+      (bindings @ rest, value)
+  | value -> ([], value)
+
+let rec pattern_bound_names = function
+  | Ocaml_ir.PVar name -> [ name ]
+  | PAlias (pat, name) -> name :: pattern_bound_names pat
+  | PTuple pats | PList pats -> List.concat_map pattern_bound_names pats
+  | PCons (head, tail) -> pattern_bound_names head @ pattern_bound_names tail
+  | PRecord fields ->
+      List.concat_map (fun (_, pat) -> pattern_bound_names pat) fields
+  | POr (left, right) -> pattern_bound_names left @ pattern_bound_names right
+  | PConstructor (_, pat) | PPolyTag (_, pat) ->
+      Option.fold ~none:[] ~some:pattern_bound_names pat
+  | PConstraint (pat, _) | PLocated (_, _, pat) -> pattern_bound_names pat
+  | _ -> []
+
+let liftable_bindings bindings =
+  let names = List.concat_map (fun (pat, _) -> pattern_bound_names pat) bindings in
+  List.for_all
+    (fun name -> String.length name >= 4 && String.sub name 0 4 = "__lg")
+    names
+  && List.sort_uniq String.compare names = List.sort String.compare names
+
+(* `let __lg_x = e in __lg_x` carries no meaning beyond evaluation order,
+   which is unspecified in argument/scrutinee position anyway — collapse it
+   to `e`. Restricted to generated names so user bindings keep their
+   source-level references for the language service. *)
+let rec bound_pattern_name = function
+  | Ocaml_ir.PVar name -> Some (name, None)
+  | PLocated (_, _, pattern) -> bound_pattern_name pattern
+  | PConstraint (pattern, ty) -> (
+      match bound_pattern_name pattern with
+      | Some (name, None) -> Some (name, Some ty)
+      | other -> other)
+  | _ -> None
+
+let is_generated_temp name =
+  String.length name >= 4 && String.sub name 0 4 = "__lg"
+
+let rec collapse_identity_lets = function
+  | Ocaml_ir.Let ([ (pattern, bound) ], body) -> (
+      let rec body_name = function
+        | Ocaml_ir.Ident name -> Some name
+        | Located (_, _, expr) -> body_name expr
+        | _ -> None
+      in
+      match
+        (bound_pattern_name pattern, body_name (collapse_identity_lets body))
+      with
+      | Some (name, ty), Some name'
+        when name = name'
+             && String.length name >= 4
+             && String.sub name 0 4 = "__lg" -> (
+          (* The pattern annotation pins the result type, so it moves onto
+             the bound expression. *)
+          match ty with
+          | Some ty ->
+              collapse_identity_lets (Ocaml_ir.Constraint (bound, ty))
+          | None -> collapse_identity_lets bound)
+      | _ ->
+          Ocaml_ir.Let ([ (pattern, bound) ], collapse_identity_lets body))
+  | expr -> expr
+
+let rec ocaml_stable = function
+  | Ocaml_ir.(Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit
+             | Ident _) ->
+      true
+  | Ocaml_ir.Apply
+      ( Ocaml_ir.Ident
+          ( "Lg_runtime.Runtime_reference.deref"
+          | "Lg_runtime.Runtime_slot.deref" ),
+        [ cell ] ) ->
+      (* A cell read commutes with any effectful sibling: it observes
+         whatever value is current either way. *)
+      ocaml_stable cell
+  | Ocaml_ir.(GadtScope e | Located (_, _, e) | Constraint (e, _)
+             | Prefix (_, e) | Field (e, _)) ->
+      ocaml_stable e
+  | Ocaml_ir.(Tuple es | List es | Array es) -> List.for_all ocaml_stable es
+  | Ocaml_ir.(PolyTag (_, e) | Constructor (_, e)) ->
+      Option.fold ~none:true ~some:ocaml_stable e
+  | Ocaml_ir.Record (fields, _) ->
+      List.for_all (fun (_, value) -> ocaml_stable value) fields
+  | Ocaml_ir.(Fun _ | Labelled_fun _) -> true (* closure allocation is pure *)
+  | _ -> false
+
+let rec count_uses name expression =
+  let count = count_uses name in
+  let rebound_in patterns =
+    List.exists
+      (fun pattern -> List.mem name (pattern_bound_names pattern))
+      patterns
+  in
+  match expression with
+  | Ocaml_ir.Ident other -> if String.equal other name then 1 else 0
+  | Ocaml_ir.(Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit
+             | PackModule _) ->
+      0
+  | Ocaml_ir.(GadtScope e | Located (_, _, e) | Constraint (e, _)
+             | Prefix (_, e) | Field (e, _)) ->
+      count e
+  | Ocaml_ir.SetField (target, _, value) -> count target + count value
+  | Ocaml_ir.(Tuple es | List es | Array es | Sequence es) ->
+      List.fold_left (fun sum e -> sum + count e) 0 es
+  | Ocaml_ir.(PolyTag (_, e) | Constructor (_, e)) ->
+      Option.fold ~none:0 ~some:count e
+  | Ocaml_ir.(Apply (fn, args) | Uncurried_apply (fn, args)) ->
+      List.fold_left (fun sum e -> sum + count e) (count fn) args
+  | Ocaml_ir.Labelled_apply (fn, args) ->
+      List.fold_left (fun sum (_, e) -> sum + count e) (count fn) args
+  | Ocaml_ir.If (c, then_e, else_e) -> count c + count then_e + count else_e
+  | Ocaml_ir.(Infix (_, left, right) | Cons (left, right)
+             | UnpackModule (_, _, left, right)) ->
+      count left + count right
+  | Ocaml_ir.Fun (patterns, body) ->
+      if rebound_in patterns then 0 else count body
+  | Ocaml_ir.Labelled_fun (patterns, body) ->
+      if rebound_in (List.map snd patterns) then 0 else count body
+  | Ocaml_ir.Let (bindings, body) ->
+      let rec sum_bindings shadowed = function
+        | [] -> if shadowed then 0 else count body
+        | (pattern, value) :: rest ->
+            (if shadowed then 0 else count value)
+            + sum_bindings
+                (shadowed
+                || List.mem name (pattern_bound_names pattern))
+                rest
+      in
+      sum_bindings false bindings
+  | Ocaml_ir.LetRec (fn_name, patterns, body, args) ->
+      if String.equal fn_name name || rebound_in patterns then
+        List.fold_left (fun sum e -> sum + count e) 0 args
+      else
+        count body
+        + List.fold_left (fun sum e -> sum + count e) 0 args
+  | Ocaml_ir.LetRecIn (fn_name, patterns, body, next) ->
+      if String.equal fn_name name || rebound_in patterns then 0
+      else count body + count next
+  | Ocaml_ir.LetRecGroup (bindings, body) ->
+      let bound =
+        List.concat_map (fun (pattern, _) -> pattern_bound_names pattern)
+          bindings
+      in
+      if List.mem name bound then 0
+      else
+        List.fold_left
+          (fun sum (_, value) -> sum + count value)
+          (count body) bindings
+  | Ocaml_ir.Match (target, cases) ->
+      count target
+      + List.fold_left
+          (fun sum (pat, body) ->
+            sum + (if rebound_in [ pat ] then 0 else count body))
+          0 cases
+  | Ocaml_ir.Match_guarded (target, cases)
+  | Ocaml_ir.Try (target, cases) ->
+      count target
+      + List.fold_left
+          (fun sum (pat, guard, body) ->
+            sum
+            + Option.fold ~none:0 ~some:count guard
+            + (if rebound_in [ pat ] then 0 else count body))
+          0 cases
+  | Ocaml_ir.Record (fields, _) ->
+      List.fold_left (fun sum (_, e) -> sum + count e) 0 fields
+  | Ocaml_ir.RecordUpdate (record, fields) ->
+      count record
+      + List.fold_left (fun sum (_, e) -> sum + count e) 0 fields
+
+let rec subst_ident name replacement expression =
+  let open Ocaml_ir in
+  let subst = subst_ident name replacement in
+  let rebound_in patterns =
+    List.exists
+      (fun pattern -> List.mem name (pattern_bound_names pattern))
+      patterns
+  in
+  match expression with
+  | Ocaml_ir.Ident other when String.equal other name -> replacement
+  | Ocaml_ir.(GadtScope e) -> GadtScope (subst e)
+  | Ocaml_ir.Located (node_id, location, e) ->
+      Located (node_id, location, subst e)
+  | Ocaml_ir.(PolyTag (n, e)) -> PolyTag (n, Option.map subst e)
+  | Ocaml_ir.Constructor (n, e) -> Constructor (n, Option.map subst e)
+  | Ocaml_ir.Tuple es -> Tuple (List.map subst es)
+  | Ocaml_ir.List es -> List (List.map subst es)
+  | Ocaml_ir.Array es -> Array (List.map subst es)
+  | Ocaml_ir.Apply (fn, args) -> Apply (subst fn, List.map subst args)
+  | Ocaml_ir.Uncurried_apply (fn, args) ->
+      Uncurried_apply (subst fn, List.map subst args)
+  | Ocaml_ir.Labelled_apply (fn, args) ->
+      Labelled_apply (subst fn, List.map (fun (l, e) -> (l, subst e)) args)
+  | Ocaml_ir.If (c, then_e, else_e) -> If (subst c, subst then_e, subst else_e)
+  | Ocaml_ir.Fun (patterns, body) ->
+      if rebound_in patterns then expression else Fun (patterns, subst body)
+  | Ocaml_ir.Labelled_fun (patterns, body) ->
+      if rebound_in (List.map snd patterns) then expression
+      else Labelled_fun (patterns, subst body)
+  | Ocaml_ir.Sequence es -> Sequence (List.map subst es)
+  | Ocaml_ir.Let (bindings, body) ->
+      let rec rebuild shadowed = function
+        | [] -> ([], if shadowed then body else subst body)
+        | (pattern, value) :: rest ->
+            let value = if shadowed then value else subst value in
+            let rest, body =
+              rebuild
+                (shadowed
+                || List.mem name (pattern_bound_names pattern))
+                rest
+            in
+            ((pattern, value) :: rest, body)
+      in
+      let bindings, body = rebuild false bindings in
+      Let (bindings, body)
+  | Ocaml_ir.LetRec (fn_name, patterns, body, args) ->
+      if String.equal fn_name name || rebound_in patterns then
+        LetRec (fn_name, patterns, body, List.map subst args)
+      else LetRec (fn_name, patterns, subst body, List.map subst args)
+  | Ocaml_ir.LetRecIn (fn_name, patterns, body, next) ->
+      if String.equal fn_name name || rebound_in patterns then expression
+      else LetRecIn (fn_name, patterns, subst body, subst next)
+  | Ocaml_ir.LetRecGroup (bindings, body) ->
+      let bound =
+        List.concat_map (fun (pattern, _) -> pattern_bound_names pattern)
+          bindings
+      in
+      if List.mem name bound then expression
+      else
+        LetRecGroup
+          ( List.map (fun (pattern, value) -> (pattern, subst value)) bindings,
+            subst body )
+  | Ocaml_ir.Match (target, cases) ->
+      Match
+        ( subst target,
+          List.map
+            (fun (pat, body) ->
+              (pat, if rebound_in [ pat ] then body else subst body))
+            cases )
+  | Ocaml_ir.Match_guarded (target, cases) ->
+      Match_guarded
+        ( subst target,
+          List.map
+            (fun (pat, guard, body) ->
+              if rebound_in [ pat ] then (pat, guard, body)
+              else (pat, Option.map subst guard, subst body))
+            cases )
+  | Ocaml_ir.Try (target, cases) ->
+      Try
+        ( subst target,
+          List.map
+            (fun (pat, guard, body) ->
+              if rebound_in [ pat ] then (pat, guard, body)
+              else (pat, Option.map subst guard, subst body))
+            cases )
+  | Ocaml_ir.Infix (op, left, right) -> Infix (op, subst left, subst right)
+  | Ocaml_ir.Prefix (op, e) -> Prefix (op, subst e)
+  | Ocaml_ir.Constraint (e, ty) -> Constraint (subst e, ty)
+  | Ocaml_ir.Field (e, n) -> Field (subst e, n)
+  | Ocaml_ir.SetField (target, n, value) -> SetField (subst target, n, subst value)
+  | Ocaml_ir.Cons (head, tail) -> Cons (subst head, subst tail)
+  | Ocaml_ir.Record (fields, ty) ->
+      Record (List.map (fun (n, e) -> (n, subst e)) fields, ty)
+  | Ocaml_ir.RecordUpdate (record, fields) ->
+      RecordUpdate
+        (subst record, List.map (fun (n, e) -> (n, subst e)) fields)
+  | Ocaml_ir.UnpackModule (a, b, value, body) ->
+      UnpackModule (a, b, subst value, subst body)
+  | leaf -> leaf
+
+(* True when [name]'s single use sits at a strict evaluation position and
+   everything that may evaluate before it is pure — earlier sequence
+   elements, earlier let bindings, and all unordered siblings — so moving
+   a side effect into that position preserves observable order. Subterms
+   evaluated only after the hole (later sequence elements, let bodies,
+   match arms, branches, exception handlers) need no purity: they still
+   run after the moved effect. Deferred positions (function bodies, letrec
+   bound values) reject, since the use would no longer be strict. *)
+let rec sole_effect_site name expression =
+  let uses = count_uses name in
+  let rec ordered prev_stable = function
+    | [] -> prev_stable
+    | e :: rest ->
+        if uses e > 0 then prev_stable && sole_effect_site name e
+        else ordered (prev_stable && ocaml_stable e) rest
+  and unordered es =
+    List.for_all
+      (fun e -> if uses e > 0 then sole_effect_site name e
+                else ocaml_stable e)
+      es
+  in
+  match expression with
+  | Ocaml_ir.Ident n -> String.equal n name
+  | e when uses e = 0 -> ocaml_stable e
+  | Ocaml_ir.(GadtScope e | Located (_, _, e) | Constraint (e, _)
+             | Prefix (_, e) | Field (e, _)) ->
+      sole_effect_site name e
+  | Ocaml_ir.(PolyTag (_, e) | Constructor (_, e)) ->
+      Option.fold ~none:false ~some:(sole_effect_site name) e
+  | Ocaml_ir.(Tuple es | List es | Array es) -> unordered es
+  | Ocaml_ir.Sequence es -> ordered true es
+  | Ocaml_ir.(Apply (fn, args) | Uncurried_apply (fn, args)) ->
+      unordered (fn :: args)
+  | Ocaml_ir.Labelled_apply (fn, args) ->
+      unordered (fn :: List.map snd args)
+  | Ocaml_ir.(Infix ("&&", left, _) | Infix ("||", left, _))
+    when uses left = 1 ->
+      sole_effect_site name left
+  | Ocaml_ir.(Infix (_, left, right) | Cons (left, right)) ->
+      unordered [ left; right ]
+  | Ocaml_ir.SetField (target, _, value) -> unordered [ target; value ]
+  | Ocaml_ir.If (cond, _, _) when uses cond = 1 ->
+      sole_effect_site name cond
+  | Ocaml_ir.(Match (target, _) | Match_guarded (target, _)
+             | Try (target, _))
+    when uses target = 1 ->
+      sole_effect_site name target
+  | Ocaml_ir.Record (fields, _) -> unordered (List.map snd fields)
+  | Ocaml_ir.RecordUpdate (record, fields) ->
+      unordered (record :: List.map snd fields)
+  | Ocaml_ir.UnpackModule (_, _, value, body) ->
+      if uses value > 0 then sole_effect_site name value
+      else ocaml_stable value && sole_effect_site name body
+  | Ocaml_ir.Let (bindings, body) ->
+      let rec loop prev_stable = function
+        | [] -> prev_stable && sole_effect_site name body
+        | (_, value) :: rest ->
+            if uses value > 0 then prev_stable && sole_effect_site name value
+            else loop (prev_stable && ocaml_stable value) rest
+      in
+      loop true bindings
+  | _ -> false
+
+(* `let __lg_x = e in ... __lg_x ...` folds into the use site when safe: a
+   single use of a pure value anywhere, or of an effectful one at the sole
+   effect position (per [sole_effect_site]); an unused pure binding drops
+   entirely. The pattern's type annotation moves onto the substituted
+   expression so pins survive. *)
+let rec simplify_temp_lets = function
+  | Ocaml_ir.Let ((pattern, bound) :: rest, body) -> (
+      let body = simplify_temp_lets (Ocaml_ir.Let (rest, body)) in
+      match bound_pattern_name pattern with
+      | Some (name, ty) when is_generated_temp name -> (
+          match count_uses name body with
+          | 0 when ocaml_stable bound -> body
+          | 1 when ocaml_stable bound || sole_effect_site name body ->
+              let bound =
+                (* The pattern's type pin travels onto the substituted
+                   expression only where it may still be needed for record
+                   label resolution; head forms whose type is fixed without
+                   it (calls, identifiers, literals, field reads) drop it. *)
+                let rec needs_pin = function
+                  | Ocaml_ir.Located (_, _, e) | GadtScope e -> needs_pin e
+                  | Ocaml_ir.(Constraint _ | Ident _ | Int _ | Int64 _
+                             | Float _ | String _ | Char _ | Bool _ | Unit
+                             | Apply _ | Uncurried_apply _ | Labelled_apply _
+                             | Infix _ | Prefix _ | Field _ | SetField _) ->
+                      false
+                  | _ -> true
+                in
+                match ty with
+                | Some ty when needs_pin bound -> Ocaml_ir.Constraint (bound, ty)
+                | _ -> bound
+              in
+              simplify_temp_lets (subst_ident name bound body)
+          | _ -> Ocaml_ir.Let ([ (pattern, bound) ], body))
+      | _ -> Ocaml_ir.Let ([ (pattern, bound) ], body))
+  | Ocaml_ir.Let ([], body) -> simplify_temp_lets body
+  | expression -> expression
+
+let rewrap bindings value =
+  List.fold_right
+    (fun binding body -> Ocaml_ir.Let ([ binding ], body))
+    bindings value
+
+let lift_lets fn args =
+  let fn = collapse_identity_lets fn in
+  let fn_bindings, fn = strip_lets fn in
+  let per_arg =
+    List.map (fun arg -> strip_lets (collapse_identity_lets arg)) args
+  in
+  let lifted = fn_bindings @ List.concat_map fst per_arg in
+  if lifted <> [] && liftable_bindings lifted then
+    (lifted, fn, List.map snd per_arg)
+  else
+    ( [],
+      rewrap fn_bindings fn,
+      List.map (fun (bindings, value) -> rewrap bindings value) per_arg )
+
+let lifted_expression bindings expr =
+  match bindings with [] -> expr | _ -> Ocaml_ir.Let (bindings, expr)
+
+let rec lower_node = function
   | Semantic_ir.Typed (_, value) -> expression value
   | Semantic_ir.GadtScope value -> Ocaml_ir.GadtScope (expression value)
   | Semantic_ir.Located (node_id, location, value) ->
@@ -48,17 +449,13 @@ let rec expression = function
   | Tuple values -> Tuple (List.map expression values)
   | Ident name -> Ident name
   | List values ->
-      let rec stable = function
-        | Semantic_ir.Located (_, _, value) | Typed (_, value) | GadtScope value -> stable value
-        | Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit | Ident _ -> true
-        | PolyTag (_, value) | Constructor (_, value) -> Option.fold ~none:true ~some:stable value
-        | Tuple values | List values | Array values -> List.for_all stable values
-        | Fun _ | Labelled_fun _ -> true
-        | _ -> false in
+      let stable = Semantic_ir.is_stable in
       let rec binding_pattern name = function
         | Semantic_ir.Located (_, _, value) | GadtScope value -> binding_pattern name value
         | Typed (ty, _) -> pattern (Semantic_ir.PTyped (Semantic_ir.PVar name, ty))
         | _ -> Ocaml_ir.PVar name in
+      (* Non-stable elements bind temporaries; [simplify_temp_lets] inlines
+         any whose use ends up as the sole effectful site. *)
       let bindings, values =
         List.mapi (fun index value ->
           if stable value then None, expression value
@@ -73,14 +470,29 @@ let rec expression = function
   | Apply (fn, args) -> (
       match Semantic_ir.scoped_application fn args with
       | Some scoped -> expression scoped
-      | None -> Apply (expression fn, List.map expression args))
+      | None -> (
+          let fn = expression fn in
+          let args = List.map expression args in
+          let bindings, fn, args = lift_lets fn args in
+          lifted_expression bindings (Apply (fn, args))))
   | Uncurried_apply (fn, args) ->
-      Uncurried_apply (expression fn, List.map expression args)
+      let fn = expression fn in
+      let args = List.map expression args in
+      let bindings, fn, args = lift_lets fn args in
+      lifted_expression bindings (Uncurried_apply (fn, args))
   | Labelled_apply (fn, args) ->
-      Labelled_apply
-        (expression fn, List.map (fun (label, arg) -> (label, expression arg)) args)
-  | If (condition, then_expr, else_expr) ->
-      If (expression condition, expression then_expr, expression else_expr)
+      let fn = expression fn in
+      let labels, args = List.split args in
+      let args = List.map expression args in
+      let bindings, fn, args = lift_lets fn args in
+      lifted_expression bindings (Labelled_apply (fn, List.combine labels args))
+  | If (condition, then_expr, else_expr) -> (
+      match collapse_identity_lets (expression condition) with
+      | Let (bindings, condition) when liftable_bindings bindings ->
+          Let
+            ( bindings,
+              If (condition, expression then_expr, expression else_expr) )
+      | condition -> If (condition, expression then_expr, expression else_expr))
   | Fun (patterns, body) -> Fun (List.map pattern patterns, expression body)
   | Labelled_fun (patterns, body) ->
       Labelled_fun (List.map (fun (label, value) -> label, pattern value) patterns,
@@ -90,11 +502,12 @@ let rec expression = function
       match Semantic_ir.scoped_let bindings body with
       | Some scoped -> expression scoped
       | None ->
-          Let
-            ( List.map
-                (fun (pat, value) -> (pattern pat, expression value))
-                bindings,
-              expression body ))
+          collapse_identity_lets
+            (Let
+               ( List.map
+                   (fun (pat, value) -> (pattern pat, expression value))
+                   bindings,
+                 expression body )))
   | EvaluateOnce (name, value, body) ->
       Let
         ( [
@@ -116,17 +529,25 @@ let rec expression = function
   | PackModule (name, signature) -> PackModule (name, signature)
   | UnpackModule (name, signature, value, body) ->
       UnpackModule (name, signature, expression value, expression body)
-  | Match (target, cases) ->
-      Match
-        ( expression target,
-          List.map (fun (pat, body) -> (pattern pat, expression body)) cases )
-  | Match_guarded (target, cases) ->
-      Match_guarded
-        ( expression target,
-          List.map
-            (fun (pat, guard, body) ->
-              (pattern pat, Option.map expression guard, expression body))
-            cases )
+  | Match (target, cases) -> (
+      let cases =
+        List.map (fun (pat, body) -> (pattern pat, expression body)) cases
+      in
+      match collapse_identity_lets (expression target) with
+      | Let (bindings, target) when liftable_bindings bindings ->
+          Let (bindings, Match (target, cases))
+      | target -> Match (target, cases))
+  | Match_guarded (target, cases) -> (
+      let cases =
+        List.map
+          (fun (pat, guard, body) ->
+            (pattern pat, Option.map expression guard, expression body))
+          cases
+      in
+      match collapse_identity_lets (expression target) with
+      | Let (bindings, target) when liftable_bindings bindings ->
+          Let (bindings, Match_guarded (target, cases))
+      | target -> Match_guarded (target, cases))
   | Try (body, cases) ->
       Try
         ( expression body,
@@ -154,3 +575,8 @@ let rec expression = function
   | UnpackDynamic { conversion; _ }
   | NullableToSeq { conversion; _ } ->
       expression conversion
+
+(* `collapse_identity_lets` runs on every lowered subexpression so identity
+   temporaries fold regardless of which construct produced them. *)
+and expression value =
+  collapse_identity_lets (simplify_temp_lets (lower_node value))

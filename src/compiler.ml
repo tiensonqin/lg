@@ -24,6 +24,7 @@ type diagnostic = Toolchain.diagnostic = {
 
 type compilation = Toolchain.compilation = {
   ocaml_source : string;
+  ocaml_signature : string option;
   diagnostics : diagnostic list;
 }
 

@@ -2,25 +2,29 @@ open Types
 
 let apply name args = Semantic_ir.Apply (Semantic_ir.Ident name, args)
 
-let concat_expr = function
+let concat_expr parts =
+  (* OCaml does not specify the evaluation order of `^` operands; only
+     non-stable parts need a binding to keep source order. *)
+  let bindings, values =
+    parts
+    |> List.mapi (fun index part ->
+           if Semantic_ir.is_stable part then (None, part)
+           else
+             let name = "__lg_concat_" ^ string_of_int index in
+             (Some (Semantic_ir.PVar name, part), Semantic_ir.Ident name))
+    |> List.split
+  in
+  match values with
   | [] -> Semantic_ir.String ""
-  | parts ->
-      let bindings, values =
-        parts
-        |> List.mapi (fun index part ->
-               let name = "__lg_concat_" ^ string_of_int index in
-               ((Semantic_ir.PVar name, part), Semantic_ir.Ident name))
-        |> List.split
-      in
+  | first :: rest -> (
       let body =
-        match values with
-        | [] -> assert false
-        | first :: rest ->
-            List.fold_left
-              (fun acc part -> Semantic_ir.Infix ("^", acc, part))
-              first rest
+        List.fold_left
+          (fun acc part -> Semantic_ir.Infix ("^", acc, part))
+          first rest
       in
-      Semantic_ir.Let (bindings, body)
+      match List.filter_map Fun.id bindings with
+      | [] -> body
+      | bindings -> Semantic_ir.Let (bindings, body))
 
 let wrap_expr prefix value suffix =
   concat_expr [ Semantic_ir.String prefix; value; Semantic_ir.String suffix ]

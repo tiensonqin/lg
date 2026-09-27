@@ -86,6 +86,10 @@ let matching_record_fields left_fields right_fields =
     loop [] left_fields
 
 let rec equality_type_compatible left_ty right_ty =
+  (* Capability-constrained values are stored as (witness, value) pairs;
+     equality applies to the value component. *)
+  let left_ty = Types.constraint_value_type left_ty in
+  let right_ty = Types.constraint_value_type right_ty in
   let directly_compatible =
     Types.is_dynamic left_ty
     || Types.is_dynamic right_ty
@@ -126,6 +130,22 @@ let rec equality_expr ?env left right =
   in
   let left = resolve left in
   let right = resolve right in
+  (* Capability constraints store (witness, value) pairs: compare the
+     stored values. *)
+  let unwrap_capability value =
+    match Types.capability_constraint_value value.ty with
+    | Some value_ty ->
+        {
+          value with
+          ty = value_ty;
+          semantic_expr =
+            Semantic_ir.Apply
+              (Semantic_ir.Ident "snd", [ value.semantic_expr ]);
+        }
+    | None -> value
+  in
+  let left = unwrap_capability left in
+  let right = unwrap_capability right in
   match (left.ty, right.ty) with
   | TFloat, TInt ->
       let right =

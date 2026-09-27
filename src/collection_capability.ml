@@ -41,6 +41,7 @@ let identifier_holds_packed_constraint name =
   || String.starts_with ~prefix:"__lg_apply_rest_item" name
   || String.starts_with ~prefix:"__lg_static_argument_" name
   || String.starts_with ~prefix:"__lg_erased_protocol_arg_" name
+  || String.starts_with ~prefix:"__lg_seq_value_item" name
 
 let rec constraint_value_expression ty expression =
   let unwrap value_ty =

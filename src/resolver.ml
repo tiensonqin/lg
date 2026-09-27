@@ -214,12 +214,12 @@ let ocaml_call_target scope env function_name =
           | None -> (
               match Host_interop.implicit_module alias with
               | Some module_path ->
-                  Some (module_path ^ "." ^ Names.ocaml_member_name member_name)
+                  Some (ocaml_module_member module_path member_name)
               | None when String.length alias > 0 && starts_with_uppercase alias ->
-                  Some (alias ^ "." ^ Names.ocaml_member_name member_name)
+                  Some (ocaml_module_member alias member_name)
               | None -> None)
           | _ when String.length alias > 0 && starts_with_uppercase alias ->
-              Some (alias ^ "." ^ Names.ocaml_member_name member_name)
+              Some (ocaml_module_member alias member_name)
           | _ -> None))
       | _ ->
           let first_segment =

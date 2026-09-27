@@ -61,6 +61,15 @@ let compile_args_for compile_expr scope env arg_forms =
   in
   loop [] arg_forms
 
+(* Strips annotation-only wrappers; unlike Semantic_ir.unlocated, real
+   conversions (PackDynamic/UnpackDynamic/NullableToSeq) are preserved. *)
+let rec transparent_expression = function
+  | Semantic_ir.Typed (_, expression)
+  | Semantic_ir.Located (_, _, expression)
+  | Semantic_ir.GadtScope expression ->
+      transparent_expression expression
+  | expression -> expression
+
 let located_pattern identity pattern =
   match identity with
   | None -> pattern
@@ -886,7 +895,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               let pattern = capability_pattern name source in
               ((Semantic_ir.PConstructor (constructor, Some pattern),
                 Semantic_ir.Constructor (constructor, Some value)),
-               pattern = Semantic_ir.PVar name && value = Semantic_ir.Ident name))
+               pattern = Semantic_ir.PVar name
+               && transparent_expression value = Semantic_ir.Ident name))
             (adapt_branch_expression env target (typed_ir source (Semantic_ir.Ident name)))
         in
         Result.bind (adapt "Ok" target_ok source_ok) (fun (success, success_identity) ->
@@ -909,15 +919,19 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         let payload = typed_ir source_inner (Semantic_ir.Ident payload_name) in
         Result.map
           (fun adapted ->
-            Semantic_ir.Match
-              ( branch.semantic_expr,
-                [
-                  ( Semantic_ir.PConstructor ("None", None),
-                    Semantic_ir.Constructor ("None", None) );
-                  ( Semantic_ir.PConstructor
-                      ("Some", Some (Semantic_ir.PVar payload_name)),
-                    Semantic_ir.Constructor ("Some", Some adapted) );
-                ] ))
+            if
+              transparent_expression adapted = Semantic_ir.Ident payload_name
+            then branch.semantic_expr
+            else
+              Semantic_ir.Match
+                ( branch.semantic_expr,
+                  [
+                    ( Semantic_ir.PConstructor ("None", None),
+                      Semantic_ir.Constructor ("None", None) );
+                    ( Semantic_ir.PConstructor
+                        ("Some", Some (Semantic_ir.PVar payload_name)),
+                      Semantic_ir.Constructor ("Some", Some adapted) );
+                  ] ))
           (adapt_branch_expression env target_inner payload)
     | ( (TNullable _target_inner
         | TOcaml_app ("option", [ _target_inner ])),
@@ -1712,7 +1726,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               | Some expected
                 when Option.is_some (Types.dynamic_map_types expected) ->
                   expected
-              | Some _ | None -> Types.dynamic_map TUnknown TUnknown
+              | Some _ | None ->
+                  Types.dynamic_map (Type_solver.fresh ()) (Type_solver.fresh ())
             in
             Ok
               (typed_ir map_ty
@@ -2032,11 +2047,49 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     with
                     | Error _ as error -> error
                     | Ok (result_ty, some_code, none_code) ->
+                        (* `Some p -> let x = p in body` collapses to
+                           `Some x -> body` when the branch opens with a
+                           plain-variable binding of the whole payload. *)
+                        let direct_binding, some_code =
+                          if has_capability payload_ty then (None, some_code)
+                          else
+                            let rec strip = function
+                              | Semantic_ir.Typed (_, value)
+                              | Located (_, _, value) | GadtScope value ->
+                                  strip value
+                              | value -> value
+                            in
+                            match strip some_code with
+                            | Semantic_ir.Let ([ (bound_pattern, bound) ], body)
+                              -> (
+                                let name =
+                                  match bound_pattern with
+                                  | Semantic_ir.PVar name -> Some name
+                                  | Semantic_ir.PLocated
+                                      (_, _, Semantic_ir.PVar name) ->
+                                      Some name
+                                  | _ -> None
+                                in
+                                match name with
+                                | None -> (None, some_code)
+                                | Some name -> (
+                                    match strip bound with
+                                    | Semantic_ir.Ident name'
+                                      when String.equal name' payload_name ->
+                                        (Some (bound_pattern, name), body)
+                                    | _ -> (None, some_code)))
+                            | _ -> (None, some_code)
+                        in
+                        let payload_value_name, payload_pattern =
+                          match direct_binding with
+                          | Some (pattern, name) -> (name, pattern)
+                          | None -> (payload_name, Semantic_ir.PVar payload_name)
+                        in
                         let some_code =
                           if require_truthy then
                             Semantic_ir.If
                               ( truthiness_expression ~env payload_ty
-                                  (Semantic_ir.Ident payload_name),
+                                  (Semantic_ir.Ident payload_value_name),
                                 some_code,
                                 none_code )
                           else some_code
@@ -2052,8 +2105,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                             (if has_capability payload_ty then
                                                capability_pattern payload_name
                                                  payload_ty
-                                             else
-                                               Semantic_ir.PVar payload_name) ),
+                                             else payload_pattern) ),
                                       some_code );
                                     ( Semantic_ir.PConstructor ("None", None),
                                       none_code );
@@ -2969,9 +3021,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       | Semantic_ir.Ident _, Some _ -> true
                       | _ -> false
                     in
+                    let inline_operand =
+                      direct_constrained_identifier
+                      || Semantic_ir.is_stable expression.semantic_expr
+                    in
                     let raw_value =
-                      if direct_constrained_identifier then
-                        expression.semantic_expr
+                      if inline_operand then expression.semantic_expr
                       else Semantic_ir.Ident value_name
                     in
                     let condition =
@@ -2993,6 +3048,71 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       else (expression.ty, raw_value)
                     in
                     let next = lower_expressions rest in
+                    (* `(or nullable next)` on an option operand is a direct
+                       match — one evaluation, no temporary, no Option.get. *)
+                    let or_option_payload_ty =
+                      if operator = `Or then
+                        match expression.ty with
+                        | TNullable payload_ty
+                        | TOcaml_app ("option", [ payload_ty ]) ->
+                            Some payload_ty
+                        (* Truthy-constrained operands are witness pairs at
+                           the OCaml level — they cannot match Some directly. *)
+                        | _ -> None
+                      else None
+                    in
+                    (* `(and option next)`: falsy result is the operand
+                       itself (None); the payload is only consulted when the
+                       option is Some and the payload itself can be falsy. *)
+                    let and_option_always_truthy =
+                      if operator = `And then
+                        match expression.ty with
+                        | TNullable payload_ty
+                        | TOcaml_app ("option", [ payload_ty ]) -> (
+                            match payload_ty with
+                            | TSeq _ -> true
+                            | TOcaml_app (name, [ _ ])
+                              when Types.is_next_seq_type_name name ->
+                                true
+                            | TBool | TNil | TNullable _
+                            | TOcaml_app ("option", [ _ ])
+                            | TOcaml "option" ->
+                                false
+                            | ty ->
+                                (not (Types.is_dynamic ty))
+                                && Option.is_none
+                                     (Types.truthy_constraint_info ty)
+                                && not
+                                     (Edn_value_elaborator.is_value_type ty))
+                        | _ -> false
+                      else false
+                    in
+                    match or_option_payload_ty with
+                    | Some payload_ty ->
+                        Semantic_ir.Match
+                          ( expression.semantic_expr,
+                            [
+                              ( Semantic_ir.PConstructor
+                                  ("Some",
+                                   Some (Semantic_ir.PVar "logical_payload")),
+                                coerce_expression_to_type result_ty
+                                  payload_ty
+                                  (Semantic_ir.Ident "logical_payload") );
+                              ( Semantic_ir.PConstructor ("None", None), next );
+                            ] )
+                    | None when and_option_always_truthy ->
+                        Semantic_ir.Match
+                          ( expression.semantic_expr,
+                            [
+                              ( Semantic_ir.PConstructor ("None", None),
+                                coerce_expression_to_type result_ty
+                                  expression.ty
+                                  (Semantic_ir.Constructor ("None", None)) );
+                              ( Semantic_ir.PConstructor
+                                  ("Some", Some Semantic_ir.PAny),
+                                next );
+                            ] )
+                    | None -> (
                     let value =
                       match (operator, expression.ty) with
                       | `Or, TNil -> next
@@ -3041,14 +3161,14 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       | `And -> Semantic_ir.If (condition, next, value)
                       | `Or -> Semantic_ir.If (condition, value, next)
                     in
-                    if direct_constrained_identifier then result
+                    if inline_operand then result
                     else
                       Semantic_ir.Let
                         ( [
                             ( Semantic_ir.PVar value_name,
                               expression.semantic_expr );
                           ],
-                          result )
+                          result ) )
               in
               Ok (typed_ir result_ty (lower_expressions expressions))
             in
@@ -3204,6 +3324,20 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       | _ -> Error.error "invalid GADT constructor type"
     in
     let rec compile_pattern target_ty pattern =
+      let pattern =
+        let payload_ty =
+          match target_ty with
+          | TNullable inner | TOcaml_app ("option", [ inner ]) -> Some inner
+          | _ -> None
+        in
+        match (payload_ty, pattern) with
+        | Some inner, (FList (FSymbol name :: _) | FSymbol name)
+          when name <> "Some" && name <> "None"
+               && is_constructor_name name
+               && is_ocaml_constructor_pattern_target inner name ->
+            FList [ FSymbol "Some"; pattern ]
+        | _ -> pattern
+      in
       let target_ty =
         match (target_ty, pattern) with
         | TOcaml name, (FList (FSymbol ("tag" | "tuple") :: _) | FVector _) -> (
@@ -3220,6 +3354,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
            | Some None, [] -> Ok (Semantic_ir.PPolyTag (tag, None), [])
            | Some (Some ty), [pattern] -> Result.map (fun (pattern, bindings) ->
                (Semantic_ir.PPolyTag (tag, Some pattern), bindings)) (compile_pattern ty pattern)
+           | None, [pattern] when row.bound = Lower_row ->
+               Result.map (fun (pattern, bindings) ->
+                 (Semantic_ir.PPolyTag (tag, Some pattern), bindings))
+                 (compile_pattern (Type_solver.fresh ()) pattern)
+           | None, [] when row.bound = Lower_row ->
+               Ok (Semantic_ir.PPolyTag (tag, None), [])
            | None, _ -> Error.error ("polymorphic variant type does not contain tag " ^ tag)
            | _ -> Error.error "polymorphic variant pattern payload type mismatch")
       | _, FSymbol "_" -> Ok (Semantic_ir.PAny, [])
@@ -3283,6 +3423,23 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           compile_fields [] [] [] field_patterns
       | _, FList (FSymbol "record" :: _) ->
           Error.error "record pattern expects a record target"
+        | (TUnknown | TMeta _ | TVar _),
+          (FList (FSymbol "tuple" :: payload_patterns) | FVector payload_patterns)
+          ->
+          let rec compile_payloads patterns bindings = function
+            | [] -> Ok (List.rev patterns, bindings)
+            | pattern :: payload_patterns -> (
+                match
+                  compile_pattern (Type_solver.fresh ()) pattern
+                with
+                | Error _ as err -> err
+                | Ok (pattern, pattern_bindings) ->
+                    compile_payloads (pattern :: patterns)
+                      (bindings @ pattern_bindings) payload_patterns)
+          in
+          compile_payloads [] [] payload_patterns
+            |> Result.map (fun (patterns, bindings) ->
+                (Semantic_ir.PTuple patterns, bindings))
         | TTuple payload_tys, FList (FSymbol "tuple" :: payload_patterns)
         | TTuple payload_tys, FVector payload_patterns ->
           let rec compile_payloads patterns bindings = function
@@ -4819,6 +4976,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     ~lookup_closed_sum_constructors
                     ~lookup_protocol_constraint
                     ~lookup_dynamic_key_record_type ~resolve_named_record
+                    ~lookup_key_record_type:
+                      (Expression_support.record_type_for_keyword ~scope env)
                     (List.combine names inferred_param_tys)
                     body_forms
                 with
@@ -5288,6 +5447,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           ~lookup_closed_sum_candidates
           ~lookup_closed_sum_constructors
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
+          ~lookup_key_record_type:
+            (Expression_support.record_type_for_keyword ~scope env)
           ~resolve_named_record params forms
       with
       | Ok inferred ->
@@ -5354,6 +5515,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               ~lookup_closed_sum_candidates
               ~lookup_closed_sum_constructors
               ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
+              ~lookup_key_record_type:
+                (Expression_support.record_type_for_keyword ~scope env)
               ~resolve_named_record params forms
             |> Result.value ~default:params
           in

@@ -34203,7 +34203,7 @@ let test_into_tuple_map_preserves_full_values_when_key_uses_row_subset () =
     let restored_state : Lg.Compiler.state = Marshal.from_string serialized 0 in
     let restored_state =
       Lg.Compiler.restore_ocaml_environment ~target ~packages:[] restored_state
-        [ stdlib.ocaml_source; model_output ]
+        [ (stdlib.ocaml_source, None); (model_output, None) ]
       |> expect_ok
     in
     let _state, rpc_output =
@@ -46323,7 +46323,8 @@ let test_record_fields_merge_structural_and_nominal_requirements () =
         (source ^ "\n(defn numeric-graph? [config] (= (:graph-id config) 42))\n" ^ invalid) with
       | Error error
         when string_contains_substring error.message "cannot infer"
-             || string_contains_substring error.message "field access has type" -> ()
+             || string_contains_substring error.message "field access has type"
+             || string_contains_substring error.message "incompatible arguments" -> ()
       | result -> ignore (expect_ok result);
           failwith "incompatible nested record field was accepted")
       [Lg.Target.Native; Lg.Target.Melange])
@@ -54639,7 +54640,7 @@ let test_portable_compiler_state_rebuilds_ocaml_environment () =
   let restored : Lg.Compiler.state = Marshal.from_string encoded 0 in
   let restored =
     Lg.Compiler.restore_ocaml_environment ~packages:[] restored
-      [ first.ocaml_source ]
+      [ (first.ocaml_source, first.ocaml_signature) ]
     |> expect_ok
   in
   ignore (Lg.Compiler.compile_chunk restored {|(def restored-name (:name user))|}
@@ -55866,8 +55867,102 @@ let test_mli_sidecar_type_error_location () =
   | Error error -> failwith ("mli type error lost its declaration location: " ^ error.message)
   | Ok _ -> failwith "unbound interface type was accepted"
 
+(* Every file in test/error_corpus must fail to compile, and no diagnostic may
+   expose internal names (inference metavariables, generated OCaml identifiers,
+   or solver internals). *)
+let test_error_corpus_diagnostics_are_actionable () =
+  let corpus_dir = "test/error_corpus" in
+  let stdlib = compiled_stdlib Lg.Target.Native in
+  let forbidden =
+    [
+      "param/g";
+      "__lg_";
+      "TMeta";
+      "Runtime_dynamic";
+      "inference-variable";
+      "_row";
+      "Typedtree";
+      "Parsetree";
+    ]
+  in
+  let contains_forbidden text =
+    List.exists
+      (fun needle -> string_contains_substring text needle)
+      forbidden
+  in
+  let rec type_term_texts acc (term : Lg.Error.type_term) =
+    match term with
+    | Type_atom name -> name :: acc
+    | Type_application (name, arguments) ->
+        List.fold_left type_term_texts (name :: acc) arguments
+    | Type_function (parameters, return_ty) ->
+        type_term_texts
+          (List.fold_left type_term_texts acc parameters)
+          return_ty
+    | Type_tuple items -> List.fold_left type_term_texts acc items
+    | Type_record fields ->
+        List.fold_left
+          (fun acc (_, ty) -> type_term_texts acc ty)
+          acc fields
+  in
+  let error_texts (error : Lg.Compiler.compile_error) =
+    let related =
+      List.map
+        (fun (related : Lg.Error.related) -> related.message)
+        error.related
+    in
+    let fixes =
+      List.concat_map
+        (fun (fix : Lg.Error.fix) ->
+          fix.title
+          :: List.map
+               (fun (edit : Lg.Error.text_edit) -> edit.replacement)
+               fix.edits)
+        error.fixes
+    in
+    let mismatch =
+      match error.type_mismatch with
+      | None -> []
+      | Some mismatch ->
+          type_term_texts [] mismatch.expected
+          @ type_term_texts [] mismatch.actual
+          @ type_term_texts [] mismatch.difference.expected
+          @ type_term_texts [] mismatch.difference.actual
+    in
+    error.title :: error.message
+    :: List.concat [ related; error.hints; fixes; mismatch ]
+  in
+  let files =
+    Sys.readdir corpus_dir |> Array.to_list
+    |> List.filter (fun name -> Filename.check_suffix name ".cljc")
+    |> List.sort String.compare
+  in
+  if files = [] then failwith "error_corpus directory is empty";
+  List.iter
+    (fun name ->
+      let path = Filename.concat corpus_dir name in
+      let source = read_file path in
+      match
+        Lg.Compiler.compile_chunk_with_filename ~target:Lg.Target.Native
+          ~filename:path stdlib.state source
+      with
+      | Ok _ ->
+          failwith ("error corpus case unexpectedly compiled: " ^ name)
+      | Error (error : Lg.Compiler.compile_error) ->
+          List.iter
+            (fun text ->
+              if contains_forbidden text then
+                failwith
+                  (Printf.sprintf
+                     "error corpus %s diagnostic leaks internal names: %S" name
+                     text))
+            (error_texts error))
+    files
+
 let tests =
   [
+    ( "error corpus diagnostics are actionable",
+      test_error_corpus_diagnostics_are_actionable );
     ("mli sidecar boundaries", test_mli_sidecar_boundaries);
     ("mli sidecar workspace invalidation", test_mli_sidecar_workspace_invalidation);
     ("mli sidecar opened constructors", test_mli_sidecar_opened_constructors);

@@ -677,6 +677,15 @@ let resolve_namespace_alias ~scope alias env =
   | Some _ as target -> target
   | None -> String_map.find_opt alias env.namespace_aliases
 
+let namespace_alias_targets ~scope env =
+  let prefix = scope ^ "/" in
+  String_map.fold
+    (fun key target targets ->
+      if String.starts_with ~prefix key || not (String.contains key '/') then
+        target :: targets
+      else targets)
+    env.namespace_aliases []
+
 let add_core_exclusions ~scope names env =
   let exclusions =
     List.fold_left
@@ -905,6 +914,119 @@ and anonymous_fields_layout_compatible left right =
       | None -> false)
     left
 
+(* Canonical field shape for dedup: unresolved positions (metas, declared vars,
+   unknowns/nils) are alpha-renamed to positional placeholders so two
+   same-shaped records allocated from different inference contexts compare
+   equal. Sharing is preserved: one meta/var maps to one placeholder. *)
+let canonical_anonymous_fields fields =
+  let names : (string, string) Hashtbl.t = Hashtbl.create 8 in
+  let next = ref 0 in
+  let leaf key =
+    match Hashtbl.find_opt names key with
+    | Some name -> Types.TVar name
+    | None ->
+        incr next;
+        let name = "c" ^ string_of_int !next in
+        Hashtbl.add names key name;
+        Types.TVar name
+  in
+  let rec canon = function
+    | Types.TMeta meta -> leaf ("m" ^ string_of_int meta.id)
+    | Types.TVar name -> leaf ("v" ^ name)
+    | Types.TUnknown | Types.TNil ->
+        incr next;
+        Types.TVar ("cu" ^ string_of_int !next)
+    | ty -> Semantic_type.map_children canon ty
+  in
+  List.map (fun (field : Types.field) -> { field with ty = canon field.ty }) fields
+
+(* Prefer the earliest-allocated match: anonymous record decls are emitted at
+   allocation time, so the oldest record with a given shape is the one whose
+   declaration precedes the most use sites. The list is newest-first, so pick
+   the smallest "t<N>" index among candidates. *)
+let record_type_index (record : Semantic_type.named_record) =
+  let name = record.type_name in
+  let length = String.length name in
+  if length > 1 && name.[0] = 't' then
+    match int_of_string_opt (String.sub name 1 (length - 1)) with
+    | Some index -> index
+    | None -> max_int
+  else max_int
+
+let oldest_candidate candidates =
+  List.fold_left
+    (fun best record ->
+      match best with
+      | Some best when record_type_index record >= record_type_index best ->
+          Some best
+      | _ -> Some record)
+    None candidates
+
+let find_oldest_anonymous_record ~owner fields env =
+  let matches predicate =
+    env.anonymous_records
+    |> List.filter_map (fun (record_owner, (record : Semantic_type.named_record)) ->
+           if record_owner = owner && predicate record.fields then Some record
+           else None)
+    |> oldest_candidate
+  in
+  match matches (anonymous_fields_equal fields) with
+  | Some _ as found -> found
+  | None -> (
+      (* Prefer the record whose site instantiation equals the query fields:
+         e.g. a row `{title; uuid}` queried with `uuid = 'm` belongs to the
+         record allocated for that site, not an older same-shape record. *)
+      let instantiated =
+        env.anonymous_records
+        |> List.filter_map
+             (fun (record_owner, (record : Semantic_type.named_record)) ->
+               if record_owner <> owner then None
+               else
+                 let record_fields =
+                   if
+                     record.type_parameters <> []
+                     && List.length record.type_parameters
+                        = List.length record.type_arguments
+                   then
+                     let substitutions =
+                       List.combine record.type_parameters
+                         record.type_arguments
+                       |> List.map (fun (parameter, argument) ->
+                              (Type_solver.Declared parameter, argument))
+                       |> Type_solver.of_list
+                     in
+                     List.map
+                       (fun (field : Types.field) ->
+                         {
+                           field with
+                           ty = Type_solver.apply substitutions field.ty;
+                         })
+                       record.fields
+                   else record.fields
+                 in
+                 if anonymous_fields_equal fields record_fields then
+                   Some record
+                 else None)
+        |> oldest_candidate
+      in
+      match instantiated with
+      | Some _ as found -> found
+      | None ->
+          let fields = canonical_anonymous_fields fields in
+          matches (fun record_fields ->
+              anonymous_fields_equal fields
+                (canonical_anonymous_fields record_fields)))
+
+let find_oldest_anonymous_record_by_layout ~owner fields env =
+  env.anonymous_records
+  |> List.filter_map (fun (record_owner, (record : Semantic_type.named_record)) ->
+         if
+           record_owner = owner
+           && anonymous_fields_layout_compatible fields record.fields
+         then Some record
+         else None)
+  |> oldest_candidate
+
 let find_anonymous_record ~owner fields env =
   env.anonymous_records
   |> List.find_map (fun (record_owner, (record : Semantic_type.named_record)) ->
@@ -913,6 +1035,21 @@ let find_anonymous_record ~owner fields env =
            && anonymous_fields_equal fields record.fields
          then Some record
          else None)
+  |> fun found ->
+  match found with
+  | Some _ -> found
+  | None ->
+      (* Stored records keep parameter names; a fresh lookup may carry raw
+         metavariables. Compare canonical shapes before giving up. *)
+      let fields = canonical_anonymous_fields fields in
+      env.anonymous_records
+      |> List.find_map (fun (record_owner, (record : Semantic_type.named_record)) ->
+             if
+               record_owner = owner
+               && anonymous_fields_equal fields
+                    (canonical_anonymous_fields record.fields)
+             then Some record
+             else None)
 
 let find_anonymous_record_by_layout ~owner fields env =
   env.anonymous_records
@@ -934,6 +1071,16 @@ let find_unique_anonymous_record_by_layout fields env =
   match candidates with
   | [ record ] -> Some record
   | [] | _ :: _ :: _ -> None
+
+let find_anonymous_record_any_owner fields env =
+  let fields = canonical_anonymous_fields fields in
+  env.anonymous_records
+  |> List.find_map (fun (_, (record : Semantic_type.named_record)) ->
+         if
+           anonymous_fields_equal fields
+             (canonical_anonymous_fields record.fields)
+         then Some record
+         else None)
 
 let add_anonymous_record ~owner record env =
   { env with anonymous_records = (owner, record) :: env.anonymous_records }

@@ -86,9 +86,7 @@ let typed_dynamic_item_pattern env name = function
 let runtime_map_operation key_ty operation =
   "Lg_runtime.Runtime_map." ^ operation
   ^
-  if
-    Types.is_dynamic key_ty || Types.equal key_ty TUnknown
-  then "_dynamic"
+  if Types.is_dynamic key_ty then "_dynamic"
   else if Option.is_some (Types.dynamic_map_types key_ty) then "_map_key"
   else ""
 
@@ -656,12 +654,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
           match Core_sequence_transform.collection_to_list_expr final with
           | Error _ -> Error.error "list* final argument must be a collection"
           | Ok (inner, final_list) ->
-              if
-                not
-                  (List.for_all
-                     (fun argument -> Types.equal inner argument.ty)
-                     prefix)
-              then
+              let static_element_match argument =
+                Types.equal inner argument.ty
+                || Result.is_ok
+                     (Type_solver.unify Type_solver.empty inner argument.ty)
+              in
+              if not (List.for_all static_element_match prefix) then
                 Error.error
                   ("list* prefix and final collection must have one static element type; tail element is "
                    ^ Types.source_name inner ^ ", prefix elements are "
@@ -1298,7 +1296,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         | _ when unresolved value_ty -> (
             match default with
             | Some (default, _) when not (unresolved default.ty) -> default.ty
-            | None | Some _ -> Types.dynamic_constraint TUnknown)
+            | None | Some _ -> Type_solver.fresh ())
         | _ -> value_ty
       in
       let optional_context_value_type fallback =
@@ -2499,10 +2497,17 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         | _ -> []
       in
       match arg_forms with
-      | target :: pairs when List.exists needs_binding (target :: operands pairs) ->
+      | target :: pairs
+        when List.length
+               (List.filter needs_binding (target :: operands pairs))
+             >= 2 ->
           incr assoc_expansion_counter;
           let prefix = "__lg_assoc_" ^ string_of_int !assoc_expansion_counter ^ "_" in
           let target_name = FSymbol (prefix ^ "target") in
+          let target_binding, target_form =
+            if needs_binding target then ([ target_name; target ], target_name)
+            else ([], target)
+          in
           let rec bind_pairs index bindings args = function
             | key :: value :: rest ->
                 if needs_binding value then
@@ -2512,8 +2517,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 else bind_pairs index bindings (value :: key :: args) rest
             | rest ->
                 FList [FSymbol "let";
-                       FVector (target_name :: target :: List.rev bindings);
-                       FList (FSymbol "__lg_assoc" :: target_name :: List.rev args @ rest)]
+                       FVector (target_binding @ List.rev bindings);
+                       FList (FSymbol "__lg_assoc" :: target_form :: List.rev args @ rest)]
           in
           compile_expr scope env (bind_pairs 0 [] [] pairs)
       | _ -> compile_assoc_bound scope env arg_forms
@@ -3005,7 +3010,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         Ok (typed_ir inner expression))
               | (TNullable inner | TOcaml_app ("option", [ inner ]))
                 when Types.is_dynamic inner || Types.equal inner TUnknown
-                     || match inner with TVar _ -> true | _ -> false ->
+                     || match inner with
+                        | TVar _ | TMeta _ -> true
+                        | _ -> false ->
                   Error.error
                     "assoc requires an optional value with a concrete static \
                      map or record type"
@@ -3894,9 +3901,24 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                               dynamicize_unknown ret )
                           else (param_tys, ret)
                           in
+                        let same_record_shape left right =
+                          match
+                            (Types.record_fields left, Types.record_fields right)
+                          with
+                          | Some left_fields, Some right_fields ->
+                              Types.row_compatible
+                                ~expected:(TRecord left_fields)
+                                ~actual:(TRecord right_fields)
+                              && Types.row_compatible
+                                   ~expected:(TRecord right_fields)
+                                   ~actual:(TRecord left_fields)
+                          | _ -> false
+                        in
                         let type_change =
                           (not (Types.is_dynamic field.ty))
-                          && not (Types.equal ret field.ty)
+                          && not
+                               (Types.equal ret field.ty
+                               || same_record_shape ret field.ty)
                         in
                         if type_change && Types.equal ret TNil then
                           Structural_map.update_value_as target fields keyword

@@ -29,6 +29,7 @@ val infer_params :
   lookup_function_ty:(string -> (Types.ty, 'error) result) ->
   lookup_protocol_constraint:(string -> Types.ty option) ->
   lookup_dynamic_key_record_type:(Types.ty -> Types.ty option) ->
+  ?lookup_key_record_type:(string -> string -> Types.ty option) ->
   resolve_named_record:(Types.ty -> Types.ty) ->
   (string * Types.ty) list ->
   Ast.form list ->

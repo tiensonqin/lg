@@ -578,6 +578,12 @@ and refine_nonmatching_type existing inferred =
         }
   | TRecord existing, TNamed_record inferred when not inferred.nominal ->
       TRecord (merge_record_fields existing inferred.fields)
+  | (TNamed_record anonymous as structural), (TNamed_record _ as named)
+    when (not anonymous.nominal) && inferred_row_compatible structural named ->
+      named
+  | (TNamed_record _ as named), (TNamed_record anonymous as structural)
+    when (not anonymous.nominal) && inferred_row_compatible structural named ->
+      named
   | (TRecord _ as structural), (TNamed_record _ as named)
     when inferred_row_compatible structural named ->
       named
@@ -638,7 +644,9 @@ and inferred_row_compatible structural named =
     | _ -> false
   in
   match (structural, named) with
-  | TRecord fields, TNamed_record record ->
+  | ( TRecord fields
+    | TNamed_record { fields; nominal = false; _ } ),
+      TNamed_record record ->
       let fields =
         List.map
           (fun (field : field) ->

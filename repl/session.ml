@@ -749,7 +749,7 @@ let create_from_state ~include_directories ~state_path ~bootstrap_module =
         match
           Lg.Compiler.restore_ocaml_environment ~target:Lg.Target.Native
             ~packages:saved.packages saved.state
-            [ "open " ^ bootstrap_module ]
+            [ ("open " ^ bootstrap_module, None) ]
         with
         | Error _ as error -> error
         | Ok compiler_state -> (

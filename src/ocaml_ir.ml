@@ -587,11 +587,15 @@ and to_parsetree ~context = function
         | PolyTag (_, Some value) | Constructor (_, Some value) -> discardable value
         | Tuple values | List values | Array values ->
             List.for_all discardable values
-        | Apply _ | Uncurried_apply _ | Labelled_apply _ | If _ | Fun _ | Labelled_fun _
+        | Field (inner, _) -> discardable inner
+        | Record (fields, _) ->
+            List.for_all (fun (_, value) -> discardable value) fields
+        | Fun _ | Labelled_fun _ -> true
+        | Apply _ | Uncurried_apply _ | Labelled_apply _ | If _
         | Sequence _ | Let _ | LetRec _ | LetRecIn _ | LetRecGroup _ | PackModule _ | UnpackModule _ | Match _
-        | Match_guarded _ | Try _ | Infix _ | Prefix _ | Field _ | SetField _
+        | Match_guarded _ | Try _ | Infix _ | Prefix _ | SetField _
         | Cons _
-        | Record _ | RecordUpdate _ ->
+        | RecordUpdate _ ->
             false
       in
       let rec elide_discarded_pure_values = function
@@ -610,30 +614,15 @@ and to_parsetree ~context = function
             | (Error _ as err), _ -> err
             | _, (Error _ as err) -> err
             | Ok expression, Ok body ->
-                let discarded_name = "__d" in
-                let discarded_binding =
-                  Ast_helper.Vb.mk ~loc
-                    (Ast_helper.Pat.var ~loc (str discarded_name))
-                    expression
-                in
+                (* keep `ignore`: it suppresses warning 5 on discarded
+                   partial applications *)
                 let ignored =
                   Ast_helper.Exp.apply ~loc
                     (Ast_helper.Exp.ident ~loc
                        (lid (longident_of_string "Stdlib.ignore")))
-                    [
-                      ( Asttypes.Nolabel,
-                        Ast_helper.Exp.ident ~loc
-                          (lid (Longident.Lident discarded_name)) );
-                    ]
+                    [ (Asttypes.Nolabel, expression) ]
                 in
-                let binding =
-                  Ast_helper.Vb.mk ~loc (Ast_helper.Pat.any ~loc ()) ignored
-                in
-                Ok
-                  (Ast_helper.Exp.let_ ~loc Asttypes.Nonrecursive
-                     [ discarded_binding ]
-                     (Ast_helper.Exp.let_ ~loc Asttypes.Nonrecursive [ binding ]
-                        body)))
+                Ok (Ast_helper.Exp.sequence ~loc ignored body))
       in
       build expressions)
   | Let (bindings, body) -> (
