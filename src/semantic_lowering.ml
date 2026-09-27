@@ -30,10 +30,6 @@ let rec pattern = function
       | Semantic_type.TRecord _ -> pattern value
       | _ -> PConstraint (pattern value, Types.ocaml_name ty))
 
-(* Globally unique names for list-element temporaries, so bindings lifted
-   out of sibling arguments can never capture each other. *)
-let list_value_counter = ref 0
-
 (* A `let` nested in an application argument prints as a wrapped
    `(let ... in ...)` argument, costing an extra line. Lifting the bindings
    in front of the call keeps output flat and is a legal refinement of
@@ -67,19 +63,48 @@ let liftable_bindings bindings =
     names
   && List.sort_uniq String.compare names = List.sort String.compare names
 
+(* `let __lg_x = e in __lg_x` carries no meaning beyond evaluation order,
+   which is unspecified in argument/scrutinee position anyway — collapse it
+   to `e`. Restricted to generated names so user bindings keep their
+   source-level references for the language service. *)
+let rec collapse_identity_lets = function
+  | Ocaml_ir.Let ([ (pattern, bound) ], body) -> (
+      let rec bound_name = function
+        | Ocaml_ir.PVar name -> Some name
+        | PLocated (_, _, pat) -> bound_name pat
+        | _ -> None
+      in
+      match (bound_name pattern, collapse_identity_lets body) with
+      | Some name, Ocaml_ir.Ident name'
+        when name = name'
+             && String.length name >= 4
+             && String.sub name 0 4 = "__lg" ->
+          collapse_identity_lets bound
+      | _ ->
+          Ocaml_ir.Let ([ (pattern, bound) ], collapse_identity_lets body))
+  | expr -> expr
+
+let rewrap bindings value =
+  List.fold_right
+    (fun binding body -> Ocaml_ir.Let ([ binding ], body))
+    bindings value
+
 let lift_lets fn args =
+  let fn = collapse_identity_lets fn in
   let fn_bindings, fn = strip_lets fn in
-  let arg_bindings, args =
-    List.fold_right
-      (fun arg (bindings, args) ->
-        let lifted, arg = strip_lets arg in
-        (lifted @ bindings, arg :: args))
-      args ([], [])
+  let per_arg =
+    List.map (fun arg -> strip_lets (collapse_identity_lets arg)) args
   in
-  let bindings = fn_bindings @ arg_bindings in
-  if bindings <> [] && liftable_bindings bindings then
-    Some (bindings, fn, args)
-  else None
+  let lifted = fn_bindings @ List.concat_map fst per_arg in
+  if lifted <> [] && liftable_bindings lifted then
+    (lifted, fn, List.map snd per_arg)
+  else
+    ( [],
+      rewrap fn_bindings fn,
+      List.map (fun (bindings, value) -> rewrap bindings value) per_arg )
+
+let lifted_expression bindings expr =
+  match bindings with [] -> expr | _ -> Ocaml_ir.Let (bindings, expr)
 
 let rec expression = function
   | Semantic_ir.Typed (_, value) -> expression value
@@ -108,11 +133,7 @@ let rec expression = function
         List.mapi (fun index value ->
           if stable value then None, expression value
           else
-            let name =
-              incr list_value_counter;
-              "__lg_list_value'" ^ string_of_int index ^ "_"
-              ^ string_of_int !list_value_counter
-            in
+            let name = "__lg_list_value'" ^ string_of_int index in
             Some (binding_pattern name value, expression value), Ocaml_ir.Ident name) values
         |> List.split in
       (match List.filter_map Fun.id bindings with
@@ -125,26 +146,21 @@ let rec expression = function
       | None -> (
           let fn = expression fn in
           let args = List.map expression args in
-          match lift_lets fn args with
-          | Some (bindings, fn, args) -> Let (bindings, Apply (fn, args))
-          | None -> Apply (fn, args)))
-  | Uncurried_apply (fn, args) -> (
+          let bindings, fn, args = lift_lets fn args in
+          lifted_expression bindings (Apply (fn, args))))
+  | Uncurried_apply (fn, args) ->
       let fn = expression fn in
       let args = List.map expression args in
-      match lift_lets fn args with
-      | Some (bindings, fn, args) ->
-          Let (bindings, Uncurried_apply (fn, args))
-      | None -> Uncurried_apply (fn, args))
-  | Labelled_apply (fn, args) -> (
+      let bindings, fn, args = lift_lets fn args in
+      lifted_expression bindings (Uncurried_apply (fn, args))
+  | Labelled_apply (fn, args) ->
       let fn = expression fn in
       let labels, args = List.split args in
       let args = List.map expression args in
-      match lift_lets fn args with
-      | Some (bindings, fn, args) ->
-          Let (bindings, Labelled_apply (fn, List.combine labels args))
-      | None -> Labelled_apply (fn, List.combine labels args))
+      let bindings, fn, args = lift_lets fn args in
+      lifted_expression bindings (Labelled_apply (fn, List.combine labels args))
   | If (condition, then_expr, else_expr) -> (
-      match expression condition with
+      match collapse_identity_lets (expression condition) with
       | Let (bindings, condition) when liftable_bindings bindings ->
           Let
             ( bindings,
@@ -189,7 +205,7 @@ let rec expression = function
       let cases =
         List.map (fun (pat, body) -> (pattern pat, expression body)) cases
       in
-      match expression target with
+      match collapse_identity_lets (expression target) with
       | Let (bindings, target) when liftable_bindings bindings ->
           Let (bindings, Match (target, cases))
       | target -> Match (target, cases))
@@ -200,7 +216,7 @@ let rec expression = function
             (pattern pat, Option.map expression guard, expression body))
           cases
       in
-      match expression target with
+      match collapse_identity_lets (expression target) with
       | Let (bindings, target) when liftable_bindings bindings ->
           Let (bindings, Match_guarded (target, cases))
       | target -> Match_guarded (target, cases))
