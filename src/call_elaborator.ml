@@ -14983,26 +14983,43 @@ let create ~compile_expr =
               match args with
               | [] -> Semantic_ir.String ""
               | _ ->
-                  (* Rendered arguments go straight into the list literal;
-                     the lowering hoists non-stable elements into ordered
-                     bindings, so no manual temporaries are needed here. *)
-                  let values =
-                    List.map
-                      (fun argument ->
-                        stringify_value scope env ~pr:readable ~print_context
-                          ?print_length ?print_level argument)
-                      args
+                  (* Stable rendered arguments inline into the list literal;
+                     non-stable ones keep an ordered binding so effects
+                     still run left to right. *)
+                  let bindings, values =
+                    args
+                    |> List.mapi (fun index argument ->
+                           let rendered =
+                             stringify_value scope env ~pr:readable
+                               ~print_context ?print_length ?print_level
+                               argument
+                           in
+                           if Semantic_ir.is_stable rendered then
+                             (None, rendered)
+                           else
+                             let name =
+                               "__lg_render_argument_" ^ string_of_int index
+                             in
+                             ( Some (Semantic_ir.PVar name, rendered),
+                               Semantic_ir.Ident name ))
+                    |> List.split
                   in
-                  if readable then
-                    Codegen.render_strings ?print_length
-                      (Semantic_ir.String separator) (Semantic_ir.List values)
-                  else
-                    Semantic_ir.Apply
-                      ( Semantic_ir.Ident "String.concat",
-                        [
-                          Semantic_ir.String separator;
-                          Semantic_ir.List values;
-                        ] )
+                  let rendered =
+                    if readable then
+                      Codegen.render_strings ?print_length
+                        (Semantic_ir.String separator) (Semantic_ir.List values)
+                    else
+                      Semantic_ir.Apply
+                        ( Semantic_ir.Ident "String.concat",
+                          [
+                            Semantic_ir.String separator;
+                            Semantic_ir.List values;
+                          ] )
+                  in
+                  List.fold_right
+                    (fun binding body -> Semantic_ir.Let ([ binding ], body))
+                    (List.filter_map Fun.id bindings)
+                    rendered
             in
             Ok (typed_ir TString expr))
     | ("__lg_render_display_values" | "__lg_render_readable_values") as
@@ -17458,28 +17475,30 @@ let create ~compile_expr =
                 in
                 Result.map
                   (fun sequences ->
-                    let sequence_names =
-                      List.mapi
-                        (fun index _ ->
-                          "__lg_concat_sequence_" ^ string_of_int index)
-                        sequences
+                    let bindings, elements =
+                      sequences
+                      |> List.mapi (fun index sequence ->
+                             if Semantic_ir.is_stable sequence then
+                               (None, sequence)
+                             else
+                               let name =
+                                 "__lg_concat_sequence_"
+                                 ^ string_of_int index
+                               in
+                               ( Some (Semantic_ir.PVar name, sequence),
+                                 Semantic_ir.Ident name ))
+                      |> List.split
                     in
                     let concatenated =
                       Semantic_ir.Apply
                         ( Semantic_ir.Ident "Lg_runtime.Runtime_seq.concat",
-                          [
-                            Semantic_ir.List
-                              (List.map
-                                 (fun name -> Semantic_ir.Ident name)
-                                 sequence_names);
-                          ] )
+                          [ Semantic_ir.List elements ] )
                     in
                     let concatenated =
-                      List.fold_right2
-                        (fun name sequence body ->
-                          Semantic_ir.Let
-                            ([ (Semantic_ir.PVar name, sequence) ], body))
-                        sequence_names sequences concatenated
+                      match List.filter_map Fun.id bindings with
+                      | [] -> concatenated
+                      | bindings ->
+                          Semantic_ir.Let (bindings, concatenated)
                     in
                     typed_ir (TSeq common_type) concatenated)
                   (adapt_sequences 0 [] sequences)
