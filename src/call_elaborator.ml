@@ -14950,17 +14950,27 @@ let create ~compile_expr =
               | _ ->
                   (* Stable rendered arguments inline into the list literal;
                      non-stable ones keep an ordered binding so effects
-                     still run left to right. *)
+                     still run left to right. A sole non-stable argument can
+                     inline: with one effectful element the unspecified
+                     evaluation order is unobservable. *)
+                  let rendereds =
+                    List.map
+                      (fun argument ->
+                        stringify_value scope env ~pr:readable ~print_context
+                          ?print_length ?print_level argument)
+                      args
+                  in
+                  let non_stable =
+                    List.filter
+                      (fun rendered -> not (Semantic_ir.is_stable rendered))
+                      rendereds
+                  in
+                  let inline_sole = List.length non_stable <= 1 in
                   let bindings, values =
-                    args
-                    |> List.mapi (fun index argument ->
-                           let rendered =
-                             stringify_value scope env ~pr:readable
-                               ~print_context ?print_length ?print_level
-                               argument
-                           in
-                           if Semantic_ir.is_stable rendered then
-                             (None, rendered)
+                    rendereds
+                    |> List.mapi (fun index rendered ->
+                           if Semantic_ir.is_stable rendered || inline_sole
+                           then (None, rendered)
                            else
                              let name =
                                "__lg_render_argument_" ^ string_of_int index
