@@ -14896,19 +14896,33 @@ let create ~compile_expr =
         | Ok (format :: values) when Types.equal format.ty TString ->
             let rec encode index bindings encoded = function
               | [] ->
+                  let bindings, format_string =
+                    if Semantic_ir.is_stable format.semantic_expr then
+                      (List.rev bindings, format.semantic_expr)
+                    else
+                      ( (Semantic_ir.PVar "__lg_format_string",
+                         format.semantic_expr)
+                        :: List.rev bindings,
+                        Semantic_ir.Ident "__lg_format_string" )
+                  in
                   let expression = Semantic_ir.Apply
                     (Semantic_ir.Ident "Lg_runtime.Runtime_format.format",
-                     [Semantic_ir.Ident "__lg_format_string"; Semantic_ir.List (List.rev encoded)]) in
-                  let bindings = (Semantic_ir.PVar "__lg_format_string", format.semantic_expr)
-                    :: List.rev bindings in
+                     [format_string; Semantic_ir.List (List.rev encoded)]) in
                   Ok (typed_ir TString (List.fold_right (fun binding body ->
                     Semantic_ir.Let ([binding], body)) bindings expression))
               | value :: rest ->
                   if contains_unresolved_type value.ty then
                     Error.error "format arguments require concrete static types"
                   else
-                    let name = "__lg_format_value_" ^ string_of_int index in
-                    let expression = Semantic_ir.Ident name in
+                    let expression, bindings =
+                      if Semantic_ir.is_stable value.semantic_expr then
+                        (value.semantic_expr, bindings)
+                      else
+                        let name = "__lg_format_value_" ^ string_of_int index in
+                        ( Semantic_ir.Ident name,
+                          (Semantic_ir.PVar name, value.semantic_expr)
+                          :: bindings )
+                    in
                     let rec convert depth ty expression =
                       match ty with
                       | TNullable inner | TOcaml_app ("option", [inner]) ->
@@ -14929,8 +14943,7 @@ let create ~compile_expr =
                             ("Lg_runtime.Runtime_format." ^ constructor, payload)
                     in
                     let argument = convert 0 value.ty expression in
-                    encode (index + 1) ((Semantic_ir.PVar name, value.semantic_expr) :: bindings)
-                      (argument :: encoded) rest
+                    encode (index + 1) bindings (argument :: encoded) rest
             in encode 0 [] [] values
         | Ok _ -> Error.error "format requires a string followed by statically typed arguments")
     | ("__lg_str" | "__lg_print_str" | "__lg_pr_str") as render_name -> (
@@ -14970,34 +14983,26 @@ let create ~compile_expr =
               match args with
               | [] -> Semantic_ir.String ""
               | _ ->
-                  let bindings, values =
-                    args
-                    |> List.mapi (fun index argument ->
-                           let name =
-                             "__lg_render_argument_" ^ string_of_int index
-                           in
-                           ( ( Semantic_ir.PVar name,
-                               stringify_value scope env ~pr:readable
-                                 ~print_context ?print_length ?print_level
-                                 argument ),
-                             Semantic_ir.Ident name ))
-                    |> List.split
+                  (* Rendered arguments go straight into the list literal;
+                     the lowering hoists non-stable elements into ordered
+                     bindings, so no manual temporaries are needed here. *)
+                  let values =
+                    List.map
+                      (fun argument ->
+                        stringify_value scope env ~pr:readable ~print_context
+                          ?print_length ?print_level argument)
+                      args
                   in
-                  let rendered =
-                    if readable then
-                      Codegen.render_strings ?print_length
-                        (Semantic_ir.String separator) (Semantic_ir.List values)
-                    else
-                      Semantic_ir.Apply
-                        ( Semantic_ir.Ident "String.concat",
-                          [
-                            Semantic_ir.String separator;
-                            Semantic_ir.List values;
-                          ] )
-                  in
-                  List.fold_right
-                    (fun binding body -> Semantic_ir.Let ([ binding ], body))
-                    bindings rendered
+                  if readable then
+                    Codegen.render_strings ?print_length
+                      (Semantic_ir.String separator) (Semantic_ir.List values)
+                  else
+                    Semantic_ir.Apply
+                      ( Semantic_ir.Ident "String.concat",
+                        [
+                          Semantic_ir.String separator;
+                          Semantic_ir.List values;
+                        ] )
             in
             Ok (typed_ir TString expr))
     | ("__lg_render_display_values" | "__lg_render_readable_values") as

@@ -195,6 +195,22 @@ let rec never_returns = function
   | UnpackModule (_, _, value, body) -> never_returns value || never_returns body
   | _ -> false
 
+(* Pure by construction: safe to duplicate, reorder, or drop without an
+   evaluation-order binding. Conservatively rejects anything not listed. *)
+let rec is_stable = function
+  | Located (_, _, value) | Typed (_, value) | GadtScope value -> is_stable value
+  | Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit | Ident _ ->
+      true
+  | PolyTag (_, value) | Constructor (_, value) ->
+      Option.fold ~none:true ~some:is_stable value
+  | Tuple values | List values | Array values -> List.for_all is_stable values
+  | Record (fields, _) ->
+      List.for_all (fun (_, value) -> is_stable value) fields
+  | Field (value, _) | Constraint (value, _) | Prefix (_, value) ->
+      is_stable value
+  | Fun _ | Labelled_fun _ -> true
+  | _ -> false
+
 let annotate ty = function
   | Typed (_, expression) -> Typed (ty, expression)
   | expression -> Typed (ty, expression)

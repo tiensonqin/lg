@@ -48,17 +48,7 @@ let rec expression = function
   | Tuple values -> Tuple (List.map expression values)
   | Ident name -> Ident name
   | List values ->
-      let rec stable = function
-        | Semantic_ir.Located (_, _, value) | Typed (_, value) | GadtScope value -> stable value
-        | Int _ | Int64 _ | Float _ | String _ | Char _ | Bool _ | Unit | Ident _ -> true
-        | PolyTag (_, value) | Constructor (_, value) -> Option.fold ~none:true ~some:stable value
-        | Tuple values | List values | Array values -> List.for_all stable values
-        | Record (fields, _) ->
-            List.for_all (fun (_, value) -> stable value) fields
-        | Field (value, _) | Constraint (value, _) | Prefix (_, value) ->
-            stable value
-        | Fun _ | Labelled_fun _ -> true
-        | _ -> false in
+      let stable = Semantic_ir.is_stable in
       let rec binding_pattern name = function
         | Semantic_ir.Located (_, _, value) | GadtScope value -> binding_pattern name value
         | Typed (ty, _) -> pattern (Semantic_ir.PTyped (Semantic_ir.PVar name, ty))
