@@ -129,9 +129,15 @@ let rec expression = function
         | Semantic_ir.Located (_, _, value) | GadtScope value -> binding_pattern name value
         | Typed (ty, _) -> pattern (Semantic_ir.PTyped (Semantic_ir.PVar name, ty))
         | _ -> Ocaml_ir.PVar name in
+      let non_stable =
+        List.filter (fun value -> not (stable value)) values
+      in
+      (* With a single effectful element the unspecified element order is
+         unobservable, so it can be inlined without a temporary. *)
+      let inline_sole = List.length non_stable <= 1 in
       let bindings, values =
         List.mapi (fun index value ->
-          if stable value then None, expression value
+          if stable value || inline_sole then None, expression value
           else
             let name = "__lg_list_value'" ^ string_of_int index in
             Some (binding_pattern name value, expression value), Ocaml_ir.Ident name) values
