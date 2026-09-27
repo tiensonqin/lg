@@ -639,7 +639,14 @@ let add_record_field_constraint name keyword field_ty params =
                     named
               | (TRecord _ | TNamed_record _ | TMap_keys), Some _ ->
                   field.ty
-              | _ -> stored_value_type field_ty
+              | _, _ -> (
+                  (* A constraint on a field of a nominal record describes the
+                     value the field provides, not a stored capability pair;
+                     constraining the field to the capability representation
+                     would mismatch the declared record shape. *)
+                  match field_ty with
+                  | TConstraint _ -> Types.constraint_value_type field_ty
+                  | _ -> stored_value_type field_ty)
             in
             match (constrained_parameters, inferred_ty) with
             | [], inferred_ty

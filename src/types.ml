@@ -1045,6 +1045,25 @@ let rec assignable ~policy ~expected ~actual =
       | Deferred_to_ocaml -> policy = Host_boundary
       | Incompatible -> false)
 
+(* Diagnostics render unbound metavariables and type parameters as fresh
+   'a/'b/... names; the internal ids must never reach user-facing output. *)
+let display_name_table : (string, string) Hashtbl.t = Hashtbl.create 63
+let display_name_count = ref 0
+
+let display_name key =
+  match Hashtbl.find_opt display_name_table key with
+  | Some name -> name
+  | None ->
+      let index = !display_name_count in
+      incr display_name_count;
+      let name =
+        "'"
+        ^ String.make 1 (Char.chr (Char.code 'a' + (index mod 26)))
+        ^ (if index < 26 then "" else string_of_int (index / 26))
+      in
+      Hashtbl.replace display_name_table key name;
+      name
+
 let rec source_name = function
   | TPoly_variant row ->
       (match row.bound with Exact_row -> "variant" | Lower_row -> "variant-open" | Upper_row -> "variant-upper" | Bounded_row tags -> "variant-required(" ^ String.concat "," tags ^ ")")
@@ -1065,8 +1084,8 @@ let rec source_name = function
   | TNil -> "nil"
   | TNullable inner -> "option<" ^ source_name inner ^ ">"
   | TUnknown -> "any"
-  | TMeta _ -> "inference-variable"
-  | TVar name -> "param/" ^ name
+  | TMeta meta -> display_name ("meta:" ^ string_of_int meta.id)
+  | TVar name -> display_name ("var:" ^ name)
   | TOcaml name -> name
   | TConstraint (Seqable_constraint { element; _ }) ->
       "seqable<" ^ source_name element ^ ">"
@@ -1166,8 +1185,9 @@ let rec diagnostic_type_term = function
   | TUnit -> Error.Type_atom "unit"
   | TNil -> Error.Type_atom "nil"
   | TUnknown -> Error.Type_atom "any"
-  | TMeta _ -> Error.Type_atom "inference-variable"
-  | TVar name -> Error.Type_atom ("param/" ^ name)
+  | TMeta meta ->
+      Error.Type_atom (display_name ("meta:" ^ string_of_int meta.id))
+  | TVar name -> Error.Type_atom (display_name ("var:" ^ name))
   | TOcaml name -> Error.Type_atom name
   | TNullable inner ->
       Error.Type_application ("option", [ diagnostic_type_term inner ])

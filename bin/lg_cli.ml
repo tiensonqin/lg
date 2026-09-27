@@ -2319,6 +2319,10 @@ let prepare_prefix_interface target = function
 let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
     ?reader_target ?prefix_interface ?(produced_key = ref "") target state_path
     input_paths =
+  (* Escape hatch for debugging emitted OCaml that fails its own typecheck. *)
+  let check_ocaml =
+    check_ocaml && Sys.getenv_opt "LG_SKIP_OCAML_CHECK" = None
+  in
   Result.bind (prepare_prefix_interface target prefix_interface) (fun prefix ->
   match
     timed_step ("read saved state " ^ state_path) (fun () ->
