@@ -3061,6 +3061,32 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                         | _ -> None
                       else None
                     in
+                    (* `(and option next)`: falsy result is the operand
+                       itself (None); the payload is only consulted when the
+                       option is Some and the payload itself can be falsy. *)
+                    let and_option_always_truthy =
+                      if operator = `And then
+                        match expression.ty with
+                        | TNullable payload_ty
+                        | TOcaml_app ("option", [ payload_ty ]) -> (
+                            match payload_ty with
+                            | TSeq _ -> true
+                            | TOcaml_app (name, [ _ ])
+                              when Types.is_next_seq_type_name name ->
+                                true
+                            | TBool | TNil | TNullable _
+                            | TOcaml_app ("option", [ _ ])
+                            | TOcaml "option" ->
+                                false
+                            | ty ->
+                                (not (Types.is_dynamic ty))
+                                && Option.is_none
+                                     (Types.truthy_constraint_info ty)
+                                && not
+                                     (Edn_value_elaborator.is_value_type ty))
+                        | _ -> false
+                      else false
+                    in
                     match or_option_payload_ty with
                     | Some payload_ty ->
                         Semantic_ir.Match
@@ -3073,6 +3099,18 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                   payload_ty
                                   (Semantic_ir.Ident "logical_payload") );
                               ( Semantic_ir.PConstructor ("None", None), next );
+                            ] )
+                    | None when and_option_always_truthy ->
+                        Semantic_ir.Match
+                          ( expression.semantic_expr,
+                            [
+                              ( Semantic_ir.PConstructor ("None", None),
+                                coerce_expression_to_type result_ty
+                                  expression.ty
+                                  (Semantic_ir.Constructor ("None", None)) );
+                              ( Semantic_ir.PConstructor
+                                  ("Some", Some Semantic_ir.PAny),
+                                next );
                             ] )
                     | None -> (
                     let value =
