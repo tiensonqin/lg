@@ -2497,10 +2497,17 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         | _ -> []
       in
       match arg_forms with
-      | target :: pairs when List.exists needs_binding (target :: operands pairs) ->
+      | target :: pairs
+        when List.length
+               (List.filter needs_binding (target :: operands pairs))
+             >= 2 ->
           incr assoc_expansion_counter;
           let prefix = "__lg_assoc_" ^ string_of_int !assoc_expansion_counter ^ "_" in
           let target_name = FSymbol (prefix ^ "target") in
+          let target_binding, target_form =
+            if needs_binding target then ([ target_name; target ], target_name)
+            else ([], target)
+          in
           let rec bind_pairs index bindings args = function
             | key :: value :: rest ->
                 if needs_binding value then
@@ -2510,8 +2517,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 else bind_pairs index bindings (value :: key :: args) rest
             | rest ->
                 FList [FSymbol "let";
-                       FVector (target_name :: target :: List.rev bindings);
-                       FList (FSymbol "__lg_assoc" :: target_name :: List.rev args @ rest)]
+                       FVector (target_binding @ List.rev bindings);
+                       FList (FSymbol "__lg_assoc" :: target_form :: List.rev args @ rest)]
           in
           compile_expr scope env (bind_pairs 0 [] [] pairs)
       | _ -> compile_assoc_bound scope env arg_forms
