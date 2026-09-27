@@ -13787,7 +13787,6 @@ let create ~compile_expr =
                     match compile_expr scope updater_env updater_body with
                     | Error _ as err -> err
                     | Ok updater_body ->
-                        let reference_name = "__lg_swap_reference" in
                         let updater =
                           typed_ir (TFn ([ value_ty ], updater_body.ty))
                             (Semantic_ir.Fun
@@ -13796,28 +13795,13 @@ let create ~compile_expr =
                         in
                         Ok
                           (typed_ir updater_body.ty
-                             (Semantic_ir.Let
-                                ( [
-                                    ( Semantic_ir.PVar reference_name,
-                                      reference.semantic_expr );
-                                  ],
-                                  Semantic_ir.Apply
-                                    ( Semantic_ir.Ident
-                                        "Lg_runtime.Runtime_slot.set",
-                                      [
-                                        Semantic_ir.Ident reference_name;
-                                        Semantic_ir.Apply
-                                          ( updater.semantic_expr,
-                                            [
-                                              Semantic_ir.Apply
-                                                ( Semantic_ir.Ident
-                                                    "Lg_runtime.Runtime_slot.get",
-                                                  [
-                                                    Semantic_ir.Ident
-                                                      reference_name;
-                                                  ] );
-                                            ] );
-                                      ] ) ))))
+                             (Semantic_ir.Apply
+                                ( Semantic_ir.Ident
+                                    "Lg_runtime.Runtime_slot.swap",
+                                  [
+                                    reference.semantic_expr;
+                                    updater.semantic_expr;
+                                  ] ))))
                 | TRef value_ty ->
                     let compile_generic () =
                       let value_name = "__lg_swap_value" in
@@ -13960,40 +13944,21 @@ let create ~compile_expr =
                       match compile_updater_body () with
                       | Error _ as err -> err
                       | Ok (updater_parameter, updater_body) ->
-                          let reference_name = "__lg_swap_reference" in
                           let updater =
                             typed_ir (TFn ([ value_ty ], updater_body.ty))
                               (Semantic_ir.Fun
                                  ( [ Semantic_ir.PVar updater_parameter ],
                                    updater_body.semantic_expr ))
                           in
-                          let updated_name = "__lg_swap_updated" in
-                          let updated_expr =
-                            Semantic_ir.Apply
-                              ( updater.semantic_expr,
-                                [
-                                  Semantic_ir.Apply
-                                    ( Semantic_ir.Ident
-                                        "Lg_runtime.Runtime_reference.deref",
-                                      [ Semantic_ir.Ident reference_name ] );
-                                ] )
-                          in
                           Ok
                             (typed_ir value_ty
-                               (Semantic_ir.Let
-                                 ( [
-                                      ( Semantic_ir.PVar reference_name,
-                                        reference.semantic_expr );
-                                      ( Semantic_ir.PVar updated_name,
-                                        updated_expr );
-                                    ],
-                                    Semantic_ir.Apply
-                                      ( Semantic_ir.Ident
-                                          "Lg_runtime.Runtime_reference.reset",
-                                        [
-                                          Semantic_ir.Ident reference_name;
-                                          Semantic_ir.Ident updated_name;
-                                        ] ) )))
+                               (Semantic_ir.Apply
+                                  ( Semantic_ir.Ident
+                                      "Lg_runtime.Runtime_reference.swap",
+                                    [
+                                      reference.semantic_expr;
+                                      updater.semantic_expr;
+                                    ] )))
                     in
                     compile_generic ()
                           | reference_ty when Types.is_dynamic reference_ty ->
