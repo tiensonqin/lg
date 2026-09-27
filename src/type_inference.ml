@@ -9609,6 +9609,8 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     (List.map fst params, Type_solver.canonical (TTuple (List.map snd params))) in
   let rec stabilize seen params =
     branch_hint_symbols := [];
+    if Sys.getenv_opt "LG_DEBUG_STABILIZE" = Some "1" then
+      Printf.eprintf "[stabilize] pass %d\n%!" (List.length seen + 1);
     let infer_body =
       match (expected_return_ty, List.rev body_forms) with
       | Some expected, result :: reversed_prefix ->
