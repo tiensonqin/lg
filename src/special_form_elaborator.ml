@@ -3021,9 +3021,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       | Semantic_ir.Ident _, Some _ -> true
                       | _ -> false
                     in
+                    let inline_operand =
+                      direct_constrained_identifier
+                      || Semantic_ir.is_stable expression.semantic_expr
+                    in
                     let raw_value =
-                      if direct_constrained_identifier then
-                        expression.semantic_expr
+                      if inline_operand then expression.semantic_expr
                       else Semantic_ir.Ident value_name
                     in
                     let condition =
@@ -3045,6 +3048,33 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       else (expression.ty, raw_value)
                     in
                     let next = lower_expressions rest in
+                    (* `(or nullable next)` on an option operand is a direct
+                       match — one evaluation, no temporary, no Option.get. *)
+                    let or_option_payload_ty =
+                      if operator = `Or then
+                        match expression.ty with
+                        | TNullable payload_ty
+                        | TOcaml_app ("option", [ payload_ty ]) ->
+                            Some payload_ty
+                        (* Truthy-constrained operands are witness pairs at
+                           the OCaml level — they cannot match Some directly. *)
+                        | _ -> None
+                      else None
+                    in
+                    match or_option_payload_ty with
+                    | Some payload_ty ->
+                        Semantic_ir.Match
+                          ( expression.semantic_expr,
+                            [
+                              ( Semantic_ir.PConstructor
+                                  ("Some",
+                                   Some (Semantic_ir.PVar "logical_payload")),
+                                coerce_expression_to_type result_ty
+                                  payload_ty
+                                  (Semantic_ir.Ident "logical_payload") );
+                              ( Semantic_ir.PConstructor ("None", None), next );
+                            ] )
+                    | None -> (
                     let value =
                       match (operator, expression.ty) with
                       | `Or, TNil -> next
@@ -3093,14 +3123,14 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       | `And -> Semantic_ir.If (condition, next, value)
                       | `Or -> Semantic_ir.If (condition, value, next)
                     in
-                    if direct_constrained_identifier then result
+                    if inline_operand then result
                     else
                       Semantic_ir.Let
                         ( [
                             ( Semantic_ir.PVar value_name,
                               expression.semantic_expr );
                           ],
-                          result )
+                          result ) )
               in
               Ok (typed_ir result_ty (lower_expressions expressions))
             in
