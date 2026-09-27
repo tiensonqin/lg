@@ -14859,10 +14859,22 @@ let create ~compile_expr =
         match compile_args () with
         | Error _ as error -> error
         | Ok (format :: values) when Types.equal format.ty TString ->
+            (* A sole non-stable operand (format or value) inlines: with one
+               effectful element the unspecified order is unobservable. *)
+            let effectful =
+              (if Semantic_ir.is_stable format.semantic_expr then 0 else 1)
+              + List.length
+                  (List.filter
+                     (fun value ->
+                       not (Semantic_ir.is_stable value.semantic_expr))
+                     values)
+            in
+            let inline_sole = effectful <= 1 in
             let rec encode index bindings encoded = function
               | [] ->
                   let bindings, format_string =
-                    if Semantic_ir.is_stable format.semantic_expr then
+                    if Semantic_ir.is_stable format.semantic_expr
+                       || inline_sole then
                       (List.rev bindings, format.semantic_expr)
                     else
                       ( (Semantic_ir.PVar "__lg_format_string",
@@ -14880,7 +14892,8 @@ let create ~compile_expr =
                     Error.error "format arguments require concrete static types"
                   else
                     let expression, bindings =
-                      if Semantic_ir.is_stable value.semantic_expr then
+                      if Semantic_ir.is_stable value.semantic_expr
+                         || inline_sole then
                         (value.semantic_expr, bindings)
                       else
                         let name = "__lg_format_value_" ^ string_of_int index in
