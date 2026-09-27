@@ -1614,29 +1614,34 @@ type anonymous_record_allocation = {
 
 (* Replace unresolved positions with named type variables so the emitted
    declaration actually binds them: each metavariable or declared var keeps one
-   parameter per identity, while unknowns/nils get independent parameters. *)
+   parameter per identity, while unknowns/nils get independent parameters.
+   Also returns the site's own argument for each parameter so a reused
+   canonical record can be instantiated with the site's metavariables. *)
 let parameterize_anonymous_record_fields fields =
   let parameters = ref [] in
+  let arguments = ref [] in
   let next_unresolved = ref 0 in
-  let add name =
-    if not (List.mem name !parameters) then parameters := !parameters @ [ name ]
+  let add name argument =
+    if not (List.mem name !parameters) then (
+      parameters := !parameters @ [ name ];
+      arguments := !arguments @ [ argument ])
   in
   let rec parameterize = function
-    | TUnknown ->
+    | TUnknown as ty ->
         incr next_unresolved;
         let name = "u" ^ string_of_int !next_unresolved in
-        add name;
+        add name ty;
         TVar name
-    | TNil ->
+    | TNil as ty ->
         incr next_unresolved;
         let name = "u" ^ string_of_int !next_unresolved in
-        add name;
+        add name ty;
         TNullable (TVar name)
-    | TMeta meta ->
+    | TMeta meta as ty ->
         let name = "m" ^ string_of_int meta.id in
-        add name;
+        add name ty;
         TVar name
-    | TVar name -> add name; TVar name
+    | TVar name as ty -> add name ty; TVar name
     | ty -> Semantic_type.map_children parameterize ty
   in
   let fields =
@@ -1644,32 +1649,58 @@ let parameterize_anonymous_record_fields fields =
       (fun (field : field) -> { field with ty = parameterize field.ty })
       fields
   in
-  (fields, !parameters)
+  (fields, !parameters, !arguments)
+
+(* Structural records are content-addressed: a site whose field shape matches
+   an already-allocated anonymous record reuses that nominal OCaml type
+   instead of minting another `tN`. The oldest match is preferred so the
+   declaration always precedes every use site. *)
+let find_canonical_anonymous_record fields env =
+  let canonical = Env.canonical_anonymous_fields fields in
+  env.Compiler_environment.anonymous_records
+  |> List.filter_map (fun (_, (record : Semantic_type.named_record)) ->
+         if
+           Env.anonymous_fields_equal canonical
+             (Env.canonical_anonymous_fields record.fields)
+         then Some record
+         else None)
+  |> Env.oldest_candidate
 
 let allocate_anonymous_record ~owner env next_type fields =
   let owner = Source_context.anonymous_record_owner owner in
-  let fields, type_parameters = parameterize_anonymous_record_fields fields in
-  let type_name = "t" ^ string_of_int next_type in
-  let set_module_name = "Set_" ^ type_name in
-  let type_id =
-    Type_id.create
-      ~owner:(if String.equal owner "" then [] else [ owner ])
-      ~name:type_name
+  let fields, type_parameters, site_arguments =
+    parameterize_anonymous_record_fields fields
   in
-  let record =
-    match
-      Types.named_record ~type_id ~extensible:true ~type_name ~set_module_name
-        ~type_parameters fields
-    with
-    | TNamed_record record -> record
-    | _ -> assert false
-  in
-  {
-    record;
-    env = Env.add_anonymous_record ~owner record env;
-    next_type = next_type + 1;
-    fresh = true;
-  }
+  match find_canonical_anonymous_record fields env with
+  | Some record ->
+      {
+        record = { record with type_arguments = site_arguments };
+        env;
+        next_type;
+        fresh = false;
+      }
+  | None ->
+      let type_name = "t" ^ string_of_int next_type in
+      let set_module_name = "Set_" ^ type_name in
+      let type_id =
+        Type_id.create
+          ~owner:(if String.equal owner "" then [] else [ owner ])
+          ~name:type_name
+      in
+      let record =
+        match
+          Types.named_record ~type_id ~extensible:true ~type_name
+            ~set_module_name ~type_parameters fields
+        with
+        | TNamed_record record -> record
+        | _ -> assert false
+      in
+      {
+        record;
+        env = Env.add_anonymous_record ~owner record env;
+        next_type = next_type + 1;
+        fresh = true;
+      }
 
 type nested_record_allocation = {
   nested_fields : field list;
