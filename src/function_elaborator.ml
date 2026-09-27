@@ -1594,7 +1594,7 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
             let refine_from_local name ty =
               let inferred_ty = lookup_inferred name in
               let refine ty inferred_ty =
-                Type_solver.unify Type_solver.empty ty inferred_ty
+                Type_solver.unify ~commit:true Type_solver.empty ty inferred_ty
                 |> Result.map (fun substitutions ->
                        Type_solver.apply substitutions ty)
                 |> Result.value ~default:ty

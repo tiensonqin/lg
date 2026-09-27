@@ -13,20 +13,49 @@ in `Type_solver`:
   solved inside one `unify` is visible to every later reader of the same
   `TMeta` node — the propagation property a threaded substitution map cannot
   give across isolated call sites.
-- Only bindings produced by *solving* unifications are committed: a `unify`
-  entry whose incoming substitution is `empty` is treated as a probe (pure
-  comparison) and publishes nothing. Nested solves inside a threaded
-  unification do commit.
-- Only *closed* bindings are committed (`is_open ty` is false).
-  Meta-to-meta links stay local to the returned substitution; committing
-  them pinned entire parameter sets prematurely (stdlib `interleave`
-  oscillated between stabilization states).
+- Only bindings produced by *solving* unifications are committed. The
+  default keeps the historical convention — a `unify` entered with a
+  non-empty substitution is solving, one entered with `empty` is probing —
+  and `?commit` overrides it explicitly for solves that start from `empty`
+  (whose bindings must stay visible to later readers of the same metas).
+- Commit granularity: structural solutions (a meta bound to a
+  non-variable type) commit directly; bare meta-to-meta aliases commit only
+  when their target occurs inside a committed structural solution — the
+  alias is exactly the link a pattern refinement established (a scrutinee
+  meta bound to an open variant row keeps its payload meta reachable).
+  Unanchored aliases stay local to the returned substitution; committing
+  them unconditionally pinned entire parameter sets prematurely (stdlib
+  `interleave` oscillated between stabilization states).
 - `generalize` never quantifies a globally-solved meta: the meta stays in
   the scheme body and `apply` expands it, keeping it monomorphic.
 - `clear_meta_solutions` runs when a saved/prefix compiler state is loaded
   (`lg_cli`, `lsp_server`), because restored types can carry meta ids that
   overlap the live counter.
-- `LG_DEBUG_COMMIT=1` prints each committed binding for debugging.
+
+Further kernel-adjacent changes that landed:
+
+- `seqable<E>` parameters whose body only consumes the adapter
+  (`p__seq p`) demote from the `(adapter, storage)` witness-pair ABI to a
+  plain `Seq.t` argument; self/recur calls unwrap the tuple. Declared
+  signatures keep the pair so public ABIs are unchanged.
+- Anonymous structural rows are content-addressed: identical field sets
+  share one emitted record type instead of a fresh `*_rowN` per site.
+- `unify_argument` carries `TSeq` templates into argument unification so a
+  callee's element type reaches the return meta, and
+  `add_record_field_constraint` maps a `TSeq` field requirement onto a
+  `seqable` constraint (a seq requirement means "usable as a sequence").
+- Emission: sole-effectful operands inline without temporaries
+  (`semantic_lowering` owns the sequencing decision centrally), stable
+  single-use `__lg_` temporaries fold into their use site, and `let`
+  groups on generated names hoist out of call operands when safe.
+- Measured stabilization behaviour on the stripped chat corpus (52 files,
+  `LG_COMPILE_TIMINGS=1`): 48 files converge in pass 1; the 4 multi-pass
+  files are all mutual-recursion declaration groups
+  (`__declared_fn` placeholder → inferred signature → refinement), an
+  inherent fixpoint rather than order sensitivity. The per-definition
+  `infer_params` loop remains load-bearing — sequential constraint
+  collection — and is the target of the two-phase collect-then-solve
+  rewrite below.
 
 The substitution-threading API, `refine_type` merges, constraint
 encodings, and the `infer_params` stabilization loop are unchanged — the

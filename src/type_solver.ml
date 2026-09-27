@@ -578,14 +578,21 @@ let resolve_head substitutions ty =
   in
   resolve [] ty
 
-let unify ?(resolve_alias = fun _ -> None) substitutions left right =
+let unify ?(resolve_alias = fun _ -> None) ?commit substitutions left right =
  let active_alias_pairs = ref [] in
  let pending_commits = ref [] in
- (* Probing calls start from `empty` and compare two types in isolation;
-    solving calls thread an accumulating substitution. Only the latter may
-    publish ground bindings — a discarded probe result must not pin metas
-    globally. *)
- let committing = Variable_map.cardinal substitutions > 0 in
+ (* Solving calls publish their metavariable bindings to `meta_solutions`;
+    probing calls compare two types in isolation and must not pin metas
+    globally. The default keeps the historical convention: a call that
+    threads a non-empty substitution is solving, a call starting from
+    `empty` is probing. Pass `~commit:true` for a solve that starts from
+    `empty` (its bindings must stay visible to later readers of the same
+    metas) or `~commit:false` for a probe that threads substitutions. *)
+ let committing =
+   match commit with
+   | Some flag -> flag
+   | None -> Variable_map.cardinal substitutions > 0
+ in
  let bind_meta_tracked substitutions meta ty =
    match bind_meta substitutions meta ty with
    | Ok substitutions ->

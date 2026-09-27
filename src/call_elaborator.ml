@@ -23094,7 +23094,7 @@ let create ~compile_expr =
             | Some payload, None -> payload
             | _ -> ty
           in
-          Type_solver.unify Type_solver.empty template expected
+          Type_solver.unify ~commit:true Type_solver.empty template expected
           |> Result.map (fun substitutions -> Type_solver.apply substitutions ty)
           |> Result.value ~default:ty
       | _ -> ty
