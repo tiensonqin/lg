@@ -7565,14 +7565,38 @@ let adapt_nullable_callback env expected arg =
           in
           Result.map
             (fun result_expression ->
+              let body =
+                let rec strip = function
+                  | Semantic_ir.Typed (_, value)
+                  | Semantic_ir.Constraint (value, _)
+                  | Semantic_ir.Located (_, _, value)
+                  | Semantic_ir.GadtScope value ->
+                      strip value
+                  | value -> value
+                in
+                let applied =
+                  Semantic_ir.Apply (arg.semantic_expr, arguments)
+                in
+                match strip result_expression with
+                | Semantic_ir.Ident name when String.equal name result_name ->
+                    applied
+                | Semantic_ir.Constructor ("Some", Some inner)
+                  when (match strip inner with
+                       | Semantic_ir.Ident name ->
+                           String.equal name result_name
+                       | _ -> false) ->
+                    Semantic_ir.Constructor ("Some", Some applied)
+                | _ ->
+                    Semantic_ir.Let
+                      ( [
+                          ( Semantic_ir.PVar result_name,
+                            Semantic_ir.Apply (arg.semantic_expr, arguments) );
+                        ],
+                        result_expression )
+              in
               Semantic_ir.Fun
                 ( List.map (fun name -> Semantic_ir.PVar name) parameter_names,
-                  Semantic_ir.Let
-                    ( [
-                        ( Semantic_ir.PVar result_name,
-                          Semantic_ir.Apply (arg.semantic_expr, arguments) );
-                      ],
-                      result_expression ) ))
+                  body ))
             adapted_result)
   | _ -> Ok arg.semantic_expr
 
