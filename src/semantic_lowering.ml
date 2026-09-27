@@ -55,6 +55,8 @@ let rec expression = function
         | Tuple values | List values | Array values -> List.for_all stable values
         | Record (fields, _) ->
             List.for_all (fun (_, value) -> stable value) fields
+        | Field (value, _) | Constraint (value, _) | Prefix (_, value) ->
+            stable value
         | Fun _ | Labelled_fun _ -> true
         | _ -> false in
       let rec binding_pattern name = function

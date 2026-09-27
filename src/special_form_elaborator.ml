@@ -2047,11 +2047,49 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     with
                     | Error _ as error -> error
                     | Ok (result_ty, some_code, none_code) ->
+                        (* `Some p -> let x = p in body` collapses to
+                           `Some x -> body` when the branch opens with a
+                           plain-variable binding of the whole payload. *)
+                        let direct_binding, some_code =
+                          if has_capability payload_ty then (None, some_code)
+                          else
+                            let rec strip = function
+                              | Semantic_ir.Typed (_, value)
+                              | Located (_, _, value) | GadtScope value ->
+                                  strip value
+                              | value -> value
+                            in
+                            match strip some_code with
+                            | Semantic_ir.Let ([ (bound_pattern, bound) ], body)
+                              -> (
+                                let name =
+                                  match bound_pattern with
+                                  | Semantic_ir.PVar name -> Some name
+                                  | Semantic_ir.PLocated
+                                      (_, _, Semantic_ir.PVar name) ->
+                                      Some name
+                                  | _ -> None
+                                in
+                                match name with
+                                | None -> (None, some_code)
+                                | Some name -> (
+                                    match strip bound with
+                                    | Semantic_ir.Ident name'
+                                      when String.equal name' payload_name ->
+                                        (Some (bound_pattern, name), body)
+                                    | _ -> (None, some_code)))
+                            | _ -> (None, some_code)
+                        in
+                        let payload_value_name, payload_pattern =
+                          match direct_binding with
+                          | Some (pattern, name) -> (name, pattern)
+                          | None -> (payload_name, Semantic_ir.PVar payload_name)
+                        in
                         let some_code =
                           if require_truthy then
                             Semantic_ir.If
                               ( truthiness_expression ~env payload_ty
-                                  (Semantic_ir.Ident payload_name),
+                                  (Semantic_ir.Ident payload_value_name),
                                 some_code,
                                 none_code )
                           else some_code
@@ -2067,8 +2105,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                             (if has_capability payload_ty then
                                                capability_pattern payload_name
                                                  payload_ty
-                                             else
-                                               Semantic_ir.PVar payload_name) ),
+                                             else payload_pattern) ),
                                       some_code );
                                     ( Semantic_ir.PConstructor ("None", None),
                                       none_code );

@@ -622,12 +622,7 @@ and to_parsetree ~context = function
                        (lid (longident_of_string "Stdlib.ignore")))
                     [ (Asttypes.Nolabel, expression) ]
                 in
-                let binding =
-                  Ast_helper.Vb.mk ~loc (Ast_helper.Pat.any ~loc ()) ignored
-                in
-                Ok
-                  (Ast_helper.Exp.let_ ~loc Asttypes.Nonrecursive [ binding ]
-                     body))
+                Ok (Ast_helper.Exp.sequence ~loc ignored body))
       in
       build expressions)
   | Let (bindings, body) -> (
