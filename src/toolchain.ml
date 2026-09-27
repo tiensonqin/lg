@@ -1262,12 +1262,24 @@ let restore_ocaml_environment ?(target = Target.default) ~packages state
         | [] -> Ok { state with ocaml_env = compiler_env }
         | source :: rest -> (
             try
+              let t0 = Unix.gettimeofday () in
               let lexbuf = Lexing.from_string source in
               Location.init lexbuf (Printf.sprintf "<cached:%d>" index);
               let structure = Parse.implementation lexbuf in
+              let t1 = Unix.gettimeofday () in
+              (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
+              | Some ("1" | "details" | "debug") ->
+                  Printf.eprintf "lg:   parse prefix %d: %.3fs\n%!" index
+                    (t1 -. t0)
+              | _ -> ());
               match Ocaml_typechecker.analyze ?compiler_env structure with
               | Error _ as error -> error
               | Ok analysis ->
+                  (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
+                  | Some ("1" | "details" | "debug") ->
+                      Printf.eprintf "lg:   typecheck prefix %d: %.3fs\n%!"
+                        index (Unix.gettimeofday () -. t1)
+                  | _ -> ());
                   restore (Some analysis.compiler_env) (index + 1) rest
             with exn ->
               Error.error

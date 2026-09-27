@@ -251,6 +251,22 @@ let optional_type = function
   | TNullable _ | TOcaml_app ("option", [ _ ]) -> true
   | _ -> false
 
+let same_field_keywords expected_fields actual_fields =
+  let non_extension fields =
+    List.filter
+      (fun (field : field) -> not (Types.is_record_extension_field field))
+      fields
+  in
+  let expected = non_extension expected_fields
+  and actual = non_extension actual_fields in
+  List.length expected = List.length actual
+  && List.for_all
+       (fun (field : field) ->
+         List.exists
+           (fun (actual : field) -> actual.keyword = field.keyword)
+           actual)
+       expected
+
 let open_leaf = function TUnknown | TMeta _ | TVar _ -> true | _ -> false
 
 let plan_row_projection ~plan_field type_name expected_fields actual =
@@ -520,11 +536,48 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
   | TRecord _ when open_leaf (Types.constraint_value_type actual) -> Ok Identity
   | TRecord expected_fields -> (
       let project actual =
+        let type_name =
+          match Types.constraint_value_type actual with
+          | TNamed_record ({ nominal = false; _ } as actual_record)
+            when same_field_keywords expected_fields actual_record.fields
+                 && Types.row_compatible ~expected:(TRecord expected_fields)
+                      ~actual:
+                        (TRecord
+                           (if
+                              List.length actual_record.type_parameters
+                              = List.length actual_record.type_arguments
+                            then
+                              let substitutions =
+                                List.combine actual_record.type_parameters
+                                  actual_record.type_arguments
+                                |> List.map (fun (parameter, argument) ->
+                                       (Type_solver.Declared parameter,
+                                        argument))
+                                |> Type_solver.of_list
+                              in
+                              List.map
+                                (fun (field : field) ->
+                                  {
+                                    field with
+                                    ty =
+                                      Type_solver.apply substitutions field.ty;
+                                  })
+                                actual_record.fields
+                            else actual_record.fields)) ->
+              (* Reprojecting an already-named applied row record must keep
+                 that record's type name: a globally oldest same-shape record
+                 is a different nominal type in the emitted OCaml. The
+                 instantiated fields must still be row-compatible — a record
+                 whose fields cannot hold the expected (possibly
+                 capability-packed) values must not claim this literal. *)
+              Some (Structural_map.record_type_application actual_record)
+          | _ -> row_type_name
+        in
         plan_row_projection
           ~plan_field:(fun expected actual ->
             plan ~row_type_name_for ~protocol_satisfies ~sequence_satisfies
               expected actual)
-          row_type_name expected_fields actual
+          type_name expected_fields actual
       in
       match nullable_payload actual with
       | Some actual_payload ->

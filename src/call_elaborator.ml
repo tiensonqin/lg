@@ -7331,12 +7331,12 @@ let plan_argument_adaptation env ?row_type_name ?(protocol_storage = false)
         | Some record ->
             Some (Structural_map.record_type_application record)
         | None ->
-            let record =
-              match Env.find_oldest_anonymous_record_by_layout ~owner fields env with
-              | Some _ as record -> record
-              | None -> Env.find_unique_anonymous_record_by_layout fields env
-            in
-            Option.map Structural_map.record_type_application record)
+            (* No cross-owner layout fallback: a layout-only match may name a
+               nominal record the consumer does not expect. Structural
+               projection instead emits the literal unannotated so OCaml
+               resolves labels against the expected type. *)
+            Option.map Structural_map.record_type_application
+              (Env.find_oldest_anonymous_record_by_layout ~owner fields env))
       ~protocol_satisfies:(fun protocol_id source_ty ->
         has_protocol_constraint protocol_id source_ty
         || Protocol.type_satisfies env protocol_id source_ty
@@ -13872,7 +13872,7 @@ let create ~compile_expr =
                                     ~lookup_dynamic_key_record_type
                                     ~lookup_key_record_type:
                                       (Expression_support.record_type_for_keyword
-                                         env)
+                                         ~scope env)
                                     ~resolve_named_record
                                     ((parameter, value_ty) :: captured_params)
                                     body_forms
@@ -21977,7 +21977,17 @@ let create ~compile_expr =
                                         (Types.record_fields arg.ty) ->
                               plan_and_emit_argument env ~expected:expected_map arg
                             | _, TPoly_variant _
-                              when (match arg.ty with TPoly_variant _ -> true | _ -> false) ->
+                              when (match arg.ty with
+                                    | TPoly_variant _ -> true
+                                    | TOcaml name -> (
+                                        match
+                                          Ocaml_signature.of_compiler_type
+                                            (Lg_compiler_support.Ocaml_value
+                                             .Constructor (name, []))
+                                        with
+                                        | TPoly_variant _ -> true
+                                        | _ -> false)
+                                    | _ -> false) ->
                                 plan_and_emit_argument env ~expected:expected_ty arg
                             | _, TTuple _
                               when (match arg.ty with TTuple _ -> true | _ -> false)

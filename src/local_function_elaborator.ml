@@ -95,7 +95,7 @@ let constraints scope env members types expressions =
                       ~lookup_dynamic_key_record_type:
                         (Expression_support.dynamic_key_record_type env)
                       ~lookup_key_record_type:
-                        (Expression_support.record_type_for_keyword env)
+                        (Expression_support.record_type_for_keyword ~scope env)
                       ~resolve_named_record:
                         (Function_elaborator.infer_named_record scope env)
                       params f.local_body_forms

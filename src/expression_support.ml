@@ -2026,9 +2026,27 @@ let named_records_in_scope env =
    records share the field, a candidate named after the binding being read
    (e.g. `session` for `:host`) wins; otherwise the read stays a row
    constraint rather than committing to an arbitrary record. *)
-let record_type_for_keyword env keyword preferred_name =
+(* A unique keyword -> record match is only safe when the record is actually
+   visible to the module being inferred: corpus and namespace compilation share
+   one environment, so records from unrequired sibling modules must not
+   speculate. Host package records stay visible because they resolve through
+   implicit module paths rather than namespace aliases. *)
+let record_visible_in_scope ~scope env (record : named_record) =
+  match Type_id.owner record.type_id with
+  | [] -> true
+  | [ owner ] ->
+      String.equal owner scope
+      || String.starts_with ~prefix:"ocaml." owner
+      || Option.is_some (Env.resolve_namespace_alias ~scope owner env)
+      || List.exists
+           (fun target -> String.equal target owner)
+           (Env.namespace_alias_targets ~scope env)
+  | _ -> true
+
+let record_type_for_keyword ~scope env keyword preferred_name =
   let candidates =
     named_records_in_scope env
+    |> List.filter (record_visible_in_scope ~scope env)
     |> List.filter_map (fun (record : named_record) ->
            match Types.find_field keyword record.fields with
            | Some field
@@ -2468,25 +2486,19 @@ let canonical_row_named_record env fields =
       fields
   in
   let candidates =
-    Env.filter_record_bindings
-      (fun key (binding : binding) ->
-        if String.starts_with ~prefix:"__record/" key then
-          match binding.ty with
-          | TNamed_record record ->
-              let actual_fields =
-                List.map
-                  (fun (field : field) ->
-                    { field with ty = expand_host_aliases field.ty })
-                  record.fields
-              in
-              if
-                Types.row_compatible ~expected:(TRecord expected_fields)
-                  ~actual:(TRecord actual_fields)
-              then Some record
-              else None
-          | _ -> None
-        else None)
-      env
+    named_records_in_scope env
+    |> List.filter_map (fun (record : named_record) ->
+           let actual_fields =
+             List.map
+               (fun (field : field) ->
+                 { field with ty = expand_host_aliases field.ty })
+               record.fields
+           in
+           if
+             Types.row_compatible ~expected:(TRecord expected_fields)
+               ~actual:(TRecord actual_fields)
+           then Some record
+           else None)
   in
   match candidates with
   | [ record ] -> Some record

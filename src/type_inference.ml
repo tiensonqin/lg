@@ -2134,7 +2134,53 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
     ?(lookup_key_record_type = fun _ _ -> None)
     ~resolve_named_record params body_forms =
-  let record_constructor_type name =
+  (* Names bound before inference runs — the function's own parameters, as
+     opposed to locals introduced by let/match during the walk. *)
+  let function_parameter_names = List.map fst params in
+  (* `(:k sym)` on a bare function parameter speculates the record literally
+     named after the parameter (e.g. `block` -> `block`), mirroring what
+     `(get sym :k)` already does. The guess is only safe when the record's
+     declared field is closed: an open field (a defrecord type variable)
+     keeps more freedom through anonymous-row accumulation, and let- or
+     match-bound locals may hold values wider than the record. *)
+  let rec scalar_field_type ty =
+    match ty with
+    | TString | TInt | TFloat | TBool | TKeyword | TSymbol | TUnit | TNil ->
+        true
+    | TNullable inner | TOcaml_app ("option", [ inner ]) ->
+        scalar_field_type inner
+    | _ -> false
+  in
+  let speculate_symbol_record params name keyword =
+    match string_assoc_opt name params with
+    | Some ty when not (Type_solver.is_open ty || Types.is_dynamic ty) ->
+        None
+    | Some _ | None ->
+        if not (List.mem name function_parameter_names) then None
+        else (
+          match lookup_key_record_type keyword name with
+          | Some (TNamed_record record) -> (
+              let sanitized = Names.sanitize_name name in
+              match Types.find_field keyword record.fields with
+              | Some field
+                (* A scalar field carries no structural evidence — row
+                   accumulation keeps equal-or-compare constraints alive
+                   (e.g. `(:graph-id config) = 42` must still reject a
+                   `config` record whose field is a string). *)
+                when Type_solver.variables field.ty = []
+                     && not (scalar_field_type field.ty)
+                     && (String.equal record.type_name sanitized
+                        || String.equal
+                             (Names.sanitize_name
+                                (Type_id.name record.type_id))
+                             sanitized) -> (
+                  match constrain_symbol (TNamed_record record) params name with
+                  | Ok params -> Some params
+                  | Error _ -> None)
+              | Some _ | None -> None)
+          | Some _ | None -> None)
+  in
+    let record_constructor_type name =
     let clojure_record_constructor_name name =
       String.length name > 2 && name.[0] = '-' && name.[1] = '>'
     in
@@ -3374,18 +3420,34 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         infer_expected_all expected_ty params args
     | FList
         [ FKeyword nested_keyword; FList [ FKeyword keyword; FSymbol name ] ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         add_record_field_constraint name keyword
           (TRecord [ make_field nested_keyword expected_ty ])
           params
     | FList [ FKeyword keyword; FSymbol name ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         add_record_field_constraint name keyword expected_ty params
     | FList [ FKeyword keyword; FSymbol name; default ]
       when Option.is_some (Types.printable_constraint_info expected_ty) ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         let field_ty = inferred_form_type params default in
         Result.bind
           (add_record_field_constraint name keyword (TNullable field_ty) params)
           (fun params -> infer_expected field_ty params default)
     | FList [ FKeyword keyword; FSymbol name; default ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         Result.bind
           (add_record_field_constraint name keyword (TNullable expected_ty) params)
           (fun params -> infer_expected expected_ty params default)
@@ -4003,6 +4065,11 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                                 constrain_symbol truthy_operand_ty params name
                             | _ -> infer_truthy params condition)
                         | FList [ FKeyword keyword; FSymbol name ] ->
+                            let params =
+                              Option.value ~default:params
+                                (speculate_symbol_record params name
+                                   keyword)
+                            in
                             add_record_field_constraint name keyword
                               truthy_operand_ty params
                         | FList
@@ -4047,6 +4114,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         in
         constrain_symbol (TFn (parameter_types, return_ty)) params name
     | FList [ FKeyword keyword; FSymbol name ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         let field_ty =
           record_field_type params name keyword
           |> Option.value
@@ -4058,12 +4129,20 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         add_record_field_constraint name keyword
           field_ty params
     | FList [ FKeyword keyword; FSymbol name; default ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         let field_ty = inferred_form_type params default in
         Result.bind
           (add_record_field_constraint name keyword (TNullable field_ty) params)
           (fun params -> infer_expected field_ty params default)
     | FList
         [ FKeyword nested_keyword; FList [ FKeyword keyword; FSymbol name ] ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         add_record_field_constraint name keyword
           (TRecord
              [
@@ -4642,6 +4721,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
             infer_expected (Types.seqable_constraint element_ty) params
               (FList [ FSymbol "IDeref/-deref"; FSymbol reference ]))
     | FList [ FKeyword keyword; FSymbol name ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         add_record_field_constraint name keyword
           (Types.seqable_constraint element_ty)
           params
@@ -7940,10 +8023,14 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         in
         let infer_collection =
           match collection with
-          | FList [ FKeyword keyword; FSymbol name ] ->
+          | FList [ FKeyword keyword; FSymbol name ] -> (
+              let params =
+                Option.value ~default:params
+                  (speculate_symbol_record params name keyword)
+              in
               add_record_field_constraint name keyword
                 (Types.seqable_constraint element_ty)
-                params
+                params)
           | form -> infer_sequence_form element_ty params form
         in
         Result.bind infer_collection
@@ -8476,6 +8563,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                   target))
     | FList
         [ FKeyword nested_keyword; FList [ FKeyword keyword; FSymbol name ] ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         add_record_field_constraint name keyword
           (TRecord
              [
@@ -8498,6 +8589,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
              ])
           params collection
     | FList [ FKeyword keyword; FSymbol name ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         let field_ty =
           match string_assoc_opt name params with
           | Some ty
@@ -8513,6 +8608,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     | (FList [ FKeyword _; _ ] as form) ->
         infer_expected (Type_solver.fresh ()) params form
     | FList [ FKeyword keyword; FSymbol name; default ] ->
+        let params =
+          Option.value ~default:params
+            (speculate_symbol_record params name keyword)
+        in
         let field_ty = inferred_form_type params default in
         Result.bind
           (add_record_field_constraint name keyword field_ty params)

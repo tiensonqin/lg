@@ -349,6 +349,25 @@ let into target source =
                 ("into source entry types " ^ Types.source_name source_inner
                ^ " must match target map types "
                ^ Types.source_name target.ty)
+          | (TUnknown | TMeta _ | TVar _) ->
+              Ok
+                (typed_ir (Types.dynamic_map target_key target_value)
+                   (apply "List.fold_left"
+                      [
+                        Semantic_ir.Fun
+                          ( [
+                              Semantic_ir.PVar "map";
+                              Semantic_ir.PVar "entry";
+                            ],
+                            apply "Lg_runtime.Runtime_map.assoc"
+                              [
+                                Semantic_ir.Ident "map";
+                                apply "fst" [ Semantic_ir.Ident "entry" ];
+                                apply "snd" [ Semantic_ir.Ident "entry" ];
+                              ] );
+                        target.semantic_expr;
+                        source_list_expr;
+                      ]))
           | _ ->
               Error.error
                 "into map target expects key-value tuple entries")

@@ -3249,6 +3249,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
            | Some None, [] -> Ok (Semantic_ir.PPolyTag (tag, None), [])
            | Some (Some ty), [pattern] -> Result.map (fun (pattern, bindings) ->
                (Semantic_ir.PPolyTag (tag, Some pattern), bindings)) (compile_pattern ty pattern)
+           | None, [pattern] when row.bound = Lower_row ->
+               Result.map (fun (pattern, bindings) ->
+                 (Semantic_ir.PPolyTag (tag, Some pattern), bindings))
+                 (compile_pattern (Type_solver.fresh ()) pattern)
+           | None, [] when row.bound = Lower_row ->
+               Ok (Semantic_ir.PPolyTag (tag, None), [])
            | None, _ -> Error.error ("polymorphic variant type does not contain tag " ^ tag)
            | _ -> Error.error "polymorphic variant pattern payload type mismatch")
       | _, FSymbol "_" -> Ok (Semantic_ir.PAny, [])
@@ -3312,6 +3318,23 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           compile_fields [] [] [] field_patterns
       | _, FList (FSymbol "record" :: _) ->
           Error.error "record pattern expects a record target"
+        | (TUnknown | TMeta _ | TVar _),
+          (FList (FSymbol "tuple" :: payload_patterns) | FVector payload_patterns)
+          ->
+          let rec compile_payloads patterns bindings = function
+            | [] -> Ok (List.rev patterns, bindings)
+            | pattern :: payload_patterns -> (
+                match
+                  compile_pattern (Type_solver.fresh ()) pattern
+                with
+                | Error _ as err -> err
+                | Ok (pattern, pattern_bindings) ->
+                    compile_payloads (pattern :: patterns)
+                      (bindings @ pattern_bindings) payload_patterns)
+          in
+          compile_payloads [] [] payload_patterns
+            |> Result.map (fun (patterns, bindings) ->
+                (Semantic_ir.PTuple patterns, bindings))
         | TTuple payload_tys, FList (FSymbol "tuple" :: payload_patterns)
         | TTuple payload_tys, FVector payload_patterns ->
           let rec compile_payloads patterns bindings = function
@@ -4849,7 +4872,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     ~lookup_protocol_constraint
                     ~lookup_dynamic_key_record_type ~resolve_named_record
                     ~lookup_key_record_type:
-                      (Expression_support.record_type_for_keyword env)
+                      (Expression_support.record_type_for_keyword ~scope env)
                     (List.combine names inferred_param_tys)
                     body_forms
                 with
@@ -5320,7 +5343,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           ~lookup_closed_sum_constructors
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
           ~lookup_key_record_type:
-            (Expression_support.record_type_for_keyword env)
+            (Expression_support.record_type_for_keyword ~scope env)
           ~resolve_named_record params forms
       with
       | Ok inferred ->
@@ -5388,7 +5411,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               ~lookup_closed_sum_constructors
               ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
               ~lookup_key_record_type:
-                (Expression_support.record_type_for_keyword env)
+                (Expression_support.record_type_for_keyword ~scope env)
               ~resolve_named_record params forms
             |> Result.value ~default:params
           in

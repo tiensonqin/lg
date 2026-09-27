@@ -1390,7 +1390,7 @@ let infer_defrecord_field_types scope env record_name field_names interface_form
             ~lookup_closed_sum_constructors
             ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
             ~lookup_key_record_type:
-              (Expression_support.record_type_for_keyword env)
+              (Expression_support.record_type_for_keyword ~scope env)
             ~resolve_named_record ~observe_call params body_forms
         with
         | Error _ -> field_types

@@ -6272,6 +6272,7 @@ let test_datascript_entity_attrs_keep_tx_value_payloads () =
   (:require [ocaml.package/datascript-ocaml-native]
             [ocaml.package/melange-transit-core]
             [ocaml.Datascript :as ds]
+            [ocaml.Int64 :as int64]
             [ocaml.List :as list]
             [ocaml.Transit_core.Json :as transit]))
 (declare transit-of-value)
@@ -6297,7 +6298,7 @@ let test_datascript_entity_attrs_keep_tx_value_payloads () =
     (ds/Bool flag) (transit/Bool flag)
     (ds/Keyword keyword) (transit/Keyword keyword)
     (ds/Uuid uuid) (transit/Uuid uuid)
-    (ds/Instant instant) (transit/Date instant)
+    (ds/Instant instant) (transit/Date (int64/of-int instant))
     (ds/Regex pattern) (transit/Tagged "regex" (transit/String pattern))
     (ds/Ref eid) (transit-of-entity-ref db (stable-entity-ref db (ds/Entity_id eid)))
     (ds/List values)
@@ -46322,7 +46323,8 @@ let test_record_fields_merge_structural_and_nominal_requirements () =
         (source ^ "\n(defn numeric-graph? [config] (= (:graph-id config) 42))\n" ^ invalid) with
       | Error error
         when string_contains_substring error.message "cannot infer"
-             || string_contains_substring error.message "field access has type" -> ()
+             || string_contains_substring error.message "field access has type"
+             || string_contains_substring error.message "incompatible arguments" -> ()
       | result -> ignore (expect_ok result);
           failwith "incompatible nested record field was accepted")
       [Lg.Target.Native; Lg.Target.Melange])

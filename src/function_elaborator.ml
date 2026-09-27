@@ -1015,7 +1015,7 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
           ~lookup_successful_call_refinement
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
           ~lookup_key_record_type:
-            (Expression_support.record_type_for_keyword env)
+            (Expression_support.record_type_for_keyword ~scope env)
           ~resolve_named_record
           parameters body_forms
       in

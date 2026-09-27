@@ -1962,7 +1962,7 @@ and prepare_inferred_recursive_fn_body ?explicit_return_ty ~ocaml_name scope env
           ~lookup_closed_sum_constructors
           ~lookup_protocol_constraint ~lookup_dynamic_key_record_type
           ~lookup_key_record_type:
-            (Expression_support.record_type_for_keyword provisional_env)
+            (Expression_support.record_type_for_keyword ~scope provisional_env)
           ~resolve_named_record
           inference_params body_forms
       with

@@ -677,6 +677,15 @@ let resolve_namespace_alias ~scope alias env =
   | Some _ as target -> target
   | None -> String_map.find_opt alias env.namespace_aliases
 
+let namespace_alias_targets ~scope env =
+  let prefix = scope ^ "/" in
+  String_map.fold
+    (fun key target targets ->
+      if String.starts_with ~prefix key || not (String.contains key '/') then
+        target :: targets
+      else targets)
+    env.namespace_aliases []
+
 let add_core_exclusions ~scope names env =
   let exclusions =
     List.fold_left
@@ -963,11 +972,50 @@ let find_oldest_anonymous_record ~owner fields env =
   in
   match matches (anonymous_fields_equal fields) with
   | Some _ as found -> found
-  | None ->
-      let fields = canonical_anonymous_fields fields in
-      matches (fun record_fields ->
-          anonymous_fields_equal fields
-            (canonical_anonymous_fields record_fields))
+  | None -> (
+      (* Prefer the record whose site instantiation equals the query fields:
+         e.g. a row `{title; uuid}` queried with `uuid = 'm` belongs to the
+         record allocated for that site, not an older same-shape record. *)
+      let instantiated =
+        env.anonymous_records
+        |> List.filter_map
+             (fun (record_owner, (record : Semantic_type.named_record)) ->
+               if record_owner <> owner then None
+               else
+                 let record_fields =
+                   if
+                     record.type_parameters <> []
+                     && List.length record.type_parameters
+                        = List.length record.type_arguments
+                   then
+                     let substitutions =
+                       List.combine record.type_parameters
+                         record.type_arguments
+                       |> List.map (fun (parameter, argument) ->
+                              (Type_solver.Declared parameter, argument))
+                       |> Type_solver.of_list
+                     in
+                     List.map
+                       (fun (field : Types.field) ->
+                         {
+                           field with
+                           ty = Type_solver.apply substitutions field.ty;
+                         })
+                       record.fields
+                   else record.fields
+                 in
+                 if anonymous_fields_equal fields record_fields then
+                   Some record
+                 else None)
+        |> oldest_candidate
+      in
+      match instantiated with
+      | Some _ as found -> found
+      | None ->
+          let fields = canonical_anonymous_fields fields in
+          matches (fun record_fields ->
+              anonymous_fields_equal fields
+                (canonical_anonymous_fields record_fields)))
 
 let find_oldest_anonymous_record_by_layout ~owner fields env =
   env.anonymous_records
