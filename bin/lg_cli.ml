@@ -549,6 +549,9 @@ let next_prefix_key ~target ?reader_target previous_key input_path source =
          previous_key;
          Lg.Target.to_string target;
          reader_target_cache_key reader_target;
+         (* Output differs between redef-cell and direct-binding emission;
+            without this, one mode's cache would serve the other's output. *)
+         string_of_bool !(Lg.Top_level_elaborator.redefable_roots);
          input_path;
          source;
        ])
@@ -870,19 +873,27 @@ let extract_compilation_options args =
   in
   loop Lg.Target.default None [] args
 
-(* `--no-redef` emits plain OCaml bindings for top-level definitions instead
-   of the redefinition cell + wrapper pair, shrinking batch output. Redefining
-   or `with-redefs`-patching those bindings later stops working. *)
-let strip_no_redef args =
-  if List.mem "--no-redef" args then (
-    Lg.Top_level_elaborator.redefable_roots := false;
-    List.filter (fun arg -> arg <> "--no-redef") args)
-  else args
+(* Batch emit modes write a .ml file for compilation, not an interactive
+   session, so redefinition cells default off for them; `--redef` opts back
+   in for code that patches bindings with `with-redefs`. `--no-redef` is
+   still accepted for compatibility. Run/Test/REPL/LSP modes keep cells on:
+   a script may legitimately use `with-redefs`. *)
+let redef_requested = ref false
+
+let strip_redef_flags args =
+  if List.mem "--redef" args then redef_requested := true;
+  List.filter
+    (fun arg -> arg <> "--redef" && arg <> "--no-redef")
+    args
+
+let batch_redef () =
+  Lg.Top_level_elaborator.redefable_roots := !redef_requested
 
 let parse_args argv =
   let target, reader_target, args =
     extract_compilation_options (Array.to_list argv)
   in
+  let args = strip_redef_flags args in
   let mode =
     match args with
     | [ _program; "--lsp" ] -> Lsp { state_path = None }
@@ -890,26 +901,30 @@ let parse_args argv =
         Lsp { state_path = Some state_path }
     | _program :: "test" :: input_paths -> Test { input_paths }
     | [ _program; "--interface"; input ] ->
+        batch_redef ();
         Interface { input_path = input; output_path = None }
     | [ _program; "--interface"; input; "-o"; output ] ->
+        batch_redef ();
         Interface { input_path = input; output_path = Some output }
     | [ _program; input ] when not (String.starts_with ~prefix:"--" input) ->
+        batch_redef ();
         Compile { input_path = input; output_path = None }
     | [ _program; input; "-o"; output ]
       when not (String.starts_with ~prefix:"--" input) ->
+        batch_redef ();
         Compile { input_path = input; output_path = Some output }
     | [ _program; "--run"; input ] -> Run { input_path = input }
     | [ _program; "--run-from"; state_path; implementation_path; input_path ] ->
         Run_from { state_path; implementation_path; input_path }
     | _program :: "--compile-files" :: args -> (
-        let args = strip_no_redef args in
+        batch_redef ();
         match List.rev args with
         | output_path :: "-o" :: reversed_inputs ->
             Compile_files
               { input_paths = List.rev reversed_inputs; output_path }
         | _ -> usage ())
     | _program :: "--compile-files-state" :: state_path :: args -> (
-        let args = strip_no_redef args in
+        batch_redef ();
         match List.rev args with
         | output_path :: "-o" :: reversed_inputs ->
             Compile_files_state
@@ -920,7 +935,7 @@ let parse_args argv =
               }
         | _ -> usage ())
     | _program :: "--compile-files-from" :: state_path :: args -> (
-        let args = strip_no_redef args in
+        batch_redef ();
         let emit_state_path, args =
           match args with
           | "--emit-state" :: path :: rest -> (Some path, rest)
@@ -940,7 +955,7 @@ let parse_args argv =
               }
         | _ -> usage ())
     | _program :: "--compile-files-chunk-from" :: state_path :: args -> (
-        let args = strip_no_redef args in
+        batch_redef ();
         let prefix_interface, args =
           match args with
           | "--prefix-interface" :: path :: rest -> (Some path, rest)
@@ -967,6 +982,7 @@ let parse_args argv =
         | _ -> usage ())
     | _program :: "--compile-files-from-state" :: state_path
       :: output_state_path :: args -> (
+        batch_redef ();
         match List.rev args with
         | output_path :: "-o" :: reversed_inputs ->
             Compile_files_from_state
@@ -985,9 +1001,11 @@ let parse_args argv =
      "-o";
      output_path;
     ] ->
+        batch_redef ();
         Compile_chunk_from
           { state_path; input_path; output_path = Some output_path }
     | [ _program; "--compile-chunk-from"; state_path; input_path ] ->
+        batch_redef ();
         Compile_chunk_from { state_path; input_path; output_path = None }
     | [
      _program;
@@ -998,6 +1016,7 @@ let parse_args argv =
      "-o";
      output_path;
     ] ->
+        batch_redef ();
         Compile_chunk_state
           {
             state_path;
@@ -1012,6 +1031,7 @@ let parse_args argv =
      output_state_path;
      input_path;
     ] ->
+        batch_redef ();
         Compile_chunk_state
           { state_path; output_state_path; input_path; output_path = None }
     | _program :: "--run-files" :: input_paths ->
