@@ -426,7 +426,11 @@ let write_saved_compilation_state path saved =
 
 let read_saved_compilation_state path =
   match Lg.Compiler_artifact.read ~kind:"saved-state" ~path with
-  | Ok saved -> Ok (saved : saved_compilation_state)
+  | Ok saved ->
+      (* A restored state introduces its own metavariable ids; drop any
+         solutions committed for metas created before the load. *)
+      Lg.Type_solver.clear_meta_solutions ();
+      Ok (saved : saved_compilation_state)
   | Error message -> compiler_error message
 
 let compile_cache_enabled () =
@@ -691,6 +695,7 @@ let read_cached_prefix_state key =
         else
           match Lg.Compiler_artifact.read ~kind:"prefix-state" ~path:state_path with
           | Ok cached_state ->
+            Lg.Type_solver.clear_meta_solutions ();
             touch_cache_entry key;
             Some ((cached_state : cached_prefix_state).state)
           | Error message ->

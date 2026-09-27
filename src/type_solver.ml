@@ -39,6 +39,16 @@ type conflict = { left : ty; right : ty }
 
 let next_metavariable = ref 0
 
+(* Global metavariable solutions: successful unifications commit their
+   metavariable bindings here so a meta solved at one call site is visible
+   everywhere its `TMeta` node is read later — the union-find behaviour a
+   threaded substitution map cannot provide across isolated `unify` calls.
+   Only Metavariable bindings are committed; Declared names stay scoped to
+   the scheme they came from. *)
+let meta_solutions : (int, ty) Hashtbl.t = Hashtbl.create 1024
+
+let clear_meta_solutions () = Hashtbl.reset meta_solutions
+
 let fresh ?location () =
   let id = !next_metavariable in
   incr next_metavariable;
@@ -166,8 +176,16 @@ let may_contain_variable ?visited predicate ty =
   in
   affects ty
 
+let globally_bound variable =
+  match variable with
+  | Metavariable id -> Hashtbl.mem meta_solutions id
+  | Declared _ -> false
+
 let potentially_affected substitutions ty =
-  may_contain_variable (fun variable -> Variable_map.mem variable substitutions) ty
+  may_contain_variable
+    (fun variable ->
+      Variable_map.mem variable substitutions || globally_bound variable)
+    ty
 
 (* Quantified names may be included: this summary only proves absence.
    None means the traversal budget was exhausted, so substitution must run. *)
@@ -189,7 +207,6 @@ let rec apply substitutions ty =
   match ty with
   | TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol | TKeyword
   | TBool | TUnit | TNil | TUnknown | TOcaml _ -> ty
-  | _ when Variable_map.cardinal substitutions = 0 -> ty
   | (TMeta _ | TVar _) -> apply_with_substitutions substitutions ty
   | _ when not (potentially_affected substitutions ty) -> ty
   | _ -> apply_with_substitutions substitutions ty
@@ -297,10 +314,14 @@ and apply_with_substitutions substitutions ty =
       | TPoly_variant _ -> Semantic_type.map_children apply_ty ty
       | TMeta { id; _ } -> (
           match find_opt (Metavariable id) substitutions with
-          | None -> ty
           | Some (TMeta replacement) when replacement.id = id -> ty
           | Some replacement ->
-              apply_replacement (Metavariable id) ty replacement)
+              apply_replacement (Metavariable id) ty replacement
+          | None -> (
+              match Hashtbl.find_opt meta_solutions id with
+              | None -> ty
+              | Some replacement ->
+                  apply_replacement (Metavariable id) ty replacement))
       | TVar name -> (
           match find_opt (Declared name) substitutions with
           | None -> ty
@@ -508,8 +529,14 @@ let resolve_head substitutions ty =
       if variable_mem variable visiting then ty
       else
         match find_opt variable substitutions with
-        | None -> ty
         | Some replacement -> resolve (variable :: visiting) replacement
+        | None -> (
+            match variable with
+            | Metavariable id -> (
+                match Hashtbl.find_opt meta_solutions id with
+                | None -> ty
+                | Some replacement -> resolve (variable :: visiting) replacement)
+            | Declared _ -> ty)
     in
     match ty with
     | TMeta meta -> resolve_variable (Metavariable meta.id)
@@ -520,6 +547,19 @@ let resolve_head substitutions ty =
 
 let unify ?(resolve_alias = fun _ -> None) substitutions left right =
  let active_alias_pairs = ref [] in
+ let pending_commits = ref [] in
+ (* Probing calls start from `empty` and compare two types in isolation;
+    solving calls thread an accumulating substitution. Only the latter may
+    publish ground bindings — a discarded probe result must not pin metas
+    globally. *)
+ let committing = Variable_map.cardinal substitutions > 0 in
+ let bind_meta_tracked substitutions meta ty =
+   match bind_meta substitutions meta ty with
+   | Ok substitutions ->
+       pending_commits := (meta, ty) :: !pending_commits;
+       Ok substitutions
+   | Error _ as error -> error
+ in
  let rec unify substitutions left right =
   let left = resolve_head substitutions left in
   let right = resolve_head substitutions right in
@@ -552,7 +592,7 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
       ->
         Ok substitutions
     | TUnknown, _ | _, TUnknown -> Ok substitutions
-    | TMeta meta, ty | ty, TMeta meta -> bind_meta substitutions meta ty
+    | TMeta meta, ty | ty, TMeta meta -> bind_meta_tracked substitutions meta ty
     | TVar name, ty | ty, TVar name -> bind substitutions (Declared name) ty
     | ( TConstraint (Truthy_constraint left),
         TConstraint (Truthy_constraint right) ) ->
@@ -832,7 +872,39 @@ and unify_arities substitutions left right =
         Result.bind rest (fun substitutions ->
             unify substitutions left.return_ty right.return_ty))
  in
- unify substitutions left right
+ match unify substitutions left right with
+ | Ok substitutions ->
+     List.iter
+       (fun (meta, ty) ->
+         (* Only ground solutions are committed: meta-to-meta links stay in
+            the returned substitution, so probing unifications that merely
+            relate open variables cannot pin them globally. *)
+         if committing && not (is_open ty) then (
+           if Sys.getenv_opt "LG_DEBUG_COMMIT" = Some "1" then
+             Printf.eprintf "[commit] g%d%s <- %s\n%!" meta.id
+               (match meta.location with
+               | Some _ -> "@loc"
+               | None -> "")
+               (match ty with
+               | TInt -> "int" | TFloat -> "float" | TBool -> "bool"
+               | TString -> "string" | TKeyword -> "keyword"
+               | TSymbol -> "symbol" | TUnit -> "unit" | TNil -> "nil"
+               | TChar -> "char" | TRegex -> "regex" | TMap_keys -> "map_keys"
+               | TMeta { id = rid; _ } -> "g" ^ string_of_int rid
+               | TVar n -> "'" ^ n | TOcaml n -> n
+               | TOcaml_app (n, _) -> n ^ " _" | TFn _ -> "fn"
+               | TTuple _ -> "tuple" | TList _ -> "list"
+               | TVector _ -> "vector" | TSet _ -> "set" | TSeq _ -> "seq"
+               | TArray _ -> "array" | TRef _ -> "ref" | TNullable _ -> "opt"
+               | TRecord _ -> "record" | TNamed_record r ->
+                   "named:" ^ Type_id.name r.type_id
+               | TPoly_variant _ -> "polyvariant" | TConstraint _ -> "constr"
+               | TOverloaded_fn _ -> "overloaded"
+               | TUnknown -> "?");
+           Hashtbl.replace meta_solutions meta.id ty))
+       !pending_commits;
+     Ok substitutions
+ | Error _ as error -> error
 
 let unify_lists substitutions left right =
   List.fold_left2
@@ -912,6 +984,10 @@ let generalize ty =
          (fun (quantified, substitutions) -> function
            | Declared name ->
                (Declared_variable name :: quantified, substitutions)
+           | Metavariable id when Hashtbl.mem meta_solutions id ->
+               (* Already solved globally: keep the meta so `apply` expands
+                  its solution instead of quantifying a pinned variable. *)
+               (quantified, substitutions)
            | Metavariable id ->
                let name = inferred_name id in
                ( Inferred_variable { metavariable_id = id; name } :: quantified,

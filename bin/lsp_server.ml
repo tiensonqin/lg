@@ -315,6 +315,7 @@ let configure_workspace_include_path root =
 let load_saved_state path =
   match Lg.Compiler_artifact.read ~kind:"saved-state" ~path with
   | Ok saved ->
+      Lg.Type_solver.clear_meta_solutions ();
       let saved = (saved : saved_compilation_state) in
       if saved.target <> Lg.Target.default then
         Error "saved compiler state target does not match LSP target"

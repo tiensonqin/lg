@@ -1,6 +1,36 @@
 # LG inference redesign: constraint-based HM-style inference
 
-Status: design proposal. Companion to `report.md` (current-state findings).
+Status: design proposal, partially implemented. Companion to `report.md`
+(current-state findings).
+
+## Implemented: simplified HM kernel (commit-based propagation)
+
+The full union-find + levels rewrite proved unnecessary. What landed instead,
+in `Type_solver`:
+
+- `meta_solutions : (int, ty) Hashtbl.t` — a process-global solution table.
+  `resolve_head`/`apply` consult it after the local substitution, so a meta
+  solved inside one `unify` is visible to every later reader of the same
+  `TMeta` node — the propagation property a threaded substitution map cannot
+  give across isolated call sites.
+- Only bindings produced by *solving* unifications are committed: a `unify`
+  entry whose incoming substitution is `empty` is treated as a probe (pure
+  comparison) and publishes nothing. Nested solves inside a threaded
+  unification do commit.
+- Only *closed* bindings are committed (`is_open ty` is false).
+  Meta-to-meta links stay local to the returned substitution; committing
+  them pinned entire parameter sets prematurely (stdlib `interleave`
+  oscillated between stabilization states).
+- `generalize` never quantifies a globally-solved meta: the meta stays in
+  the scheme body and `apply` expands it, keeping it monomorphic.
+- `clear_meta_solutions` runs when a saved/prefix compiler state is loaded
+  (`lg_cli`, `lsp_server`), because restored types can carry meta ids that
+  overlap the live counter.
+- `LG_DEBUG_COMMIT=1` prints each committed binding for debugging.
+
+The substitution-threading API, `refine_type` merges, constraint
+encodings, and the `infer_params` stabilization loop are unchanged — the
+loop still runs but converges against globally-visible solutions.
 
 ## Goals
 
