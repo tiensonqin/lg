@@ -36,7 +36,14 @@ type diagnostic = {
   location : Location.t option;
 }
 
-type compilation = { ocaml_source : string; diagnostics : diagnostic list }
+(* [ocaml_signature] is the marshaled OCaml signature of [ocaml_source],
+   prepared for saving (like a .cmi's signature). Restoring a cached prefix
+   adds it to a fresh [Env.t] instead of re-typechecking the prefix source. *)
+type compilation = {
+  ocaml_source : string;
+  ocaml_signature : string option;
+  diagnostics : diagnostic list;
+}
 
 type repl_form_kind =
   | Repl_value
@@ -986,6 +993,7 @@ module Ocaml_typechecker = struct
   type analysis = {
     typed_structure : Typedtree.structure;
     compiler_env : Env.t;
+    signature : string;
     diagnostics : diagnostic list;
   }
 
@@ -1092,21 +1100,32 @@ module Ocaml_typechecker = struct
           None
     in
     try
-      let typed_structure, compiler_env =
+      let typed_structure, compiler_env, signature =
         Fun.protect
           ~finally:(fun () ->
             Location.warning_reporter := previous_warning_reporter)
           (fun () ->
             Location.warning_reporter := capture_warning;
             let env = Option.value compiler_env ~default:(initial_env ()) in
-            let typed_structure, _signature, _signature_names, _shape, env =
+            let typed_structure, signature, _signature_names, _shape, env =
               Typemod.type_structure env structure
             in
             Envaux.reset_cache ();
             let env = env |> Env.keep_only_summary |> Envaux.env_of_only_summary in
-            (typed_structure, env))
+            (* Keep the signature's current-unit uids: items must bind as local
+               definitions on restore ([add_signature]), not as references to a
+               persistent unit that has no .cmi on disk. *)
+            ( typed_structure,
+              env,
+              Marshal.to_string signature [] ))
       in
-      Ok { typed_structure; compiler_env; diagnostics = List.rev !diagnostics }
+      Ok
+        {
+          typed_structure;
+          compiler_env;
+          signature;
+          diagnostics = List.rev !diagnostics;
+        }
     with exn ->
       let raw_location = raw_exception_location exn in
       let location =
@@ -1214,8 +1233,11 @@ let target_include_dirs target include_dirs =
       in
       target_specific @ generic
 
+(* Each prefix is (ocaml_source, marshaled signature). A signature restores
+   into a fresh env without re-typechecking the source; a [None] signature
+   falls back to parsing and typechecking the source. *)
 let restore_ocaml_environment ?(target = Target.default) ~packages state
-    sources =
+    prefixes =
   let report_timings =
     match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
     | Some ("1" | "details" | "debug") -> true
@@ -1258,35 +1280,94 @@ let restore_ocaml_environment ?(target = Target.default) ~packages state
       let include_dirs = target_include_dirs target include_dirs in
       timed "initialize OCaml signature include dirs" (fun () ->
           Ocaml_signature.add_include_dirs include_dirs);
-      let rec restore compiler_env index = function
-        | [] -> Ok { state with ocaml_env = compiler_env }
-        | source :: rest -> (
+      (* Consecutive marshaled signatures are entered as one batch through a
+         single [enter_signature] rescope, so type paths that cross signature
+         boundaries keep pointing at the rebound idents. *)
+      let enter_signatures env signatures =
+        let combined =
+          List.concat_map
+            (fun signature -> Marshal.from_string signature 0)
+            (List.rev signatures)
+        in
+        let scope = Ctype.create_scope () in
+        snd (Env.enter_signature ~scope combined env)
+      in
+      let rec restore compiler_env index pending_signatures = function
+        | [] -> (
             try
-              let t0 = Unix.gettimeofday () in
-              let lexbuf = Lexing.from_string source in
-              Location.init lexbuf (Printf.sprintf "<cached:%d>" index);
-              let structure = Parse.implementation lexbuf in
-              let t1 = Unix.gettimeofday () in
-              (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
-              | Some ("1" | "details" | "debug") ->
-                  Printf.eprintf "lg:   parse prefix %d: %.3fs\n%!" index
-                    (t1 -. t0)
-              | _ -> ());
-              match Ocaml_typechecker.analyze ?compiler_env structure with
-              | Error _ as error -> error
-              | Ok analysis ->
-                  (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
-                  | Some ("1" | "details" | "debug") ->
-                      Printf.eprintf "lg:   typecheck prefix %d: %.3fs\n%!"
-                        index (Unix.gettimeofday () -. t1)
-                  | _ -> ());
-                  restore (Some analysis.compiler_env) (index + 1) rest
+              Ok
+                {
+                  state with
+                  ocaml_env =
+                    (match pending_signatures, compiler_env with
+                    | [], env -> env
+                    | pending, env ->
+                        Some
+                          (enter_signatures
+                             (Option.value env
+                                ~default:(Ocaml_typechecker.initial_env ()))
+                             pending));
+                }
             with exn ->
               Error.error
-                ("failed to restore cached OCaml environment: "
+                ("failed to restore cached OCaml signature: "
                ^ Ocaml_typechecker.exception_message exn))
+        | (source, signature) :: rest -> (
+            match signature with
+            | Some signature ->
+                restore compiler_env index
+                  (signature :: pending_signatures)
+                  rest
+            | None -> (
+                let compiler_env =
+                  match pending_signatures with
+                  | [] -> Ok compiler_env
+                  | pending -> (
+                      try
+                        Ok
+                          (Some
+                             (enter_signatures
+                                (Option.value compiler_env
+                                   ~default:(Ocaml_typechecker.initial_env ()))
+                                pending))
+                      with exn ->
+                        Error.error
+                          ("failed to restore cached OCaml signature: "
+                         ^ Ocaml_typechecker.exception_message exn))
+                in
+                match compiler_env with
+                | Error _ as error -> error
+                | Ok compiler_env -> (
+                try
+                  let t0 = Unix.gettimeofday () in
+                  let lexbuf = Lexing.from_string source in
+                  Location.init lexbuf (Printf.sprintf "<cached:%d>" index);
+                  let structure = Parse.implementation lexbuf in
+                  let t1 = Unix.gettimeofday () in
+                  (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
+                  | Some ("1" | "details" | "debug") ->
+                      Printf.eprintf "lg:   parse prefix %d: %.3fs\n%!" index
+                        (t1 -. t0)
+                  | _ -> ());
+                  match
+                    Ocaml_typechecker.analyze ?compiler_env structure
+                  with
+                  | Error _ as error -> error
+                  | Ok analysis ->
+                      (match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
+                      | Some ("1" | "details" | "debug") ->
+                          Printf.eprintf "lg:   typecheck prefix %d: %.3fs\n%!"
+                            index (Unix.gettimeofday () -. t1)
+                      | _ -> ());
+                      restore (Some analysis.compiler_env) (index + 1) []
+                        rest
+                with exn ->
+                  Error.error
+                    ("failed to restore cached OCaml environment: "
+                   ^ Ocaml_typechecker.exception_message exn))))
       in
-      timed "retype cached OCaml prefix" (fun () -> restore None 0 sources)
+      timed "retype cached OCaml prefix" (fun () ->
+          restore None 0 [] prefixes)
 
 let required_packages_from_ast ~target ast =
   let rec loop packages = function
@@ -2542,6 +2623,7 @@ let implementation_with_diagnostics ?(target = Target.default)
               Ok
                 {
                   ocaml_source = Ocaml_parsetree_backend.print result.structure;
+                  ocaml_signature = None;
                   diagnostics;
                 }))
 
@@ -2615,7 +2697,10 @@ let compile_prepared_chunk_with_diagnostics ?(check_ocaml = true) state
               if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
                 Printf.eprintf "%s\n%!" ocaml_source;
               if not check_ocaml then
-                Ok (state, { ocaml_source; diagnostics = [] })
+                Ok
+                  ( state,
+                    { ocaml_source; ocaml_signature = None; diagnostics = [] }
+                  )
               else
                 match
                   Ocaml_typechecker.analyze ?compiler_env:state.ocaml_env
@@ -2630,6 +2715,7 @@ let compile_prepared_chunk_with_diagnostics ?(check_ocaml = true) state
                       ( state,
                         {
                           ocaml_source;
+                          ocaml_signature = Some analysis.signature;
                           diagnostics = analysis.diagnostics;
                         } )))
 

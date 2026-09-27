@@ -56,6 +56,7 @@ type saved_compilation_state = {
   state : Lg.Compiler.state;
   packages : string list;
   ocaml_source : string;
+  ocaml_signatures : string list;
   cache_key : string; [@warning "-69"]
 }
 
@@ -72,7 +73,12 @@ let stdlib_state () =
       if saved.target <> Lg.Target.Native then
         fail "expected native stdlib state";
       Lg.Compiler.restore_ocaml_environment ~packages:saved.packages saved.state
-        [ saved.ocaml_source ]
+        (match saved.ocaml_signatures with
+        | [] -> [ (saved.ocaml_source, None) ]
+        | signatures ->
+            List.map
+              (fun signature -> (saved.ocaml_source, Some signature))
+              signatures)
       |> Result.map (Lg.Compiler.with_source_scope "")
       |> (function
            | Ok state -> state

@@ -386,6 +386,10 @@ type saved_compilation_state = {
   state : Lg.Compiler.state;
   packages : string list;
   ocaml_source : string;
+  (* Marshaled OCaml signatures of the chunk compilations that produced
+     [ocaml_source], in order. Restoring adds each to a fresh env instead
+     of re-typechecking the prefix source. *)
+  ocaml_signatures : string list;
   (* Deterministic provenance key of the compilation that produced this state:
      the prefix-key chain over each input path and source. Marshaled state bytes
      are not reproducible (they contain .cmi-load-order-dependent variable
@@ -406,6 +410,16 @@ let compiler_error message =
        fixes = [];
        type_mismatch = None }
       : Lg.Compiler.compile_error)
+
+(* Prefixes for [restore_ocaml_environment]: one entry per marshaled chunk
+   signature; the raw source (retype fallback) when the state predates
+     signature persistence or a chunk was compiled with OCaml checks off. *)
+let saved_prefixes saved =
+  match saved.ocaml_signatures with
+  | [] -> [ (saved.ocaml_source, None) ]
+  | signatures ->
+      List.map (fun signature -> (saved.ocaml_source, Some signature))
+        signatures
 
 let write_saved_compilation_state path saved =
   Lg.Compiler_artifact.write ~kind:"saved-state" ~path saved
@@ -518,7 +532,7 @@ let compiler_cache_identity =
   let identity = lazy (compute_compiler_cache_identity ()) in
   fun () -> Lazy.force identity
 
-let compile_files_cache_format_version = "compile-files-v7"
+let compile_files_cache_format_version = "compile-files-v8"
 
 let reader_target_cache_key = function
   | None -> "default"
@@ -2076,11 +2090,11 @@ let read_compiler_state = function
       | Some state -> Ok state
       | None -> compiler_error ("missing cached compiler state " ^ key))
 
-let resume_compiler_state ~target ~packages ~sources = function
+let resume_compiler_state ~target ~packages ~prefixes = function
   | Live state -> Ok state
   | Replayed _ | Cached _ as compiler_state ->
       Result.bind (read_compiler_state compiler_state) (fun state ->
-          Lg.Compiler.restore_ocaml_environment ~target ~packages state sources)
+          Lg.Compiler.restore_ocaml_environment ~target ~packages state prefixes)
 
 let order_prepared_sources ?reader_target:_ _target _compiler_state sources =
   let paths =
@@ -2122,10 +2136,24 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
         let outputs = List.rev outputs in
         Result.map
           (fun state ->
-            let ocaml_source = concatenate_compilation_outputs outputs in
+            let ocaml_source =
+              concatenate_compilation_outputs
+                (List.map
+                   (fun (c : Lg.Compiler.compilation) -> c.ocaml_source)
+                   outputs)
+            in
+            let ocaml_signatures =
+              List.filter_map
+                (fun (c : Lg.Compiler.compilation) -> c.ocaml_signature)
+                outputs
+            in
             ( state,
               packages,
               ocaml_source,
+              (if
+                 List.length ocaml_signatures = List.length outputs
+               then ocaml_signatures
+               else []),
               List.concat (List.rev diagnostics) ))
           (read_compiler_state compiler_state)
     | input_path :: rest -> (
@@ -2150,7 +2178,7 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
                 loop cached_outputs checkpoint prefix_key
                   (cached_compiler_state checkpoint prefix_key)
                   (List.rev_append cached.source_packages packages)
-                  (cached.compilation.ocaml_source :: outputs)
+                  (cached.compilation :: outputs)
                   (cached.compilation.diagnostics :: diagnostics)
                   rest
             | None ->
@@ -2161,7 +2189,12 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
                 Result.bind
                   (timed_step "resume OCaml environment" (fun () ->
                        resume_compiler_state ~target ~packages
-                         ~sources:(List.rev outputs) compiler_state))
+                         ~prefixes:
+                           (List.rev_map
+                              (fun (c : Lg.Compiler.compilation) ->
+                                (c.ocaml_source, c.ocaml_signature))
+                              outputs)
+                         compiler_state))
                   (fun state ->
                     if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
                       Printf.eprintf "lg: compiling %s\n%!" input_path;
@@ -2182,7 +2215,7 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
                             };
                         loop cached_outputs checkpoint prefix_key (Live state)
                           (List.rev_append source_packages packages)
-                          (compilation.ocaml_source :: outputs)
+                          (compilation :: outputs)
                           (compilation.diagnostics :: diagnostics)
                           rest)))
   in
@@ -2204,8 +2237,10 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
 
 let compile_file ?reader_target target input_path =
   compile_files ~use_cache:false ?reader_target target [input_path]
-  |> Result.map (fun (_state, packages, ocaml_source, diagnostics) ->
-       (packages, { Lg.Compiler.ocaml_source; diagnostics }))
+  |> Result.map
+       (fun (_state, packages, ocaml_source, _ocaml_signatures, diagnostics) ->
+         ( packages,
+           { Lg.Compiler.ocaml_source; ocaml_signature = None; diagnostics } ))
 
 let load_adjacent_interface target input_path state =
   let interface = Lg.Ocaml_interface.source_stem input_path ^ ".mli" in
@@ -2240,7 +2275,7 @@ let compile_chunk_from_saved_state ?reader_target
             in
             Result.bind
               (Lg.Compiler.restore_ocaml_environment ~target ~packages saved.state
-                 [ saved.ocaml_source ])
+                 (saved_prefixes saved))
               (fun state ->
                 Result.bind (load_adjacent_interface target input_path state)
                   (fun state ->
@@ -2341,9 +2376,21 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
               produced_key := prefix_key;
               Result.map
                 (fun state ->
+                  let ocaml_signatures =
+                    List.filter_map
+                      (fun (c : Lg.Compiler.compilation) -> c.ocaml_signature)
+                      outputs
+                  in
                   ( state,
                     packages,
-                    concatenate_compilation_outputs (List.rev outputs),
+                    concatenate_compilation_outputs
+                      (List.rev_map
+                         (fun (c : Lg.Compiler.compilation) -> c.ocaml_source)
+                         outputs),
+                    (if
+                       List.length ocaml_signatures = List.length outputs
+                     then List.rev ocaml_signatures
+                     else []),
                     List.concat (List.rev diagnostics) ))
                 (read_compiler_state compiler_state)
           | (input_path, source, prepared) :: rest -> (
@@ -2356,7 +2403,7 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
               | Some cached ->
                   report_cache_hit input_path;
                   compile prefix_key (cached_compiler_state checkpoint prefix_key)
-                    (cached.compilation.ocaml_source :: outputs)
+                    (cached.compilation :: outputs)
                     (cached.compilation.diagnostics :: diagnostics)
                     rest
               | None ->
@@ -2368,9 +2415,14 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
                     (timed_step "resume OCaml environment" (fun () ->
                          if check_ocaml then
                            resume_compiler_state ~target ~packages
-                             ~sources:((match prefix with
-                               | None -> saved.ocaml_source
-                               | Some (source, _) -> source) :: List.rev outputs)
+                             ~prefixes:
+                               ((match prefix with
+                                | None -> saved_prefixes saved
+                                | Some (source, _) -> [ (source, None) ])
+                                @ List.rev_map
+                                    (fun (c : Lg.Compiler.compilation) ->
+                                      (c.ocaml_source, c.ocaml_signature))
+                                    outputs)
                              compiler_state
                          else read_compiler_state compiler_state))
                     (fun state ->
@@ -2392,7 +2444,7 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
                                 write_state = Lg.Compiler.cacheable_state state;
                               };
                           compile prefix_key (Live state)
-                            (compilation.ocaml_source :: outputs)
+                            (compilation :: outputs)
                             (compilation.diagnostics :: diagnostics)
                             rest))
         in
@@ -2463,7 +2515,7 @@ let run_tests ?reader_target target input_paths =
             ~check_ocaml:false
         with
         | Error err -> attempt (Some err) rest
-        | Ok (_state, packages, ocaml_source, diagnostics) ->
+        | Ok (_state, packages, ocaml_source, _ocaml_signatures, diagnostics) ->
             let saved =
               match read_saved_compilation_state state_path with
               | Ok saved -> saved
@@ -2575,7 +2627,7 @@ let () =
   | Compile_files { input_paths; output_path } -> (
       match compile_files ?reader_target target input_paths with
       | Error err -> report_error err
-      | Ok (_state, _packages, ocaml_source, diagnostics) ->
+      | Ok (_state, _packages, ocaml_source, _ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           write_output (Some output_path) ocaml_source)
   | Compile_files_state { state_path; input_paths; output_path } -> (
@@ -2585,7 +2637,7 @@ let () =
           input_paths
       with
       | Error err -> report_error err
-      | Ok (state, packages, ocaml_source, diagnostics) ->
+      | Ok (state, packages, ocaml_source, ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           write_output (Some output_path) ocaml_source;
           write_saved_compilation_state state_path
@@ -2594,6 +2646,7 @@ let () =
               state = Lg.Compiler.cacheable_state state;
               packages;
               ocaml_source;
+              ocaml_signatures;
               cache_key = !produced_key;
             })
   | Compile_files_from
@@ -2611,7 +2664,7 @@ let () =
           ~produced_key target state_path input_paths
       with
       | Error err -> report_error err
-      | Ok (state, packages, ocaml_source, diagnostics) ->
+      | Ok (state, packages, ocaml_source, ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           let saved =
             if include_prefix || Option.is_some emit_state_path then
@@ -2632,6 +2685,8 @@ let () =
                   ocaml_source =
                     concatenate_compilation_outputs
                       [ saved.ocaml_source; ocaml_source ];
+                  ocaml_signatures =
+                    saved.ocaml_signatures @ ocaml_signatures;
                   cache_key = !produced_key;
                 });
           let ocaml_source =
@@ -2661,7 +2716,7 @@ let () =
           ~produced_key target state_path input_paths
       with
       | Error err -> report_error err
-      | Ok (state, packages, ocaml_source, diagnostics) ->
+      | Ok (state, packages, ocaml_source, ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           write_output (Some output_path) ocaml_source;
           let saved =
@@ -2679,6 +2734,8 @@ let () =
               state = Lg.Compiler.cacheable_state state;
               packages;
               ocaml_source;
+              ocaml_signatures =
+                saved.ocaml_signatures @ ocaml_signatures;
               cache_key = !produced_key;
             })
   | Compile_chunk_from { state_path; input_path; output_path } -> (
@@ -2713,12 +2770,15 @@ let () =
               ocaml_source =
                 concatenate_compilation_outputs
                   [ saved.ocaml_source; compilation.ocaml_source ];
+              ocaml_signatures =
+                saved.ocaml_signatures
+                @ Option.to_list compilation.ocaml_signature;
               cache_key = !produced_key;
             })
   | Run_files { input_paths } -> (
       match compile_files ?reader_target target input_paths with
       | Error err -> report_error err
-      | Ok (_state, packages, ocaml_source, diagnostics) ->
+      | Ok (_state, packages, ocaml_source, _ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           run_ocaml_source packages ocaml_source)
   | Run_files_from
@@ -2727,7 +2787,7 @@ let () =
         compile_files_from_saved_state ?reader_target target state_path input_paths
       with
       | Error err -> report_error err
-      | Ok (_state, packages, ocaml_source, diagnostics) ->
+      | Ok (_state, packages, ocaml_source, _ocaml_signatures, diagnostics) ->
           report_diagnostics diagnostics;
           run_ocaml_source packages
             (concatenate_compilation_outputs

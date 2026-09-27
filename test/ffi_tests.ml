@@ -501,7 +501,7 @@ let test_javascript_incremental_artifact () =
       | Ok state -> state | Error message -> failwith message
     in
     let restored =
-      match Lg.Compiler.restore_ocaml_environment ~target ~packages:[] restored [output] with
+      match Lg.Compiler.restore_ocaml_environment ~target ~packages:[] restored [ (output, None) ] with
       | Ok state -> state | Error error -> failwith ("restore: " ^ error.message)
     in
     match Lg.Compiler.compile_chunk ~target restored "(def result (box-value (make-box 1 \"one\"))) (def object (Objects/create (Objects/input. 2)))" with

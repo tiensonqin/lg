@@ -24,6 +24,7 @@ type diagnostic = Toolchain.diagnostic = {
 
 type compilation = Toolchain.compilation = {
   ocaml_source : string;
+  ocaml_signature : string option;
   diagnostics : diagnostic list;
 }
 
@@ -53,11 +54,12 @@ val has_ocaml_environment : state -> bool
 
 val render_error : source:string -> compile_error -> string
 
+(* Each prefix is (ocaml_source, marshaled OCaml signature option). *)
 val restore_ocaml_environment :
   ?target:Target.t ->
   packages:string list ->
   state ->
-  string list ->
+  (string * string option) list ->
   (state, compile_error) result
 
 val compile_string :

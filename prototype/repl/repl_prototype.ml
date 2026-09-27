@@ -5,6 +5,7 @@ type saved_compilation_state = {
   state : Lg.Compiler.state;
   packages : string list;
   ocaml_source : string;
+  ocaml_signatures : string list;
   cache_key : string; [@warning "-69"]
 }
 
@@ -67,7 +68,13 @@ let create_from_stdlib ~state_path =
   | Ok saved -> (
       match
         Lg.Compiler.restore_ocaml_environment ~target:Lg.Target.Native
-          ~packages:saved.packages saved.state [ saved.ocaml_source ]
+          ~packages:saved.packages saved.state
+          (match saved.ocaml_signatures with
+          | [] -> [ (saved.ocaml_source, None) ]
+          | signatures ->
+              List.map
+                (fun signature -> (saved.ocaml_source, Some signature))
+                signatures)
       with
       | Error _ as error -> error
       | Ok compiler_state -> (

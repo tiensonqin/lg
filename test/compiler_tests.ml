@@ -34203,7 +34203,7 @@ let test_into_tuple_map_preserves_full_values_when_key_uses_row_subset () =
     let restored_state : Lg.Compiler.state = Marshal.from_string serialized 0 in
     let restored_state =
       Lg.Compiler.restore_ocaml_environment ~target ~packages:[] restored_state
-        [ stdlib.ocaml_source; model_output ]
+        [ (stdlib.ocaml_source, None); (model_output, None) ]
       |> expect_ok
     in
     let _state, rpc_output =
@@ -54640,7 +54640,7 @@ let test_portable_compiler_state_rebuilds_ocaml_environment () =
   let restored : Lg.Compiler.state = Marshal.from_string encoded 0 in
   let restored =
     Lg.Compiler.restore_ocaml_environment ~packages:[] restored
-      [ first.ocaml_source ]
+      [ (first.ocaml_source, first.ocaml_signature) ]
     |> expect_ok
   in
   ignore (Lg.Compiler.compile_chunk restored {|(def restored-name (:name user))|}

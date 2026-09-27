@@ -11,6 +11,7 @@ type saved_compilation_state = {
   state : Lg.Compiler.state;
   packages : string list;
   ocaml_source : string;
+  ocaml_signatures : string list;
   cache_key : string; [@warning "-69"]
 }
 
@@ -319,7 +320,12 @@ let load_saved_state path =
         Error "saved compiler state target does not match LSP target"
       else
         Lg.Compiler.restore_ocaml_environment ~packages:saved.packages saved.state
-          [ saved.ocaml_source ]
+          (match saved.ocaml_signatures with
+          | [] -> [ (saved.ocaml_source, None) ]
+          | signatures ->
+              List.map
+                (fun signature -> (saved.ocaml_source, Some signature))
+                signatures)
         |> Result.map (Lg.Compiler.with_source_scope "")
         |> Result.map_error (fun (error : Lg.Compiler.compile_error) ->
                error.message)
