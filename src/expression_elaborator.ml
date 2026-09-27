@@ -2272,8 +2272,8 @@ and prepare_inferred_recursive_fn_with_return ~ocaml_name scope env source_name
           ("recursive defn " ^ source_name ^ " must return "
          ^ Types.source_name return_ty))
 
-and fn_code ?(row_param_type_names = []) parts =
-  Function_elaborator.fn_code ~row_param_type_names parts
+and fn_code ?(demote = false) ?self_name ?(row_param_type_names = []) parts =
+  Function_elaborator.fn_code ~demote ?self_name ~row_param_type_names parts
 
 and compile_multi_arity_fn scope env clauses =
   incr multi_arity_fn_counter;

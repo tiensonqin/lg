@@ -35,6 +35,7 @@ type t =
   | Structural_projection of structural_projection
   | Protocol_witness of protocol_witness
   | Sequence_witness of sequence_witness
+  | Sequence_value of sequence_witness
   | Callback of callback
   | Constrained_result_callback of constrained_result_callback
   | Constant_function of constant_function

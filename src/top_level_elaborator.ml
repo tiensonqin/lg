@@ -2721,7 +2721,8 @@ and compile_definition scope env next_type form =
                        | _ -> []
                      in
                      let implementation =
-                       fn_code ~row_param_type_names:row_param_types parts
+                       fn_code ~self_name:binding.ocaml_name
+                         ~row_param_type_names:row_param_types parts
                      in
                      let method_ty = implementation.ty in
                      let unified_ty =
@@ -3478,7 +3479,9 @@ and compile_definition scope env next_type form =
                   row_param_type_names ~env ocaml_name param_tys
                 in
                 let expr =
-                  fn_code ~row_param_type_names:row_param_types parts
+                  fn_code ~demote:(Option.is_none predeclared_param_tys)
+                    ~self_name:ocaml_name
+                    ~row_param_type_names:row_param_types parts
                 in
                 let binding =
                   Expression_support.binding_of_expr ~row_param_types
@@ -3609,7 +3612,8 @@ and compile_definition scope env next_type form =
           in
           let row_param_types = row_param_type_names ~env ocaml_name param_tys in
           let expression =
-            fn_code ~row_param_type_names:row_param_types parts
+            fn_code ~self_name:ocaml_name
+              ~row_param_type_names:row_param_types parts
           in
           let binding =
             binding_of_expr ~row_param_types ocaml_name expression
@@ -4686,7 +4690,12 @@ and compile_definition scope env next_type form =
                 |> List.map (fun (_key, (binding : binding)) -> binding.ty)
               in
               let row_param_types = row_param_type_names ~env ocaml_name param_tys in
-              let expr = fn_code ~row_param_type_names:row_param_types parts in
+              let expr = fn_code
+                       ~demote:
+                         (Option.is_none
+                            (sidecar_function_signature scope env name))
+                       ~self_name:ocaml_name
+                       ~row_param_type_names:row_param_types parts in
               let env_key = Names.scoped_key scope name in
               match
                  check_emitted_name_collision env ~source_key:env_key ~ocaml_name
@@ -4735,11 +4744,12 @@ and compile_definition scope env next_type form =
     when function_is_recursive scope name body_forms -> (
       let ocaml_name = Names.ocaml_binding_name scope name in
       let env_key = Names.scoped_key scope name in
+      let sidecar_signature =
+        sidecar_function_signature scope env name
+        |> Option.map (Function_elaborator.infer_named_record scope env)
+      in
       let prepared =
-        match
-          sidecar_function_signature scope env name
-          |> Option.map (Function_elaborator.infer_named_record scope env)
-        with
+        match sidecar_signature with
         | Some (TFn (parameter_tys, return_ty) as signature_ty) ->
             let signature_env =
               Env.add env_key
@@ -4771,7 +4781,11 @@ and compile_definition scope env next_type form =
             |> List.map (fun (_key, (binding : binding)) -> binding.ty)
           in
           let row_param_types = row_param_type_names ~env ocaml_name param_tys in
-          let expr = fn_code ~row_param_type_names:row_param_types parts in
+          let expr =
+            fn_code ~demote:(Option.is_none sidecar_signature)
+              ~self_name:ocaml_name
+              ~row_param_type_names:row_param_types parts
+          in
           match
             check_emitted_name_collision env ~source_key:env_key ~ocaml_name
           with
@@ -4869,7 +4883,13 @@ and compile_definition scope env next_type form =
             |> List.map (fun (_key, (binding : binding)) -> binding.ty)
           in
           let row_param_types = row_param_type_names ~env ocaml_name param_tys in
-          let expr = fn_code ~row_param_type_names:row_param_types parts in
+          let expr =
+            fn_code
+              ~demote:
+                (Option.is_none (sidecar_function_signature scope env name))
+              ~self_name:ocaml_name
+              ~row_param_type_names:row_param_types parts
+          in
           let env_key = Names.scoped_key scope name in
           match
             check_emitted_name_collision env ~source_key:env_key ~ocaml_name

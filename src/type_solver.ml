@@ -501,6 +501,39 @@ let rec is_open = function
 
 let force substitutions variable ty = add variable ty substitutions
 
+(* Record field lists carry the declaration's type_parameters; substitute the
+   application site's type_arguments so field-wise unification binds the actual
+   arguments instead of the declaration variables. *)
+let applied_record_fields (record : named_record) =
+  if
+    record.type_parameters <> []
+    && List.length record.type_parameters
+       = List.length record.type_arguments
+    && not
+         (List.for_all2
+            (fun parameter -> function
+              | TVar name -> String.equal parameter name
+              | _ -> false)
+            record.type_parameters record.type_arguments)
+  then
+    let substitutions =
+      of_list
+        (List.map2
+           (fun parameter argument -> (Declared parameter, argument))
+           record.type_parameters record.type_arguments)
+    in
+    map_preserving_identity
+      (fun (field : field) ->
+        let ty = apply substitutions field.ty in
+        if ty == field.ty then field else { field with ty })
+      record.fields
+  else record.fields
+
+let record_unify_fields = function
+  | TRecord fields -> fields
+  | TNamed_record record -> applied_record_fields record
+  | _ -> []
+
 let matching_fields left right =
   let find_right =
     if List.compare_length_with left 8 >= 0
@@ -818,9 +851,11 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
                 Result.bind result (fun substitutions ->
                     unify substitutions value_ty field.ty))
               (Ok substitutions) fields)
-    | ( (TRecord left_fields | TNamed_record { fields = left_fields; _ }),
-        (TRecord right_fields | TNamed_record { fields = right_fields; _ }) ) ->
-        let fields = matching_fields left_fields right_fields in
+    | (TRecord _ | TNamed_record _), (TRecord _ | TNamed_record _) ->
+        let fields =
+          matching_fields (record_unify_fields left)
+            (record_unify_fields right)
+        in
         List.fold_left
           (fun result (left, right) ->
             Result.bind result (fun substitutions ->
@@ -874,35 +909,59 @@ and unify_arities substitutions left right =
  in
  match unify substitutions left right with
  | Ok substitutions ->
-     List.iter
-       (fun (meta, ty) ->
-         (* Only ground solutions are committed: meta-to-meta links stay in
-            the returned substitution, so probing unifications that merely
-            relate open variables cannot pin them globally. *)
-         if committing && not (is_open ty) then (
-           if Sys.getenv_opt "LG_DEBUG_COMMIT" = Some "1" then
-             Printf.eprintf "[commit] g%d%s <- %s\n%!" meta.id
-               (match meta.location with
-               | Some _ -> "@loc"
-               | None -> "")
-               (match ty with
-               | TInt -> "int" | TFloat -> "float" | TBool -> "bool"
-               | TString -> "string" | TKeyword -> "keyword"
-               | TSymbol -> "symbol" | TUnit -> "unit" | TNil -> "nil"
-               | TChar -> "char" | TRegex -> "regex" | TMap_keys -> "map_keys"
-               | TMeta { id = rid; _ } -> "g" ^ string_of_int rid
-               | TVar n -> "'" ^ n | TOcaml n -> n
-               | TOcaml_app (n, _) -> n ^ " _" | TFn _ -> "fn"
-               | TTuple _ -> "tuple" | TList _ -> "list"
-               | TVector _ -> "vector" | TSet _ -> "set" | TSeq _ -> "seq"
-               | TArray _ -> "array" | TRef _ -> "ref" | TNullable _ -> "opt"
-               | TRecord _ -> "record" | TNamed_record r ->
-                   "named:" ^ Type_id.name r.type_id
-               | TPoly_variant _ -> "polyvariant" | TConstraint _ -> "constr"
-               | TOverloaded_fn _ -> "overloaded"
-               | TUnknown -> "?");
-           Hashtbl.replace meta_solutions meta.id ty))
-       !pending_commits;
+     (if committing then
+        let structural, aliases =
+          List.partition
+            (fun (_meta, ty) ->
+              match ty with
+              | TMeta _ | TVar _ | TUnknown -> false
+              | _ -> true)
+            !pending_commits
+        in
+        let commit meta ty = Hashtbl.replace meta_solutions meta.id ty in
+        (* Bare aliases (meta/var/unknown targets) do not commit on their
+           own: probing unifications that merely relate open variables must
+           not pin them globally. Structural solutions commit even while
+           they still hold inner metas — the inner metas are exactly the
+           links a pattern refinement established (e.g. `tag List values`
+           binds the scrutinee meta to an open variant row whose payload
+           meta must stay reachable). Aliases whose target meta occurs in a
+           committed structural solution commit as well, transitively, so a
+           result meta bound to such a payload keeps the link. *)
+        List.iter (fun (meta, ty) -> commit meta ty) structural;
+        let linked =
+          List.fold_left
+            (fun ids (_meta, ty) ->
+              variables ty
+              |> List.fold_left
+                   (fun ids variable ->
+                     match variable with
+                     | Metavariable id -> if List.mem id ids then ids else id :: ids
+                     | Declared _ -> ids)
+                   ids)
+            [] structural
+        in
+        let rec publish linked aliases =
+          let ready, rest =
+            List.partition
+              (fun (_meta, ty) ->
+                match ty with
+                | TMeta target -> List.mem target.id linked
+                | _ -> false)
+              aliases
+          in
+          match ready with
+          | [] -> ()
+          | _ ->
+              List.iter (fun (meta, ty) -> commit meta ty) ready;
+              publish
+                (List.fold_left
+                   (fun ids (meta, _ty) ->
+                     if List.mem meta.id ids then ids else meta.id :: ids)
+                   linked ready)
+                rest
+        in
+        publish linked aliases);
      Ok substitutions
  | Error _ as error -> error
 

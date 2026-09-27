@@ -272,6 +272,13 @@ let constrain_contains key_ty params name =
   | Some existing -> Ok (replace_param name (add_constraint existing) params)
 
 let add_record_field_constraint name keyword field_ty params =
+  (* A `seq` requirement on a field means "usable as a sequence": record it
+     as the seqable constraint so concrete collections satisfy it. *)
+  let field_ty =
+    match field_ty with
+    | TSeq element_ty -> Types.seqable_constraint element_ty
+    | _ -> field_ty
+  in
   let target_prefers_plain_storage =
     match string_assoc_opt name params with
     | Some ty
@@ -3207,7 +3214,8 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     | FVector values -> (
         let element_ty =
           match expected_ty with
-          | TVector element_ty -> Some element_ty
+          | (TVector element_ty | TSeq element_ty | TList element_ty
+            | TSet element_ty) -> Some element_ty
           | _ -> Types.seqable_constraint_element expected_ty
         in
         match (element_ty, expected_ty) with

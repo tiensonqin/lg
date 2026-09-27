@@ -866,8 +866,10 @@ let rec row_compatible ~expected ~actual =
         (fun expected actual -> row_compatible ~expected ~actual)
         expected_params actual_params
       && row_compatible ~expected:expected_return ~actual:actual_return
-  | TNamed_record expected, TNamed_record actual
-    when expected.nominal || actual.nominal ->
+  | TNamed_record expected, TNamed_record actual when expected.nominal ->
+      (* A nominal expected type is satisfied only by the same declared
+         record. A non-nominal (structural) expected row falls through to the
+         field check below even when the actual record is nominal. *)
       Type_id.equal expected.type_id actual.type_id
   | (TRecord expected_fields | TNamed_record { fields = expected_fields; _ }),
     (TRecord actual_fields | TNamed_record { fields = actual_fields; _ }) ->

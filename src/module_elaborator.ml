@@ -640,7 +640,9 @@ let rec compile_module ?location ?signature_name ?signature_location
                 let public_row_types =
                   row_param_type_names ~env public_name param_tys
                 in
-                let expr = fn_code ~row_param_type_names:local_row_types parts in
+                let expr = fn_code ~demote:(Option.is_none signature_name)
+                  ~self_name:local_name
+                  ~row_param_type_names:local_row_types parts in
                 let key = module_binding_key module_path name in
                 (match
                    check_emitted_name_collision env ~source_key:key
@@ -704,7 +706,9 @@ let rec compile_module ?location ?signature_name ?signature_location
             let public_row_types =
               row_param_type_names ~env public_name param_tys
             in
-            let expr = fn_code ~row_param_type_names:local_row_types parts in
+            let expr = fn_code ~demote:(Option.is_none signature_name)
+              ~self_name:local_name
+              ~row_param_type_names:local_row_types parts in
             let key = module_binding_key module_path name in
             match
               check_emitted_name_collision env ~source_key:key ~ocaml_name:local_name

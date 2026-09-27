@@ -37,6 +37,7 @@ type t =
   | Structural_projection of structural_projection
   | Protocol_witness of protocol_witness
   | Sequence_witness of sequence_witness
+  | Sequence_value of sequence_witness
   | Callback of callback
   | Constrained_result_callback of constrained_result_callback
   | Constant_function of constant_function
@@ -352,6 +353,10 @@ let rec sequence_element_compatible ~sequence_satisfies ~element_adapts expected
   | TNamed_record record when not record.nominal ->
       element_adapts expected actual
   | TRecord _ -> element_adapts expected actual
+  | TSeq _ ->
+      (* A nested seq<element> accepts any seqable actual: the plan converts
+         each source element to a sequence. *)
+      element_adapts expected actual
   | TConstraint
       (Seqable_constraint { requirement; element = expected_element; _ }) ->
       sequence_source_compatible ~sequence_satisfies ~element_adapts requirement
@@ -885,11 +890,11 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                 in
                 plan_elements [] actual_elements
             | TList expected_element, TList actual_element ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
+                plan_collection ?row_type_name ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies List_collection expected_element
                   actual_element
             | TVector expected_element, TVector actual_element ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
+                plan_collection ?row_type_name ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies Vector_collection expected_element
                   actual_element
             | TVector expected_element, TSeq actual_element ->
@@ -918,9 +923,14 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                   (plan ~row_type_name_for ~protocol_satisfies
                      ~sequence_satisfies expected_element actual_element)
             | TSeq expected_element, TSeq actual_element ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
-                  ~sequence_satisfies Sequence_collection expected_element
-                  actual_element
+                plan_collection ?row_type_name ~row_type_name_for
+                  ~protocol_satisfies ~sequence_satisfies Sequence_collection
+                  expected_element actual_element
+            | TSeq expected_element, TOcaml_app (name, [ actual_element ])
+              when sequence_representation_type_name name ->
+                plan_collection ?row_type_name ~row_type_name_for
+                  ~protocol_satisfies ~sequence_satisfies Sequence_collection
+                  expected_element actual_element
             | TSeq expected_element, TList actual_element ->
                 Result.map
                   (fun element_adaptation ->
@@ -931,7 +941,7 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                         actual_element;
                         element_adaptation;
                       })
-                  (plan ~row_type_name_for ~protocol_satisfies
+                  (plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                      ~sequence_satisfies expected_element actual_element)
             | TSeq expected_element, TVector actual_element ->
                 Result.map
@@ -943,27 +953,71 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                         actual_element;
                         element_adaptation;
                       })
-                  (plan ~row_type_name_for ~protocol_satisfies
+                  (plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                      ~sequence_satisfies expected_element actual_element)
-            | TSeq expected_element, TOcaml_app (name, [ actual_element ])
+            | TSeq expected_element, actual ->
+                (* A Seq.t interface parameter (e.g. a demoted seqable
+                   parameter) receives the caller's collection converted to a
+                   sequence; no witness pair is built. *)
+                let plan_element =
+                  plan ?row_type_name ~row_type_name_for ~protocol_satisfies
+                    ~sequence_satisfies
+                in
+                if
+                  sequence_source_compatible ~sequence_satisfies
+                    ~element_adapts:(fun expected actual ->
+                      match plan_element expected actual with
+                      | Ok _ -> true
+                      | Error _ -> false)
+                    Required expected_element actual
+                then
+                  let rec element_plan = function
+                    | TNullable inner | TOcaml_app ("option", [ inner ]) ->
+                        element_plan inner
+                    | source -> (
+                        match sequence_element_type source with
+                        | None -> Ok None
+                        | Some actual_element ->
+                            (match
+                               plan_element expected_element actual_element
+                             with
+                            | Ok Identity -> Ok None
+                            | Ok adaptation ->
+                                Ok (Some (actual_element, adaptation))
+                            | Error _ as error -> error))
+                  in
+                  Result.map
+                    (fun element_adaptation ->
+                      Sequence_value
+                        {
+                          requirement = Required;
+                          expected_element;
+                          storage_ty = actual;
+                          source_ty = actual;
+                          row_type_name;
+                          element_adaptation;
+                        })
+                    (element_plan actual)
+                else
+                  Error (Incompatible_types { expected; actual })
             | TOcaml_app (name, [ expected_element ]), TSeq actual_element
               when sequence_representation_type_name name ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
-                  ~sequence_satisfies Sequence_collection expected_element
-                  actual_element
+                plan_collection ?row_type_name ~row_type_name_for
+                  ~protocol_satisfies ~sequence_satisfies Sequence_collection
+                  expected_element actual_element
             | ( TOcaml_app (expected_name, [ expected_element ]),
                 TOcaml_app (actual_name, [ actual_element ]) )
               when sequence_representation_type_name expected_name
                    && sequence_representation_type_name actual_name ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
+                plan_collection ?row_type_name ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies Sequence_collection expected_element
                   actual_element
             | TArray expected_element, TArray actual_element ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
+                plan_collection ?row_type_name ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies Array_collection expected_element
                   actual_element
             | TSet expected_element, TSet actual_element ->
-                plan_collection ~row_type_name_for ~protocol_satisfies
+                plan_collection ?row_type_name ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies Set_collection expected_element
                   actual_element
             | TOcaml_app
@@ -1012,9 +1066,30 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                   in
                   Result.map
                     (fun element_adaptation ->
-                      Sequence_witness
-                        { requirement; expected_element; storage_ty;
-                          source_ty = actual; row_type_name; element_adaptation })
+                      match Types.seqable_constraint_info actual with
+                      | Some
+                          (actual_requirement, actual_element, actual_storage)
+                        when actual_requirement
+                             = (match requirement with
+                                | Required -> `Required
+                                | Optional -> `Optional
+                                | Optional_sequential -> `Optional_sequential)
+                             && identity_compatible storage_ty actual_storage
+                             && (Option.is_none element_adaptation
+                                || identity_compatible expected_element
+                                     actual_element) ->
+                          (* A packed seqable value already carries its own
+                             adapter; forwarding it where the same seqable
+                             constraint is expected needs no repack. Storage
+                             must match too: a narrowed optional payload
+                             forwards a bare value where the callee stores an
+                             option. *)
+                          Identity
+                      | _ ->
+                          Sequence_witness
+                            { requirement; expected_element; storage_ty;
+                              source_ty = actual; row_type_name;
+                              element_adaptation })
                     (element_plan actual)
                 else (
                   match
@@ -1429,8 +1504,9 @@ and plan_function_overload ~row_type_name_for ~protocol_satisfies
   in
   plan_arities [] expected_arities
 
-and plan_collection ~row_type_name_for ~protocol_satisfies ~sequence_satisfies
-    kind expected_element actual_element =
+and plan_collection ?row_type_name ~row_type_name_for
+    ~protocol_satisfies ~sequence_satisfies kind expected_element
+    actual_element =
   Result.map
     (function
       | Identity when kind <> Set_collection -> Identity
@@ -1442,8 +1518,8 @@ and plan_collection ~row_type_name_for ~protocol_satisfies ~sequence_satisfies
               actual_element;
               element_adaptation;
             })
-    (plan ~row_type_name_for ~protocol_satisfies ~sequence_satisfies
-       expected_element actual_element)
+    (plan ?row_type_name ~row_type_name_for ~protocol_satisfies
+       ~sequence_satisfies expected_element actual_element)
 
 and plan_map ~row_type_name_for ~protocol_satisfies ~sequence_satisfies
     expected_key expected_value actual_key actual_value =

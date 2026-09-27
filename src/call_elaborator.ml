@@ -606,6 +606,48 @@ let is_edn_value_type = Edn_value_elaborator.is_value_type
 
 let edn_compatible_static_type = Types.edn_compatible_static_type
 
+let rec sequence_argument_compatible expected actual =
+  let element_type = function
+    | TSeq element | TList element | TVector element | TSet element
+    | TArray element ->
+        Some element
+    | TString -> Some TChar
+    | ty -> (
+        match Types.dynamic_map_types ty with
+        | Some (key_ty, value_ty) -> Some (TTuple [ key_ty; value_ty ])
+        | None -> (
+            match Types.seqable_constraint_info ty with
+            | Some (_, element, _) -> Some element
+            | None -> Types.next_seq_element ty))
+  in
+  let expects_sequence =
+    match expected with
+    | TSeq _ -> true
+    | ty -> Option.is_some (Types.next_seq_element ty)
+  in
+  let requires_representation_conversion =
+    match actual with
+    | TList _ | TVector _ | TSet _ | TArray _ | TString -> true
+    | _ ->
+        Option.is_some (Types.dynamic_map_types actual)
+        || Option.is_some (Types.seqable_constraint_info actual)
+  in
+  let compatible =
+    expects_sequence && requires_representation_conversion
+    &&
+    match (element_type expected, element_type actual) with
+    | Some expected_element, Some actual_element ->
+        Types.assignable ~policy:Host_boundary ~expected:expected_element
+          ~actual:actual_element
+        ||
+        (match expected_element with
+         | TSeq _ ->
+             sequence_argument_compatible expected_element actual_element
+         | _ -> false)
+    | _ -> false
+  in
+  compatible
+
 let rec argument_compatible expected actual =
   if Types.is_dynamic expected then true
   else if (match expected with TMeta _ -> true | _ -> false) then true
@@ -739,6 +781,12 @@ let rec argument_compatible expected actual =
     | TSeq expected_element, TSeq actual_element
     | TSet expected_element, TSet actual_element ->
         argument_compatible expected_element actual_element
+    | TSeq _, (TList _ | TVector _ | TSet _ | TArray _ | TString) ->
+        sequence_argument_compatible expected actual
+    | TSeq _, actual
+      when Option.is_some (Types.dynamic_map_types actual)
+           || Option.is_some (Types.seqable_constraint_info actual) ->
+        sequence_argument_compatible expected actual
     | _ when Types.assignable ~policy:Host_boundary ~expected ~actual -> true
     | TFn (expected_params, expected_return), TFn (actual_params, actual_return)
       when callback_parameters_compatible expected_params actual_params -> (
@@ -929,33 +977,6 @@ let named_argument_compatible expected actual =
   && Option.fold ~none:false ~some:(argument_compatible expected)
        (optional_payload actual))
 
-let sequence_argument_compatible expected actual =
-  let element_type = function
-    | TSeq element | TList element | TVector element | TSet element
-    | TArray element ->
-        Some element
-    | ty -> Types.next_seq_element ty
-  in
-  let expects_sequence =
-    match expected with
-    | TSeq _ -> true
-    | ty -> Option.is_some (Types.next_seq_element ty)
-  in
-  let requires_representation_conversion =
-    match actual with
-    | TList _ | TVector _ | TSet _ | TArray _ -> true
-    | _ -> false
-  in
-  let compatible =
-    expects_sequence && requires_representation_conversion
-    &&
-    match (element_type expected, element_type actual) with
-    | Some expected_element, Some actual_element ->
-        Types.assignable ~policy:Host_boundary ~expected:expected_element
-          ~actual:actual_element
-    | _ -> false
-  in
-  compatible
 
 let rec witness_storage = function
   | [] -> Semantic_ir.Unit
@@ -985,6 +1006,7 @@ let is_generated_callback_argument name =
   || String.starts_with ~prefix:"__lg_apply_argument_" name
   || String.starts_with ~prefix:"__lg_apply_head_" name
   || String.starts_with ~prefix:"__lg_apply_rest_item" name
+  || String.starts_with ~prefix:"__lg_seq_value_item" name
   || String.starts_with ~prefix:"__lg_protocol_witness_argument_" name
 
 let protocol_witness_expression protocol_id receiver =
@@ -7223,6 +7245,50 @@ let rec emit_argument_adaptation env adaptation argument =
                       ([ typed_dynamic_item_pattern env name actual_element ], mapped))
                in
                pack ~planned_element_mapper:mapper ()))
+  | Adaptation.Sequence_value witness -> (
+      let source =
+        match argument.ty with
+        | TUnknown | TVar _ | TMeta _ ->
+            Ok
+              ( Types.dynamic_constraint TUnknown,
+                Semantic_ir.Apply
+                  ( Semantic_ir.Ident "Lg_runtime.Runtime_dynamic.to_seq",
+                    [ argument.semantic_expr ] ) )
+        | _ ->
+            (* `argument.ty` is the callee-side parameter type, which is
+               already `seq` when the caller adapts a demoted parameter; the
+               conversion must be chosen from the caller-side source type
+               recorded in the witness instead. *)
+            Collection_capability.to_seq_expr env
+              (typed_ir witness.source_ty argument.semantic_expr)
+      in
+      match (source, witness.element_adaptation) with
+      | Error _ as error, _ -> error
+      | Ok (_, sequence), None -> Ok sequence
+      | Ok (_, sequence), Some (actual_element, adaptation) -> (
+          let item_name = "__lg_seq_value_item" in
+          let item =
+            typed_ir actual_element (Semantic_ir.Ident item_name)
+          in
+          match emit_argument_adaptation env adaptation item with
+          | Error _ as error -> error
+          | Ok mapped ->
+              if is_identity_conversion item_name mapped then Ok sequence
+              else
+                (* The mapper parameter carries the source element type so
+                   field labels inside the conversion resolve against the
+                   actual record, not the most recent declaration in scope. *)
+                Ok
+                  (Semantic_ir.Apply
+                     ( Semantic_ir.Ident "Lg_runtime.Runtime_seq.map",
+                       [
+                         Semantic_ir.Fun
+                           ([
+                              typed_dynamic_item_pattern env item_name
+                                actual_element;
+                            ], mapped);
+                         sequence;
+                       ] ))))
 
 let plan_argument_adaptation env ?row_type_name ?(protocol_storage = false)
     ?(allow_optional_unwrap = false) ~expected argument =
@@ -20940,6 +21006,18 @@ let create ~compile_expr =
                 in
                 let rec unify_argument ?(preserve_optional = false)
                     substitutions template actual =
+                  let template =
+                    match template with
+                    | TSeq element ->
+                        (* A `seq` parameter accepts any seqable actual; only
+                           the emitted OCaml signature is `Seq.t`. Unify
+                           against the seqable constraint so open actuals
+                           (row fields, metas) record the semantic
+                           requirement instead of the concrete sequence
+                           representation. *)
+                        Types.seqable_constraint element
+                    | _ -> template
+                  in
                   let template, actual =
                     if preserve_optional then (template, actual)
                     else align_optional_inference template actual
@@ -20989,6 +21067,32 @@ let create ~compile_expr =
                           Types.seqable_constraint_info actual,
                           Collection_capability.element_type_of_ty env actual )
                       with
+                      | None, None, Some actual_element
+                        when (match template with TSeq _ -> true | _ -> false)
+                             && (match actual with
+                                 | TSeq _ -> false
+                                 | _ -> true)
+                        ->
+                          (* Demoted seqable parameters (TSeq templates)
+                             accept any seqable actual; unify the element
+                             types so the callee's element meta still
+                             binds. A row record element cannot unify with a
+                             nominal record structurally, but the emitted
+                             argument adaptation converts element-wise. *)
+                          (match template with
+                          | TSeq expected_element -> (
+                              match
+                                unify_argument ~preserve_optional:true
+                                  substitutions expected_element actual_element
+                              with
+                              | Ok _ as ok -> ok
+                              | Error _
+                                when Types.row_compatible
+                                       ~expected:expected_element
+                                       ~actual:actual_element ->
+                                  Ok substitutions
+                              | Error _ as error -> error)
+                          | _ -> assert false)
                       | ( Some
                             ( ( `Required | `Optional | `Optional_sequential ),
                               expected_element,
@@ -21921,6 +22025,14 @@ let create ~compile_expr =
                                         (expects_dynamic_value expected_ty) ->
                                 dynamic_unpack env expected_ty
                                   (constrained_argument_value arg)
+                            | _, TSeq _
+                              when not (Types.equal expected_ty arg.ty) ->
+                                (* A Seq.t interface parameter accepts any
+                                   seqable source; the plan emits the
+                                   conversion (list/vector/map/string/etc. ->
+                                   Seq.t). *)
+                                plan_and_emit_argument env ~expected:expected_ty
+                                  arg
                             | _, TNamed_record record
                               when Types.is_dynamic arg.ty
                                  ||
@@ -22835,7 +22947,25 @@ let create ~compile_expr =
                   && List.for_all2
                        (fun expected (form, argument) ->
                          named_argument_compatible expected argument.ty
-                         || contextual_dynamic_lookup expected form argument)
+                         || contextual_dynamic_lookup expected form argument
+                         ||
+                         (* The compatibility predicates above are pure
+                            type-on-type checks without `env`. Bridge the
+                            two cases demoted sequence parameters create:
+                            a nominal seqable satisfying `seq`, and an
+                            eta-expansion bridging a function value whose
+                            parameter narrowed to `seq`. *)
+                         (match (expected, argument.ty) with
+                          | TSeq _, _ ->
+                              Collection_capability.accepts_seqable env
+                                argument.ty
+                          | TFn (expected_params, _), TFn (actual_params, _)
+                            when List.length expected_params
+                                 = List.length actual_params ->
+                              Result.is_ok
+                                (plan_and_emit_argument env ~expected
+                                   argument)
+                          | _ -> false))
                        parameter_tys (List.combine arg_forms args)
                 in
                 if contextual_call then
@@ -22909,7 +23039,9 @@ let create ~compile_expr =
                              | Some argument
                                when not
                                       (named_argument_compatible expected
-                                         argument.ty) ->
+                                         argument.ty
+                                       || sequence_argument_compatible expected
+                                            argument.ty) ->
                                  Some (index + 1, expected, argument)
                              | Some _ | None -> None)
                       |> List.find_map Fun.id
