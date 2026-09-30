@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- into_rejects_element_type_mismatch.cljc
+
+into source element type must match target element type
+
+1| (def x (into [1] ["two"]))
+          ^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 2408, column 13 to line 2411, column 44
+exit: 1

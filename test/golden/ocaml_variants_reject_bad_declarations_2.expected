@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- ocaml_variants_reject_bad_declarations_2.cljc
+
+duplicate variant constructor Active
+
+1| (type-variant status Active Active)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

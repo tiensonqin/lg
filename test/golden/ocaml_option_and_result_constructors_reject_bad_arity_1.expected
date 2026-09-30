@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- ocaml_option_and_result_constructors_reject_bad_arity_1.cljc
+
+Some expects 1 arguments
+
+1| (def value (Some ))
+              ^^^^^^^
+exit: 1

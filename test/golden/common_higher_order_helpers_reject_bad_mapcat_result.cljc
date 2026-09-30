@@ -1,0 +1,1 @@
+(def x (mapcat (fn [x] (+ x 1)) [1 2]))

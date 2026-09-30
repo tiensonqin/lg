@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- println_rejects_unknown_symbols.cljc
+
+unknown symbol missing
+
+1| (println missing)
+            ^^^^^^^
+exit: 1

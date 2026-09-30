@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- match_rejects_bad_clause_count.cljc
+
+match requires pattern/result pairs
+
+1| (def x (match 1 0 "zero" _))
+          ^^^^^^^^^^^^^^^^^^^^
+exit: 1

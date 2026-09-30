@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_4.cljc
+
+module-functor parameters must be symbols
+
+1| (module-functor Make [M :MathSig] (def answer 42))
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

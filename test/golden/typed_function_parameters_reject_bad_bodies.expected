@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- typed_function_parameters_reject_bad_bodies.cljc
+
+expected int arguments for +
+
+1| (defn bad [^:string x] (+ x 1))
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

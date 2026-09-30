@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- get_rejects_vector_default_type_mismatch.cljc
+
+get default for vector must match element type
+
+1| (def x (get [1 2] 9 "missing"))
+          ^^^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 793, columns 24-45
+exit: 1

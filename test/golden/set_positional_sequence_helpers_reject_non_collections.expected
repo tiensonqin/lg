@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- set_positional_sequence_helpers_reject_non_collections.cljc
+
+first expects a seqable value
+
+1| (def x (first 1))
+          ^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 472, columns 22-45
+exit: 1

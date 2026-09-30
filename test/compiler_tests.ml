@@ -1327,10 +1327,6 @@ let test_expected_apply_list_constrains_deref_reference_vector () =
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
 
-let test_map_rejects_duplicate_fields () =
-  let source = {|(def x {:name "Ada", :name "Grace"})|} in
-  Lg.Compiler.compile_string source |> expect_error "duplicate field :name"
-
 let test_hash_map_constructs_structural_maps () =
   let source =
     {|
@@ -1443,10 +1439,6 @@ let test_hash_map_duplicate_fields_use_last_value () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "hash_map_duplicate_fields_use_last_value" "Grace\n"
     ocaml_source
-
-let test_hash_map_rejects_odd_key_value_forms () =
-  Lg.Compiler.compile_string {|(def x (__lg_hash-map :name "Ada" :age))|}
-  |> expect_error "No value supplied for key: :age"
 
 let test_hash_map_empty_preserves_metadata () =
   let source =
@@ -2015,10 +2007,6 @@ let test_println_outputs_record_values () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "println_outputs_record_values"
     "{:name \"Ada\", :admin? true}\n" ocaml_source
-
-let test_println_rejects_unknown_symbols () =
-  compile_string_from_stdlib {|(println missing)|}
-  |> expect_error "unknown symbol missing"
 
 let test_print_and_println_match_clojure_output () =
   let source = {|
@@ -2660,10 +2648,6 @@ let test_when_bindings_return_nullable_body_values () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "when_bindings_return_nullable_body_values" "4:true\n"
     ocaml_source
-
-let test_nil_type_annotation_remains_explicitly_unsupported () =
-  Lg.Compiler.compile_string {|(defn bad [^:nil x] x)|}
-  |> expect_error "unknown parameter type ^:nil"
 
 let test_type_predicates () =
   let source =
@@ -13325,14 +13309,6 @@ let test_int_coerces_float_and_preserves_int () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "int_coerces_float_and_preserves_int" "3:4\n" ocaml_source
 
-let test_namespace_rejects_malformed_and_repeated_forms () =
-  Lg.Compiler.compile_string {|(ns)|}
-  |> expect_error "ns expects a namespace symbol and optional clauses";
-  Lg.Compiler.compile_string {|(ns :app)|}
-  |> expect_error "ns expects a namespace symbol and optional clauses";
-  Lg.Compiler.compile_string {|(ns app.one) (ns app.two)|}
-  |> expect_error "ns may only appear once at the start of a file"
-
 let test_keyword_or_string_parameters_require_a_closed_sum () =
   let source =
     {|
@@ -14879,16 +14855,6 @@ let test_ocaml_option_and_result_constructors_compile_through_source_backend ()
     "ocaml_option_and_result_constructors_compile_through_source_backend" ""
     ocaml_source
 
-let test_ocaml_option_and_result_constructors_reject_bad_arity () =
-  Lg.Compiler.compile_string {|(def value (Some ))|}
-  |> expect_error "Some expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (None 1))|}
-  |> expect_error "None expects 0 arguments";
-  Lg.Compiler.compile_string {|(def value (Ok ))|}
-  |> expect_error "Ok expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (Error ))|}
-  |> expect_error "Error expects 1 arguments"
-
 let test_direct_ocaml_option_and_result_constructors_compile () =
   let source =
     {|
@@ -15162,12 +15128,6 @@ let test_ocaml_type_application_annotations_delegate_argument_mismatch_to_ocaml
 (def bad (option-score present))
 |}
   |> expect_error_contains "string"
-
-let test_ocaml_type_application_annotations_reject_bad_forms () =
-  Lg.Compiler.compile_string {|(defn bad [^:option<> value] value)|}
-  |> expect_error "invalid type annotation ^:option<>";
-  Lg.Compiler.compile_string {|(defn bad [^:result<int> value] value)|}
-  |> expect_error "invalid type annotation ^:result<int>"
 
 let test_collection_type_application_annotations_preserve_nested_elements () =
   let source =
@@ -18958,14 +18918,6 @@ let test_ocaml_variant_constructors_reject_bad_arity () =
 |}
   |> expect_error "Named expects 1 arguments"
 
-let test_ocaml_variants_reject_bad_declarations () =
-  Lg.Compiler.compile_string {|(type-variant status)|}
-  |> expect_error "type-variant expects at least one constructor";
-  Lg.Compiler.compile_string {|(type-variant status Active Active)|}
-  |> expect_error "duplicate variant constructor Active";
-  Lg.Compiler.compile_string {|(type-variant status :Active)|}
-  |> expect_error "type-variant constructors must be symbols"
-
 let test_recursive_variants_support_nested_data_values () =
   let source =
     {|
@@ -19218,14 +19170,6 @@ let test_defonce_supports_top_level_and_module_values () =
   assert_ocaml_runs "defonce_supports_top_level_and_module_values" "42:ready\n"
     ocaml_source
 
-let test_defonce_rejects_invalid_declarations () =
-  Lg.Compiler.compile_string {|(defonce)|}
-  |> expect_error "defonce expects a name and value";
-  Lg.Compiler.compile_string {|(defonce value)|}
-  |> expect_error "defonce expects a name and value";
-  Lg.Compiler.compile_string {|(defonce value 1 2)|}
-  |> expect_error "defonce expects a name and value"
-
 let test_typed_function_parameters_reject_bad_calls () =
   let source = {|
 (defn inc1 [^:int x] (+ x 1))
@@ -19243,10 +19187,6 @@ let test_unit_annotations_reject_non_unit_arguments () =
   in
   Lg.Compiler.compile_string source
   |> expect_error_contains "accept-unit called with incompatible arguments"
-
-let test_typed_function_parameters_reject_bad_bodies () =
-  Lg.Compiler.compile_string {|(defn bad [^:string x] (+ x 1))|}
-  |> expect_error "expected int arguments for +"
 
 let test_typed_recursive_functions () =
   let source =
@@ -26186,10 +26126,6 @@ let test_vectors_use_closed_edn_for_mixed_keyword_and_string_elements () =
   if string_contains_substring ocaml_source "Runtime_dynamic" then
     failwith "heterogeneous EDN vectors must use the closed EDN value type"
 
-let test_arithmetic_rejects_non_int_arguments () =
-  Lg.Compiler.compile_string {|(def x (+ 1 "two"))|}
-  |> expect_error "expected int arguments for +"
-
 let test_arithmetic_core_arities () =
   let source =
     {|
@@ -26320,10 +26256,6 @@ let test_generic_get_with_nil_default_preserves_map_value_type () =
     "42\n" native;
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
-
-let test_get_rejects_default_type_mismatch_for_known_fields () =
-  Lg.Compiler.compile_string {|(def x (get {:age 36} :age "unknown"))|}
-  |> expect_error "get default for :age must be int"
 
 let test_get_supports_vectors () =
   let source =
@@ -26491,10 +26423,6 @@ let test_deftype_method_parameters_shadow_fields () =
   ignore
     (Lg.Compiler.compile_string ~target:Lg.Target.Melange source |> expect_ok)
 
-let test_get_rejects_vector_default_type_mismatch () =
-  Lg.Compiler.compile_string {|(def x (get [1 2] 9 "missing"))|}
-  |> expect_error "get default for vector must match element type"
-
 let test_assoc_supports_multiple_pairs () =
   let source =
     {|
@@ -26629,14 +26557,6 @@ let test_assoc_infers_vector_parameter_from_integer_index () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "assoc_infers_vector_parameter_from_integer_index"
     "2\n" ocaml_source
-
-let test_assoc_rejects_vector_value_type_mismatch () =
-  compile_string_with_stdlib {|(def x (assoc [1 2] 0 "one"))|}
-  |> expect_error "assoc vector value must match element type"
-
-let test_assoc_rejects_vector_non_int_indexes () =
-  compile_string_with_stdlib {|(def x (assoc [1 2] "0" 9))|}
-  |> expect_error "assoc vector index must be int"
 
 let test_dissoc_supports_multiple_keys () =
   let source =
@@ -28091,11 +28011,6 @@ let test_update_vector_append_allows_nil_predicate_result () =
     (compile_with_stdlib Lg.Target.Melange
        "app/update_vector_nil_predicate.cljc" source)
 
-let test_update_rejects_vector_index_type_mismatch () =
-  Lg.Compiler.compile_string
-    {|(def x (update [1 2] "0" (fn [value] (+ value 1))))|}
-  |> expect_error "update vector index must be int"
-
 let test_select_keys_ignores_unknown_fields () =
   let source =
     {|(println (= 0 (count (select-keys {:name "Ada"} [:age]))))|}
@@ -28113,10 +28028,6 @@ let test_contains_supports_vector_indexes () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "contains_supports_vector_indexes" "true:false:false\n"
     ocaml_source
-
-let test_contains_rejects_vector_non_int_indexes () =
-  compile_string_with_stdlib {|(def x (contains? [1 2] "0"))|}
-  |> expect_error "contains? vector index must be int"
 
 let test_if_requires_closed_sum_for_mixed_branch_types () =
   Lg.Compiler.compile_string {|(println (pr-str (if true 1 "one")))|}
@@ -45717,16 +45628,6 @@ let test_loop_and_recur_delegate_ocaml_owned_mismatch_to_ocaml () =
 |}
   |> expect_error_contains "string"
 
-let test_loop_and_recur_reject_invalid_calls () =
-  Lg.Compiler.compile_string {|(recur 1)|}
-  |> expect_error "recur is only valid in a loop tail position";
-  Lg.Compiler.compile_string {|(loop [n 1] (recur n 0))|}
-  |> expect_error "recur expects 1 arguments";
-  Lg.Compiler.compile_string {|(loop [n 1] (recur "one"))|}
-  |> expect_error "recur argument 1 must be int, got string";
-  Lg.Compiler.compile_string {|(loop [n 1] (+ 1 (recur (dec n))))|}
-  |> expect_error "recur is only valid in a loop tail position"
-
 let test_destructuring_in_let_and_functions () =
   let source =
     {|
@@ -46773,10 +46674,6 @@ let test_threaded_keyword_access_preserves_nested_record_inference () =
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Js_of_ocaml source |> expect_ok)
 
-let test_destructuring_rejects_unsupported_let_sources () =
-  Lg.Compiler.compile_string {|(def x (let [{:keys [name]} [1 2]] name))|}
-  |> expect_error "map destructuring expects a map"
-
 let test_map_destructuring_supports_typed_direct_keyword_bindings () =
   let source =
     {|
@@ -46794,15 +46691,6 @@ let test_map_destructuring_supports_typed_direct_keyword_bindings () =
     "42:all\n" ocaml_source;
   ignore
     (Lg.Compiler.compile_string ~target:Lg.Target.Melange source |> expect_ok)
-
-let test_destructuring_rejects_bad_rest_binding () =
-  Lg.Compiler.compile_string {|(def x (let [[head &] [1 2]] head))|}
-  |> expect_error "sequential destructuring & must be followed by a symbol"
-
-let test_destructuring_rejects_bad_or_defaults () =
-  Lg.Compiler.compile_string
-    {|(def x (let [{:keys [age] :or [age 0]} {:name "Ada"}] age))|}
-  |> expect_error "map destructuring :or expects a map"
 
 let test_sequence_core_api_on_vectors () =
   let source =
@@ -47648,29 +47536,15 @@ let test_some_preserves_static_record_element_types () =
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
 
-let test_common_higher_order_helpers_reject_bad_mapcat_result () =
-  compile_string_with_stdlib {|(def x (mapcat (fn [x] (+ x 1)) [1 2]))|}
-  |> expect_error "mapcat argument 1: collection value is not seqable: int"
-
 let test_common_higher_order_helpers_reject_bad_predicates () =
   compile_with_stdlib_result Lg.Target.Native
     "test/common_higher_order_helpers_bad_predicates.cljc"
     {|(def f (every-pred (fn [x] (+ x 1)) (fn [x] true)))|}
   |> expect_error_contains "expected of type"
 
-let test_common_higher_order_helpers_reject_mixed_juxt_returns () =
-  compile_with_stdlib_result Lg.Target.Native "test/mixed_juxt.cljc"
-    {|(def f (juxt (fn [x] (+ x 1)) (fn [x] (even? x))))|}
-  |> expect_error "juxt functions must return the same type"
-
 let test_common_higher_order_helpers_reject_compare_type_mismatch () =
   compile_string_with_stdlib {|(def x (compare 1 "1"))|}
   |> expect_error_contains "compare arguments must have the same type"
-
-let test_apply_rejects_bad_set_reducers () =
-  compile_with_stdlib_result Lg.Target.Native "test/apply_bad_set.cljc"
-    {|(def x (apply + (__lg_hash-set "a" "b")))|}
-  |> expect_error "apply argument type mismatch: expected int, got string"
 
 let test_apply_distinct_accepts_generic_seqable_values () =
   let source =
@@ -48211,10 +48085,6 @@ let test_set_positional_sequence_helpers () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "set_positional_sequence_helpers" "1:2:3:2:2:true\n"
     ocaml_source
-
-let test_set_positional_sequence_helpers_reject_non_collections () =
-  compile_string_with_stdlib {|(def x (first 1))|}
-  |> expect_error "first expects a seqable value"
 
 let test_conj_rejects_set_type_mismatch () =
   compile_with_stdlib_result Lg.Target.Native
@@ -49825,10 +49695,6 @@ let test_contains_freshens_generic_membership_across_set_modules () =
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
 
-let test_into_rejects_element_type_mismatch () =
-  Lg.Compiler.compile_string {|(def x (into [1] ["two"]))|}
-  |> expect_error "into source element type must match target element type"
-
 let test_typed_empty_sets () =
   let source =
     {|
@@ -49971,16 +49837,6 @@ let test_random_sample_accepts_nil_probability_on_melange () =
        ~target:Lg.Target.Melange
        ~filename:"test/random_sample_nil_probability.cljc" state source
      |> expect_ok)
-
-let test_set_of_rejects_nil_element_annotation () =
-  Lg.Compiler.compile_string {|(def values (set-of :nil))|}
-  |> expect_error "unknown set element type :nil"
-
-let test_set_of_rejects_types_without_comparators () =
-  Lg.Compiler.compile_string {|(def xs (set-of :record))|}
-  |> expect_error "sets require a generated comparator for record";
-  Lg.Compiler.compile_string {|(def xs (set-of :opaque))|}
-  |> expect_error "sets require a generated comparator for opaque"
 
 let test_set_of_preserves_supported_host_comparator_aliases () =
   let source = {|(println (empty? (set-of :ordering)))|} in
@@ -50145,14 +50001,6 @@ let test_subvec_core_api () =
     "[2 3 4]:[2 3]:[6 7]:[]:[10 11]:[14 15]\n" ocaml_source;
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
-
-let test_subvec_rejects_non_vector_sources () =
-  compile_string_with_stdlib {|(def x (subvec (__lg_list 1 2) 0))|}
-  |> expect_error "subvec expects a vector"
-
-let test_subvec_rejects_non_int_indexes () =
-  compile_string_with_stdlib {|(def x (subvec [1 2] "0"))|}
-  |> expect_error "subvec indexes must be int"
 
 let test_recursive_map_accumulator_specializes_from_static_consumer () =
   let source =
@@ -50495,10 +50343,6 @@ let test_result_let_star_rejects_invalid_bindings () =
   Lg.Compiler.compile_string {|(def x (let* [a 1] (Ok a)))|}
   |> (function Error _ -> () | Ok _ -> failwith "let* accepted a non-result binding")
 
-let test_let_rejects_odd_binding_forms () =
-  Lg.Compiler.compile_string {|(def x (let [a 1 b] a))|}
-  |> expect_error "let bindings require an even number of forms"
-
 let test_map_rejects_non_function_argument () =
   compile_string_with_stdlib {|(def xs (map 1 [1 2]))|}
   |> expect_error_contains "map expects a function, got int"
@@ -50541,14 +50385,6 @@ let test_match_requires_closed_sum_for_mixed_branch_types () =
       |> expect_error_contains
            "define a closed sum type containing every branch type")
     [ Lg.Target.Native; Lg.Target.Melange ]
-
-let test_match_rejects_bad_clause_count () =
-  Lg.Compiler.compile_string {|(def x (match 1 0 "zero" _))|}
-  |> expect_error "match requires pattern/result pairs"
-
-let test_match_rejects_pattern_type_mismatch () =
-  Lg.Compiler.compile_string {|(def x (match 1 "1" 1 _ 0))|}
-  |> expect_error "match pattern type must match target"
 
 let test_match_infers_target_type_from_patterns () =
   Lg.Compiler.compile_string
@@ -53057,20 +52893,6 @@ let test_try_supports_finally_with_and_without_catch () =
     "body\nnormal-finally\ncaught-finally\npropagated-finally\n42:boom:again\n"
     ocaml_source
 
-let test_try_and_raise_reject_malformed_forms () =
-  Lg.Compiler.compile_string {|(def value (try 42))|}
-  |> expect_error "try requires at least one catch or finally clause";
-  Lg.Compiler.compile_string {|(def value (try 42 (finally)))|}
-  |> expect_error "finally requires a body";
-  Lg.Compiler.compile_string {|(def value (try 42 (catch)))|}
-  |> expect_error "catch requires a pattern and body";
-  Lg.Compiler.compile_string {|(def value (try (catch _ 42)))|}
-  |> expect_error "try requires a body";
-  Lg.Compiler.compile_string {|(def value (raise))|}
-  |> expect_error "raise expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (raise 1 2))|}
-  |> expect_error "raise expects 1 arguments"
-
 let test_match_collection_rest_patterns () =
   let source = {|
 (type-variant envelope (Payload :list<int>))
@@ -53261,16 +53083,6 @@ let test_module_alias_targets_nested_modules () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "module_alias_targets_nested_modules" "hi Grace\n"
     ocaml_source
-
-let test_module_alias_rejects_bad_forms () =
-  Lg.Compiler.compile_string {|(module-alias M)|}
-  |> expect_error "module-alias expects alias and target modules"
-
-let test_include_module_rejects_bad_forms () =
-  Lg.Compiler.compile_string {|(include)|}
-  |> expect_error "include expects one module";
-  Lg.Compiler.compile_string {|(module App (include))|}
-  |> expect_error "include expects one module"
 
 let test_module_signatures_constrain_modules () =
   let source =
@@ -54246,22 +54058,6 @@ let test_module_functor_application_is_checked_by_ocaml () =
 (module-apply App Make Bad)
 |}
   |> expect_error_contains "not compatible"
-
-let test_module_functors_reject_bad_forms () =
-  Lg.Compiler.compile_string {|(module-functor Make M MathSig)|}
-  |> expect_error
-       "module-functor expects a name, [parameter signature ...], and body";
-  Lg.Compiler.compile_string {|(module-functor Make [] (def answer 42))|}
-  |> expect_error "module-functor parameter vector must not be empty";
-  Lg.Compiler.compile_string
-    {|(module-functor Make [M MathSig N] (def answer 42))|}
-  |> expect_error "module-functor parameters must be name/signature pairs";
-  Lg.Compiler.compile_string
-    {|(module-functor Make [M :MathSig] (def answer 42))|}
-  |> expect_error "module-functor parameters must be symbols";
-  Lg.Compiler.compile_string {|(module-apply App Make)|}
-  |> expect_error
-       "module-apply expects result, functor, and one or more argument modules"
 
 let test_module_definitions_support_open () =
   let source =
@@ -55965,7 +55761,6 @@ let tests =
     ( "generic IMap dissoc preserves key and value parameters",
       test_generic_imap_dissoc_preserves_key_and_value_parameters );
     ("dissoc accepts nullable keys", test_dissoc_accepts_nullable_keys);
-    ("map literals reject duplicate fields", test_map_rejects_duplicate_fields);
     ( "hash-map constructs structural maps",
       test_hash_map_constructs_structural_maps );
     ( "homogeneous map literals default to hash maps",
@@ -55989,8 +55784,6 @@ let tests =
       test_hash_map_is_callable_as_lookup_function );
     ( "hash-map duplicate fields use the last value",
       test_hash_map_duplicate_fields_use_last_value );
-    ( "hash-map rejects odd key value forms",
-      test_hash_map_rejects_odd_key_value_forms );
     ("map literals accept computed keys", test_map_literals_accept_computed_keys);
     ( "homogeneous maps do not emit anonymous record types",
       test_homogeneous_maps_do_not_emit_anonymous_record_types );
@@ -56025,7 +55818,6 @@ let tests =
     ( "declared and anonymous record vectors require a sum type",
       test_declared_and_anonymous_record_vectors_require_sum_type );
     ("println outputs record values", test_println_outputs_record_values);
-    ("println rejects unknown symbols", test_println_rejects_unknown_symbols);
     ( "print and println match Clojure output",
       test_print_and_println_match_clojure_output );
     ( "with-out-str captures source print functions",
@@ -56082,8 +55874,6 @@ let tests =
       test_logical_forms_lift_nilable_operands );
     ( "when bindings return nullable body values",
       test_when_bindings_return_nullable_body_values );
-    ( "nil type annotation remains explicitly unsupported",
-      test_nil_type_annotation_remains_explicitly_unsupported );
     ("type predicates work", test_type_predicates);
     ( "type predicates reject wrong arity",
       test_type_predicates_reject_wrong_arity );
@@ -56855,8 +56645,6 @@ let tests =
       test_rand_int_uses_exclusive_positive_bound );
     ( "int coerces float and preserves int",
       test_int_coerces_float_and_preserves_int );
-    ( "namespace rejects malformed and repeated forms",
-      test_namespace_rejects_malformed_and_repeated_forms );
     ( "keyword or string parameters require a closed sum",
       test_keyword_or_string_parameters_require_a_closed_sum );
     ( "re-matches returns Clojure match values",
@@ -57040,8 +56828,6 @@ let tests =
     ( "OCaml option and result constructors compile through source backend",
       test_ocaml_option_and_result_constructors_compile_through_source_backend
     );
-    ( "OCaml option and result constructors reject bad arity",
-      test_ocaml_option_and_result_constructors_reject_bad_arity );
     ( "direct OCaml option and result constructors compile",
       test_direct_ocaml_option_and_result_constructors_compile );
     ( "OCaml option literal patterns infer open targets",
@@ -57061,8 +56847,6 @@ let tests =
     ( "OCaml type application annotations delegate argument mismatch to OCaml",
       test_ocaml_type_application_annotations_delegate_argument_mismatch_to_ocaml
     );
-    ( "OCaml type application annotations reject bad forms",
-      test_ocaml_type_application_annotations_reject_bad_forms );
     ( "syntax ergonomics: concise host type annotations compile",
       test_concise_host_type_annotations_compile );
     ( "source option annotations remain nullable until lowering",
@@ -57332,8 +57116,6 @@ let tests =
       test_declared_empty_map_default_is_static );
     ( "OCaml variant constructors reject bad arity",
       test_ocaml_variant_constructors_reject_bad_arity );
-    ( "OCaml variants reject bad declarations",
-      test_ocaml_variants_reject_bad_declarations );
     ( "recursive variants support nested data values",
       test_recursive_variants_support_nested_data_values );
     ( "recursive variants support callback results",
@@ -57352,14 +57134,10 @@ let tests =
       test_module_recursive_variants_export_constructors );
     ( "defonce supports top-level and module values",
       test_defonce_supports_top_level_and_module_values );
-    ( "defonce rejects invalid declarations",
-      test_defonce_rejects_invalid_declarations );
     ( "typed function parameters reject bad calls",
       test_typed_function_parameters_reject_bad_calls );
     ( "unit annotations reject non-unit arguments",
       test_unit_annotations_reject_non_unit_arguments );
-    ( "typed function parameters reject bad bodies",
-      test_typed_function_parameters_reject_bad_bodies );
     ( "typed recursive functions", test_typed_recursive_functions );
     ( "recursive option array return is inferred from static branches",
       test_recursive_option_array_return_is_inferred_from_static_branches );
@@ -57955,8 +57733,6 @@ let tests =
     ("vals rejects heterogeneous values", test_vals_rejects_heterogeneous_values);
     ( "vectors use closed EDN for mixed keyword and string elements",
       test_vectors_use_closed_edn_for_mixed_keyword_and_string_elements );
-    ( "arithmetic rejects non-int arguments",
-      test_arithmetic_rejects_non_int_arguments );
     ("arithmetic core arities work", test_arithmetic_core_arities);
     ( "integer division supports source unary reciprocal",
       test_integer_division_supports_source_unary_reciprocal );
@@ -57970,8 +57746,6 @@ let tests =
     ("get supports default values", test_get_supports_default_values);
     ( "generic get with nil default preserves map value type",
       test_generic_get_with_nil_default_preserves_map_value_type );
-    ( "get rejects default type mismatch for known fields",
-      test_get_rejects_default_type_mismatch_for_known_fields );
     ("get supports vectors", test_get_supports_vectors);
     ( "get dispatches nullable deftype lookup with dynamic keys",
       test_get_dispatches_nullable_deftype_lookup_with_dynamic_keys );
@@ -57987,8 +57761,6 @@ let tests =
       test_forward_dynamic_deftype_lookup_registration );
     ( "deftype method parameters shadow fields",
       test_deftype_method_parameters_shadow_fields );
-    ( "get rejects vector default type mismatch",
-      test_get_rejects_vector_default_type_mismatch );
     ("assoc supports multiple pairs", test_assoc_supports_multiple_pairs);
     ("assoc treats nil as empty map", test_assoc_treats_nil_as_empty_map);
     ("assoc preserves vector metadata", test_assoc_preserves_vector_metadata);
@@ -58002,10 +57774,6 @@ let tests =
     ("assoc supports vector indexes", test_assoc_supports_vector_indexes);
     ( "assoc infers vector parameter from integer index",
       test_assoc_infers_vector_parameter_from_integer_index );
-    ( "assoc rejects vector value type mismatch",
-      test_assoc_rejects_vector_value_type_mismatch );
-    ( "assoc rejects vector non-int indexes",
-      test_assoc_rejects_vector_non_int_indexes );
     ("dissoc supports multiple keys", test_dissoc_supports_multiple_keys);
     ( "map merge, update, and select-keys work",
       test_map_merge_update_and_select_keys );
@@ -58115,13 +57883,9 @@ let tests =
       test_update_supports_vector_identity_and_ifn_updaters );
     ( "update vector append allows nil predicate result",
       test_update_vector_append_allows_nil_predicate_result );
-    ( "update rejects vector index type mismatch",
-      test_update_rejects_vector_index_type_mismatch );
     ( "select-keys ignores unknown fields",
       test_select_keys_ignores_unknown_fields );
     ("contains supports vector indexes", test_contains_supports_vector_indexes);
-    ( "contains rejects vector non-int indexes",
-      test_contains_rejects_vector_non_int_indexes );
     ( "if requires closed sum for mixed branch types",
       test_if_requires_closed_sum_for_mixed_branch_types );
     ("conditional forms work", test_conditional_forms_work);
@@ -59207,8 +58971,6 @@ let tests =
       test_loop_and_recur_delegate_ocaml_owned_alias_compatibility );
     ( "loop and recur delegate OCaml-owned mismatch to OCaml",
       test_loop_and_recur_delegate_ocaml_owned_mismatch_to_ocaml );
-    ( "loop and recur reject invalid calls",
-      test_loop_and_recur_reject_invalid_calls );
     ( "destructuring works in let and functions",
       test_destructuring_in_let_and_functions );
     ( "destructuring supports direct keyword bindings",
@@ -59295,12 +59057,6 @@ let tests =
       test_variadic_nested_seqable_preserves_static_witness );
     ( "threaded keyword access preserves nested record inference",
       test_threaded_keyword_access_preserves_nested_record_inference );
-    ( "destructuring rejects unsupported let sources",
-      test_destructuring_rejects_unsupported_let_sources );
-    ( "destructuring rejects bad rest binding",
-      test_destructuring_rejects_bad_rest_binding );
-    ( "destructuring rejects bad or defaults",
-      test_destructuring_rejects_bad_or_defaults );
     ("sequence core api works on vectors", test_sequence_core_api_on_vectors);
     ("function helpers work", test_function_helpers);
     ( "source apply resolves through ordinary namespaces",
@@ -59386,12 +59142,8 @@ let tests =
       test_remove_preserves_static_record_element_types );
     ( "some preserves static record element types",
       test_some_preserves_static_record_element_types );
-    ( "common higher-order helpers reject bad mapcat result",
-      test_common_higher_order_helpers_reject_bad_mapcat_result );
     ( "common higher-order helpers reject bad predicates",
       test_common_higher_order_helpers_reject_bad_predicates );
-    ( "common higher-order helpers reject mixed juxt returns",
-      test_common_higher_order_helpers_reject_mixed_juxt_returns );
     ( "common higher-order helpers reject compare type mismatch",
       test_common_higher_order_helpers_reject_compare_type_mismatch );
     ( "apply distinct accepts generic seqable values",
@@ -59410,7 +59162,6 @@ let tests =
       test_record_constructors_preserve_explicit_ref_fields );
     ( "nil and sequential guards preserve seqability",
       test_nil_and_sequential_guards_preserve_seqability );
-    ("apply rejects bad set reducers", test_apply_rejects_bad_set_reducers);
     ("set core api works", test_set_core_api);
     ("sets support named records", test_sets_support_named_records);
     ( "anonymous record fields parameterize polymorphic sets",
@@ -59449,8 +59200,6 @@ let tests =
       test_set_accepts_a_char_as_a_singleton_on_melange );
     ( "set positional sequence helpers work",
       test_set_positional_sequence_helpers );
-    ( "set positional sequence helpers reject non-collections",
-      test_set_positional_sequence_helpers_reject_non_collections );
     ("conj rejects set type mismatch", test_conj_rejects_set_type_mismatch);
     ("disj rejects set type mismatch", test_disj_rejects_set_type_mismatch);
     ("set sequence core api works", test_set_sequence_core_api);
@@ -59599,8 +59348,6 @@ let tests =
       test_contains_preserves_optional_map_entry_keys );
     ( "contains? freshens generic membership across set modules",
       test_contains_freshens_generic_membership_across_set_modules );
-    ( "into rejects element type mismatch",
-      test_into_rejects_element_type_mismatch );
     ("typed empty sets work", test_typed_empty_sets);
     ("sets support nil elements", test_sets_support_nil_elements);
     ("sets support seqable elements", test_sets_support_seqable_elements);
@@ -59610,10 +59357,6 @@ let tests =
       test_random_sample_accepts_nil_collections_from_saved_state );
     ( "random-sample accepts nil probability on melange",
       test_random_sample_accepts_nil_probability_on_melange );
-    ( "set-of rejects nil element annotation",
-      test_set_of_rejects_nil_element_annotation );
-    ( "set-of rejects types without comparators",
-      test_set_of_rejects_types_without_comparators );
     ( "set-of preserves supported host comparator aliases",
       test_set_of_preserves_supported_host_comparator_aliases );
     ( "keyword type annotations for empty collections work",
@@ -59631,8 +59374,6 @@ let tests =
       test_conj_promotes_mixed_list_edn_values );
     ("collection positional helpers work", test_collection_positional_helpers);
     ("subvec core api works", test_subvec_core_api);
-    ("subvec rejects non-vector sources", test_subvec_rejects_non_vector_sources);
-    ("subvec rejects non-int indexes", test_subvec_rejects_non_int_indexes);
     ( "recursive map accumulator specializes from static consumer",
       test_recursive_map_accumulator_specializes_from_static_consumer );
     ( "recursive vector accumulator infers from typed vector operation",
@@ -59641,14 +59382,10 @@ let tests =
       test_reduce_partition_callback_infers_static_accumulator_and_items );
     ( "peek rejects unsupported collections",
       test_peek_rejects_unsupported_collections );
-    ("let rejects odd binding forms", test_let_rejects_odd_binding_forms);
     ("map rejects non-function argument", test_map_rejects_non_function_argument);
     ("match expression works", test_match_expression_works);
     ( "match requires closed sum for mixed branch types",
       test_match_requires_closed_sum_for_mixed_branch_types );
-    ("match rejects bad clause count", test_match_rejects_bad_clause_count);
-    ( "match rejects pattern type mismatch",
-      test_match_rejects_pattern_type_mismatch );
     ( "match infers target type from patterns",
       test_match_infers_target_type_from_patterns );
     ( "match infers variant target type from patterns",
@@ -59796,8 +59533,6 @@ let tests =
       test_try_supports_normal_results_multiple_body_forms_and_handlers );
     ( "try supports finally with and without catch",
       test_try_supports_finally_with_and_without_catch );
-    ( "try and raise reject malformed forms",
-      test_try_and_raise_reject_malformed_forms );
     ( "try requires closed sum for mixed branch types",
       test_try_requires_closed_sum_for_mixed_branch_types );
     ("raise payload is checked by OCaml", test_raise_payload_is_checked_by_ocaml);
@@ -59845,8 +59580,6 @@ let tests =
       test_lowercase_host_aliases_qualify_constructor_patterns );
     ( "module alias targets nested modules",
       test_module_alias_targets_nested_modules );
-    ("module alias rejects bad forms", test_module_alias_rejects_bad_forms);
-    ("include module rejects bad forms", test_include_module_rejects_bad_forms);
     ( "module signatures constrain modules",
       test_module_signatures_constrain_modules );
     ( "module signature ascription is checked by OCaml",
@@ -59918,7 +59651,6 @@ let tests =
       test_module_functor_application_is_checked_by_ocaml );
     ( "multi-parameter functor application is checked by OCaml",
       test_multi_parameter_functor_application_is_checked_by_ocaml );
-    ("module functors reject bad forms", test_module_functors_reject_bad_forms);
     ( "incremental compilation preserves protocols",
       test_incremental_compilation_preserves_protocols );
     ( "incremental compile_chunk runs OCaml typecheck gate",

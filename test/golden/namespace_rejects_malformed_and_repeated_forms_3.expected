@@ -1,0 +1,4 @@
+-- COMPILATION ERROR [LG2000] -- <unknown>
+
+ns may only appear once at the start of a file
+exit: 1

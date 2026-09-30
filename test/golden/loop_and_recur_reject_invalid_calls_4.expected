@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- loop_and_recur_reject_invalid_calls_4.cljc
+
+recur is only valid in a loop tail position
+
+1| (loop [n 1] (+ 1 (recur (dec n))))
+                    ^^^^^^^^^^^^^^^
+exit: 1

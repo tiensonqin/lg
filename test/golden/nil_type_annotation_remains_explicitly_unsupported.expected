@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- nil_type_annotation_remains_explicitly_unsupported.cljc
+
+unknown parameter type ^:nil
+
+1| (defn bad [^:nil x] x)
+   ^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

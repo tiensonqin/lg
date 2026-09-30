@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- update_rejects_vector_index_type_mismatch.cljc
+
+update vector index must be int
+
+1| (def x (update [1 2] "0" (fn [value] (+ value 1))))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 5694, column 5 to line 5705, column 37
+exit: 1

@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- try_and_raise_reject_malformed_forms_6.cljc
+
+raise expects 1 arguments
+
+1| (def value (raise 1 2))
+              ^^^^^^^^^^^
+exit: 1

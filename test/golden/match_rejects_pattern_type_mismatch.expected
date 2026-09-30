@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- match_rejects_pattern_type_mismatch.cljc
+
+match pattern type must match target
+
+1| (def x (match 1 "1" 1 _ 0))
+          ^^^^^^^^^^^^^^^^^^^
+exit: 1

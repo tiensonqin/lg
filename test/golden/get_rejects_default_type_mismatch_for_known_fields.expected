@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- get_rejects_default_type_mismatch_for_known_fields.cljc
+
+get default for :age must be int
+
+1| (def x (get {:age 36} :age "unknown"))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 793, columns 24-45
+exit: 1

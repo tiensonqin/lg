@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- defonce_rejects_invalid_declarations_3.cljc
+
+defonce expects a name and value
+
+1| (defonce value 1 2)
+   ^^^^^^^^^^^^^^^^^^^
+exit: 1
