@@ -103,7 +103,7 @@ let rec stringify_expr_ir ?(pr = false) ?print_length ?print_level expr =
           ( [ Semantic_ir.PVar "value" ],
             stringify_expr_ir ~pr ?print_length ?print_level
               (typed_ir ty (Semantic_ir.Ident "value")) )
-    | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+    | ty when Option.is_some (Types.next_seq_element ty) ->
         Semantic_ir.Fun
           ( [ Semantic_ir.PVar "value" ],
             stringify_expr_ir ~pr ?print_length ?print_level
@@ -182,7 +182,8 @@ let rec stringify_expr_ir ?(pr = false) ?print_length ?print_level expr =
         [ expr.semantic_expr ]
   | TOcaml "value" ->
       Semantic_ir.Sequence [ expr.semantic_expr; Semantic_ir.String "<value>" ]
-  | TOcaml_app (name, [ inner ]) when Types.is_next_seq_type_name name ->
+  | ty when Option.is_some (Types.next_seq_element ty) ->
+      let inner = Option.get (Types.next_seq_element ty) in
       render_print_level ?print_level (fun child_print_level ->
           Semantic_ir.If
             ( apply "Lg_runtime.Runtime_seq.is_empty" [ expr.semantic_expr ],
@@ -196,7 +197,8 @@ let rec stringify_expr_ir ?(pr = false) ?print_length ?print_level expr =
                           [ expr.semantic_expr ];
                       ]))
                 ")" ))
-  | TArray _ | TRef _ | TOcaml _ | TOcaml_app _ | TTuple _ | TConstraint _ ->
+  | TArray _ | TRef _ | TOcaml _ | TOcaml_app _ | TTuple _ | TConstraint _
+  | TCompiler _ ->
       Semantic_ir.String "<value>"
   | TList inner ->
       render_print_level ?print_level (fun child_print_level ->

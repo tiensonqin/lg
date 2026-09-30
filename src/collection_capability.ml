@@ -116,13 +116,18 @@ let find_canonical_record env source_name =
   | _ -> (
       match records with [ record ] -> Some record | _ -> None)
 
-let resolve_host_record env = function
+let rec resolve_host_record env = function
   | TNamed_record _ as ty -> ty
-  | TOcaml name as ty when String.starts_with ~prefix:"__lg_record:" name ->
-      let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
-      in
+  | TOcaml name
+    when String.starts_with ~prefix:Types.record_marker_prefix name ->
+      resolve_host_record env
+        (TCompiler
+           (Named_record_marker
+              (String.sub name
+                 (String.length Types.record_marker_prefix)
+                 (String.length name
+                 - String.length Types.record_marker_prefix))))
+  | TCompiler (Named_record_marker source_name) as ty ->
       let local_name =
         match String.rindex_opt source_name '/' with
         | None -> source_name
@@ -177,10 +182,19 @@ let rec resolve_callback_record env = function
   | TOcaml_app (name, arguments) ->
       TOcaml_app (name, List.map (resolve_callback_record env) arguments)
   | TTuple items -> TTuple (List.map (resolve_callback_record env) items)
-  | TOcaml name as ty when String.starts_with ~prefix:"__lg_record:" name ->
+  | TCompiler (Named_record_marker source_name) as ty ->
+      (match find_canonical_record env source_name with
+      | Some record -> TNamed_record record
+      | None -> resolve_host_record env ty)
+  | TCompiler marker ->
+      TCompiler
+        (Semantic_type.map_compiler_marker (resolve_callback_record env) marker)
+  | TOcaml name as ty
+    when String.starts_with ~prefix:Types.record_marker_prefix name ->
       let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
+        String.sub name
+          (String.length Types.record_marker_prefix)
+          (String.length name - String.length Types.record_marker_prefix)
       in
       (match find_canonical_record env source_name with
       | Some record -> TNamed_record record

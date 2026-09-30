@@ -47,7 +47,7 @@ let type_constructor name args =
   Ast_helper.Typ.constr ~loc (lid (longident_of_string name)) args
 
 let rec core_type ?(inference_variables = []) ?(type_variables = []) = function
-  | Types.TOcaml_app (name, [Types.TOcaml signature]) when name = Types.module_package_name ->
+  | Types.TCompiler (Module_package signature) ->
       Ast_helper.Typ.package ~loc (Ast_helper.Typ.package_type ~loc (lid (longident_of_string signature)) [])
   | Types.TPoly_variant row ->
       let fields = List.map (fun (tag, payload) ->
@@ -203,10 +203,9 @@ let rec core_type ?(inference_variables = []) ?(type_variables = []) = function
               [ core_type ~inference_variables ~type_variables witness_ty ]);
           (None, core_type ~inference_variables ~type_variables value_ty);
         ]
-  | Types.TOcaml_app (name, [ method_ty ])
-    when name = Types.reify_self_method_name ->
+  | Types.TCompiler (Reify_self_method method_ty) ->
       core_type ~inference_variables ~type_variables method_ty
-  | (Types.TOcaml_app _ as ty)
+  | (Types.TCompiler _ as ty)
     when Option.is_some (Types.reify_protocol_payload_info ty) ->
       let _, methods_ty, rest_ty =
         Types.reify_protocol_payload_info ty |> Option.get
@@ -216,12 +215,17 @@ let rec core_type ?(inference_variables = []) ?(type_variables = []) = function
           (None, core_type ~inference_variables ~type_variables methods_ty);
           (None, core_type ~inference_variables ~type_variables rest_ty);
         ]
+  | Types.TCompiler (Next_seq inner | Reversible_next_seq inner) ->
+      type_constructor "Seq.t" [ core_type ~inference_variables ~type_variables inner ]
   | Types.TOcaml_app (name, [ inner ]) when Types.is_next_seq_type_name name ->
       type_constructor "Seq.t" [ core_type ~inference_variables ~type_variables inner ]
-  | Types.TOcaml_app (name, [ inner ])
-    when name = Types.maybe_reduced_callback_type_name ->
+  | Types.TCompiler (Maybe_reduced_callback inner) ->
       type_constructor Types.reduced_type_name
         [ core_type ~inference_variables ~type_variables inner ]
+  | Types.TCompiler marker ->
+      type_constructor (Types.compiler_marker_type_name marker)
+        (List.map (core_type ~inference_variables ~type_variables)
+           (Semantic_type.compiler_marker_children marker))
   | Types.TOcaml_app (name, args) ->
       Ast_helper.Typ.constr ~loc (lid (longident_of_string name))
         (List.map (core_type ~inference_variables ~type_variables) args)
@@ -325,6 +329,9 @@ let rec type_mentions name = function
   | Types.TOcaml candidate -> candidate = name
   | Types.TOcaml_app (candidate, args) ->
       candidate = name || List.exists (type_mentions name) args
+  | Types.TCompiler marker ->
+      List.exists (type_mentions name)
+        (Semantic_type.compiler_marker_children marker)
   | Types.TTuple args -> List.exists (type_mentions name) args
   | Types.TConstraint constraint_ ->
       List.exists (type_mentions name) (Types.constraint_children constraint_)
@@ -637,6 +644,11 @@ let rec collect_set_modules_from_type module_path modules = function
       List.fold_left
         (collect_set_modules_from_type module_path)
         modules arguments
+  | Types.TCompiler marker ->
+      List.fold_left
+        (collect_set_modules_from_type module_path)
+        modules
+        (Semantic_type.compiler_marker_children marker)
   | Types.TConstraint constraint_ ->
       List.fold_left
         (collect_set_modules_from_type module_path)

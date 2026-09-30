@@ -8,6 +8,8 @@ let rec contains_unresolved_type = function
       contains_unresolved_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_unresolved_type arguments
+  | TCompiler marker ->
+      List.exists contains_unresolved_type (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists contains_unresolved_type (constraint_children constraint_)
   | TFn (parameters, return_ty) ->

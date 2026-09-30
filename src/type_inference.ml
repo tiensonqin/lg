@@ -2123,7 +2123,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     match constructor_type_name name with
     | None -> None
     | Some type_name -> (
-        match resolve_named_record (TOcaml ("__lg_record:" ^ type_name)) with
+        match resolve_named_record (Types.named_record_marker type_name) with
         | TNamed_record record ->
             Some
               (TFn
@@ -2152,7 +2152,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
       | Error _ as error when String.ends_with ~suffix:"." name ->
           let type_name = String.sub name 0 (String.length name - 1) in
           (match
-             resolve_named_record (TOcaml ("__lg_record:" ^ type_name))
+             resolve_named_record (Types.named_record_marker type_name)
            with
           | TNamed_record record ->
               Ok
@@ -8466,7 +8466,10 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
           match inferred_form_type params target with
           | TList _ -> TList element_ty
           | TSeq _ -> TSeq element_ty
-          | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+          | TCompiler (Next_seq _ | Reversible_next_seq _) ->
+              TSeq element_ty
+          | TOcaml_app (name, [ _ ])
+            when Types.is_next_seq_type_name name ->
               TSeq element_ty
           | TSet inner -> (
               let element_ty =

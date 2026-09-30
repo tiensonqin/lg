@@ -31,6 +31,24 @@ type ty =
   | TPoly_variant of variant_row
   | TRecord of field list
   | TNamed_record of named_record
+  | TCompiler of compiler_marker
+
+(* Closed set of compiler-internal type markers. These replace the
+   reserved __lg_* names that used to be smuggled through TOcaml /
+   TOcaml_app so user-facing OCaml names can never collide with them. *)
+and compiler_marker =
+  | Module_package of string
+  | Constant_function of ty
+  | Reify_self_method of ty
+  | Reify_protocol_payload of string * ty * ty
+  | Next_seq of ty
+  | Reversible_next_seq of ty
+  | Maybe_reduced_callback of ty
+  | Optional_map_adapter of ty * ty
+  | Named_record_marker of string
+  | Named_record_app_marker of string * ty list
+  | Protocol_marker
+  | Date_millis
 
 and row_bound = Exact_row | Lower_row | Upper_row | Bounded_row of string list
 and variant_row = { tags : (string * ty option) list; bound : row_bound }
@@ -152,6 +170,94 @@ let map_constraint map constraint_ =
           Protocol_constraint { protocol with witness; value })
         witness value
 
+let map_compiler_marker map marker =
+  let map_one build value =
+    let mapped = map value in
+    if mapped == value then marker else build mapped
+  in
+  let map_two build left right =
+    let mapped_left = map left in
+    let mapped_right = map right in
+    if mapped_left == left && mapped_right == right then marker
+    else build mapped_left mapped_right
+  in
+  match marker with
+  | Module_package _ | Named_record_marker _ | Protocol_marker | Date_millis ->
+      marker
+  | Named_record_app_marker (name, args) ->
+      let mapped = List.map map args in
+      if
+        List.length mapped = List.length args
+        && List.for_all2 ( == ) mapped args
+      then marker
+      else Named_record_app_marker (name, mapped)
+  | Constant_function ty -> map_one (fun ty -> Constant_function ty) ty
+  | Reify_self_method ty -> map_one (fun ty -> Reify_self_method ty) ty
+  | Reify_protocol_payload (id, methods, rest) ->
+      map_two
+        (fun methods rest -> Reify_protocol_payload (id, methods, rest))
+        methods rest
+  | Next_seq ty -> map_one (fun ty -> Next_seq ty) ty
+  | Reversible_next_seq ty ->
+      map_one (fun ty -> Reversible_next_seq ty) ty
+  | Maybe_reduced_callback ty ->
+      map_one (fun ty -> Maybe_reduced_callback ty) ty
+  | Optional_map_adapter (key, value) ->
+      map_two
+        (fun key value -> Optional_map_adapter (key, value))
+        key value
+
+let replace_compiler_marker_children marker children =
+  let remaining = ref children in
+  let next _ =
+    match !remaining with
+    | ty :: rest ->
+        remaining := rest;
+        ty
+    | [] -> invalid_arg "Semantic_type.replace_compiler_marker_children"
+  in
+  let marker = map_compiler_marker next marker in
+  match !remaining with
+  | [] -> marker
+  | _ :: _ -> invalid_arg "Semantic_type.replace_compiler_marker_children"
+
+let fold_map_compiler_marker f acc = function
+  | ( Module_package _ | Named_record_marker _ | Protocol_marker | Date_millis
+    ) as marker ->
+      (acc, marker)
+  | Named_record_app_marker (name, args) ->
+      let acc, mapped =
+        List.fold_left
+          (fun (acc, mapped) arg ->
+            let acc, arg = f acc arg in
+            (acc, arg :: mapped))
+          (acc, []) args
+      in
+      (acc, Named_record_app_marker (name, List.rev mapped))
+  | Constant_function ty ->
+      let acc, ty = f acc ty in
+      (acc, Constant_function ty)
+  | Reify_self_method ty ->
+      let acc, ty = f acc ty in
+      (acc, Reify_self_method ty)
+  | Reify_protocol_payload (id, methods, rest) ->
+      let acc, methods = f acc methods in
+      let acc, rest = f acc rest in
+      (acc, Reify_protocol_payload (id, methods, rest))
+  | Next_seq ty ->
+      let acc, ty = f acc ty in
+      (acc, Next_seq ty)
+  | Reversible_next_seq ty ->
+      let acc, ty = f acc ty in
+      (acc, Reversible_next_seq ty)
+  | Maybe_reduced_callback ty ->
+      let acc, ty = f acc ty in
+      (acc, Maybe_reduced_callback ty)
+  | Optional_map_adapter (key, value) ->
+      let acc, key = f acc key in
+      let acc, value = f acc value in
+      (acc, Optional_map_adapter (key, value))
+
 let map_children map = function
   | TPoly_variant row ->
       TPoly_variant
@@ -163,6 +269,7 @@ let map_children map = function
               row.tags;
         }
   | TNullable ty -> TNullable (map ty)
+  | TCompiler marker -> TCompiler (map_compiler_marker map marker)
   | TOcaml_app (name, arguments) -> TOcaml_app (name, List.map map arguments)
   | TConstraint constraint_ -> TConstraint (map_constraint map constraint_)
   | TTuple types -> TTuple (List.map map types)
@@ -198,3 +305,36 @@ let map_children map = function
   | ( TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol | TKeyword
     | TBool | TUnit | TNil | TUnknown | TMeta _ | TVar _ | TOcaml _ ) as ty ->
       ty
+
+(* Two markers share the old __lg_* type name exactly when their
+   constructor and embedded names agree. *)
+let compiler_marker_same_name left right =
+  match (left, right) with
+  | Module_package left, Module_package right -> String.equal left right
+  | Reify_protocol_payload (left, _, _), Reify_protocol_payload (right, _, _)
+    ->
+      String.equal left right
+  | Named_record_marker left, Named_record_marker right ->
+      String.equal left right
+  | Named_record_app_marker (left, _), Named_record_app_marker (right, _) ->
+      String.equal left right
+  | Constant_function _, Constant_function _
+  | Reify_self_method _, Reify_self_method _
+  | Next_seq _, Next_seq _
+  | Reversible_next_seq _, Reversible_next_seq _
+  | Maybe_reduced_callback _, Maybe_reduced_callback _
+  | Optional_map_adapter _, Optional_map_adapter _
+  | Protocol_marker, Protocol_marker
+  | Date_millis, Date_millis ->
+      true
+  | _ -> false
+
+let compiler_marker_children = function
+  | Module_package _ | Named_record_marker _ | Protocol_marker | Date_millis ->
+      []
+  | Constant_function ty | Reify_self_method ty | Next_seq ty
+  | Reversible_next_seq ty | Maybe_reduced_callback ty ->
+      [ ty ]
+  | Reify_protocol_payload (_, methods, rest) -> [ methods; rest ]
+  | Optional_map_adapter (key, value) -> [ key; value ]
+  | Named_record_app_marker (_, args) -> args

@@ -520,6 +520,11 @@ and refine_nonmatching_type existing inferred =
         (refine_type
            (Option.get (Types.seqable_constraint_element existing))
            inferred)
+  | TCompiler (Next_seq existing | Reversible_next_seq existing), inferred
+    when Option.is_some (Types.seqable_constraint_element inferred) ->
+      Types.next_seq
+        (refine_type existing
+           (Option.get (Types.seqable_constraint_element inferred)))
   | TOcaml_app (name, [ existing ]), inferred
     when Types.is_next_seq_type_name name
          && Option.is_some (Types.seqable_constraint_element inferred) ->
@@ -629,6 +634,8 @@ and inferred_row_compatible structural named =
     | Some (_, expected_element, _), TSet actual_element
     | Some (_, expected_element, _), TSeq actual_element
     | Some (_, expected_element, _), TArray actual_element ->
+        compatible expected_element actual_element
+    | Some (_, expected_element, _), TCompiler (Next_seq actual_element | Reversible_next_seq actual_element) ->
         compatible expected_element actual_element
     | Some (_, expected_element, _), TOcaml_app (name, [ actual_element ])
       when Types.is_next_seq_type_name name ->

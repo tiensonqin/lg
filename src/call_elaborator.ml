@@ -211,11 +211,7 @@ let unreachable_narrowed_value ty kind =
          [ Semantic_ir.String ("unreachable " ^ kind ^ " branch") ] ))
 
 let resolve_closed_sum_payload env = function
-  | TOcaml name as ty when String.starts_with ~prefix:"__lg_record:" name ->
-      let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
-      in
+  | TCompiler (Named_record_marker source_name) as ty ->
       (match Resolver.lookup_record_type "" env source_name with
       | Ok record -> TNamed_record record
       | Error _ -> ty)
@@ -389,7 +385,7 @@ and callback_parameters_compatible expected actual =
   && List.for_all2 callback_type_compatible expected actual
 
 let unresolved_record_placeholder = function
-  | TOcaml name -> String.starts_with ~prefix:"__lg_record:" name
+  | TCompiler (Named_record_marker _) -> true
   | _ -> false
 
 let specialize_callback_record_placeholders expected actual =
@@ -456,6 +452,9 @@ let rec concrete_nominal_type_argument = function
       concrete_nominal_type_argument ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.for_all concrete_nominal_type_argument arguments
+  | TCompiler marker ->
+      List.for_all concrete_nominal_type_argument
+        (compiler_marker_children marker)
   | TConstraint _ -> false
   | TFn (parameters, return_ty) ->
       List.for_all concrete_nominal_type_argument (return_ty :: parameters)
@@ -502,6 +501,8 @@ let rec contains_unresolved_type = function
       contains_unresolved_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_unresolved_type arguments
+  | TCompiler marker ->
+      List.exists contains_unresolved_type (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists contains_unresolved_type
         (Types.constraint_children constraint_)
@@ -1332,10 +1333,21 @@ let rec resolve_named_record_application env ty =
           Type_solver.apply (Type_solver.of_list substitutions)
             (TNamed_record record)
       | [] | _ :: _ :: _ -> unresolved)
-  | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->
+  | TCompiler (Named_record_marker source_name) ->
+      let records = find_record_by_source_name source_name ~argument_count:0 in
+      (match records with
+      | [ record ] -> TNamed_record record
+      | [] | _ :: _ :: _ -> ty)
+  | TCompiler marker ->
+      TCompiler
+        (Semantic_type.map_compiler_marker
+           (resolve_named_record_application env) marker)
+  | TOcaml name
+    when String.starts_with ~prefix:Types.record_marker_prefix name ->
       let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
+        String.sub name
+          (String.length Types.record_marker_prefix)
+          (String.length name - String.length Types.record_marker_prefix)
       in
       let records = find_record_by_source_name source_name ~argument_count:0 in
       (match records with
@@ -1701,7 +1713,7 @@ let dynamic_boundary_error_message direction ty =
         (cannot_cross "collections"
            "keep the collection statically typed and use a closed sum for \
             heterogeneous elements")
-  | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+  | ty when Option.is_some (Types.next_seq_element ty) ->
       Some
         (cannot_cross "collections"
            "keep the collection statically typed and use a closed sum for \
@@ -1909,8 +1921,8 @@ let rec pack_metadata_expression
             ( Semantic_ir.Ident "Lg_runtime.Runtime_metadata.of_seq",
               [ mapper; expression ] ))
         (metadata_mapper ~find_adapter element_ty)
-  | TOcaml_app (name, [ element_ty ])
-    when Types.is_next_seq_type_name name ->
+  | ty when Option.is_some (Types.next_seq_element ty) ->
+      let element_ty = Option.get (Types.next_seq_element ty) in
       let sequence_name = "__lg_metadata_next_sequence" in
       let sequence = Semantic_ir.Ident sequence_name in
       Result.map
@@ -7265,8 +7277,8 @@ let plan_and_emit_argument_with_options env ?row_type_name
   let nullable_next_sequence =
     match (expected, argument.ty) with
     | ( (TNullable _ | TOcaml_app ("option", [ _ ])),
-        TOcaml_app (name, [ _ ]) )
-      when Types.is_next_seq_type_name name ->
+        actual )
+      when Option.is_some (Types.next_seq_element actual) ->
         Some
           (Ok
              (coerce_expression_to_type expected argument.ty
@@ -9911,7 +9923,7 @@ let create ~compile_expr =
         match (Env.target env, arg_forms) with
         | Target.Melange, [] ->
             Ok
-              (typed_ir (TOcaml "__lg_date_millis")
+              (typed_ir (TCompiler Date_millis)
                  (Semantic_ir.Apply
                     ( Semantic_ir.Ident
                         "Lg_runtime.Runtime_int_melange.of_float_unchecked",
@@ -9938,7 +9950,7 @@ let create ~compile_expr =
                             ] )
             in
             Ok
-              (typed_ir (TOcaml "__lg_date_millis")
+              (typed_ir (TCompiler Date_millis)
                  (Semantic_ir.Apply
                     ( Semantic_ir.Ident "int_of_float",
                                 [
@@ -10631,7 +10643,7 @@ let create ~compile_expr =
            (.equals)"
     | ".getTime" -> (
         match compile_args () with
-        | Ok [ ({ ty = TOcaml "__lg_date_millis"; _ } as date) ] ->
+        | Ok [ ({ ty = TCompiler Date_millis; _ } as date) ] ->
             Ok (typed_ir TInt date.semantic_expr)
         | Ok _ -> Error.error ~code:Error_code.Interop ".getTime expects a JavaScript Date"
         | Error _ as error -> error)
@@ -11088,11 +11100,7 @@ let create ~compile_expr =
             in
             let target =
               match target.ty with
-              | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->
-                  let source_name =
-                    String.sub name (String.length "__lg_record:")
-                      (String.length name - String.length "__lg_record:")
-                  in
+              | TCompiler (Named_record_marker source_name) ->
                   (match Resolver.lookup_record_type scope env source_name with
                   | Ok record -> { target with ty = TNamed_record record }
                   | Error _ -> (
@@ -18959,6 +18967,12 @@ let create ~compile_expr =
           Type_solver.is_open expected
           || Type_solver.is_open actual
           || argument_compatible expected actual
+      | TSeq expected, TCompiler (Next_seq actual | Reversible_next_seq actual)
+      | TCompiler (Next_seq expected | Reversible_next_seq expected), TSeq actual
+        ->
+          Type_solver.is_open expected
+          || Type_solver.is_open actual
+          || argument_compatible expected actual
       | TSeq expected, TOcaml_app (name, [ actual ])
       | TOcaml_app (name, [ expected ]), TSeq actual
         when Types.is_next_seq_type_name name ->
@@ -20065,6 +20079,8 @@ let create ~compile_expr =
                                          (Types.constraint_value_type actual))
                                 | None ->
                                 match (template, actual) with
+                                | TSeq expected, TCompiler (Next_seq actual | Reversible_next_seq actual) ->
+                                    Type_solver.unify substitutions expected actual
                                 | TSeq expected, TOcaml_app (name, [ actual ])
                                   when Types.is_next_seq_type_name name ->
                                     Type_solver.unify substitutions expected actual
@@ -20880,7 +20896,8 @@ let create ~compile_expr =
                           | Error _ as error -> error
                           | Ok substitutions ->
                               Type_solver.unify substitutions expected_value actual)
-                      | _ -> Type_solver.unify substitutions template actual)
+                      | _ ->
+                          Type_solver.unify substitutions template actual)
                 in
                 let rec infer_arguments substitutions templates actuals =
                   match (templates, actuals) with
@@ -22183,8 +22200,10 @@ let create ~compile_expr =
                                   ))
                       |> Option.map (fun element_ty -> TSeq element_ty)
                       |> Option.value ~default:ret
-                  | TOcaml_app (name, [ TUnknown ]) as ret
-                    when Types.is_next_seq_type_name name ->
+                  | ret
+                    when (match Types.next_seq_element ret with
+                          | Some TUnknown -> true
+                          | _ -> false) ->
                       param_tys
                       |> List.mapi (fun index param_ty -> (index, param_ty))
                       |> List.find_map (fun (index, param_ty) ->

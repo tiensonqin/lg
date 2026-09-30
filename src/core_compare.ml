@@ -38,7 +38,7 @@ let source_equality_class = function
   | ty when Option.is_some (Types.next_seq_element ty) -> Some `Sequential
   | ty when Option.is_some (Types.dynamic_map_types ty) -> Some `Map
   | TUnknown | TMeta _ | TVar _ | TNullable _ | TOcaml _ | TOcaml_app _
-  | TPoly_variant _ | TTuple _ | TRef _ | TMap_keys | TConstraint _ ->
+  | TPoly_variant _ | TTuple _ | TRef _ | TMap_keys | TConstraint _ | TCompiler _ ->
       None
 
 let disjoint_static_equality left_ty right_ty =

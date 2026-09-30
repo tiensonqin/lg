@@ -3150,6 +3150,16 @@ let rec add_type_references add ty references =
       List.fold_left
         (fun references argument -> add_type_references add argument references)
         references arguments
+  | Types.TCompiler marker -> (
+      match Types.compiler_marker_children marker with
+      | [] ->
+          add_type_name_reference add
+            (Types.compiler_marker_type_name marker) references
+      | children ->
+          List.fold_left
+            (fun references argument ->
+              add_type_references add argument references)
+            references children)
   | TConstraint constraint_ ->
       List.fold_left
         (fun references argument -> add_type_references add argument references)

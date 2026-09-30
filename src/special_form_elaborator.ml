@@ -2946,7 +2946,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               &&
               match ty with
               | TBool | TNil | TNullable _ | TOcaml_app ("option", [ _ ])
-              | TSeq _ ->
+              | TSeq _ | TCompiler (Next_seq _ | Reversible_next_seq _) ->
                   false
               | TOcaml_app (name, [ _ ])
                 when Types.is_next_seq_type_name name ->
@@ -4645,9 +4645,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       List.filter_map (fun tys -> List.nth_opt tys index) recurs
                     in
                     let sequence_element = function
-                      | TList inner | TVector inner | TSeq inner -> Some inner
-                      | TOcaml_app (name, [ inner ])
-                        when Types.is_next_seq_type_name name ->
+                      | TList inner | TVector inner | TSeq inner
+                      | TCompiler (Next_seq inner | Reversible_next_seq inner) ->
                           Some inner
                       | _ -> None
                     in
@@ -4682,6 +4681,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           in
                           TSeq inner
                       | ( (TList current_inner | TVector current_inner),
+                          TCompiler (Next_seq actual_inner | Reversible_next_seq actual_inner) ) ->
+                          let inner =
+                            merge_sequence_inner current_inner actual_inner
+                          in
+                          Types.next_seq inner
+                      | ( (TList current_inner | TVector current_inner),
                           TOcaml_app (name, [ actual_inner ]) )
                         when Types.is_next_seq_type_name name ->
                           let inner =
@@ -4689,10 +4694,20 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           in
                           Types.next_seq inner
                       | ( TSeq current_inner,
+                          TCompiler (Next_seq actual_inner | Reversible_next_seq actual_inner) )
+                      | ( TCompiler (Next_seq current_inner | Reversible_next_seq current_inner),
+                          TSeq actual_inner ) ->
+                          Types.next_seq
+                            (merge_sequence_inner current_inner actual_inner)
+                      | ( TSeq current_inner,
                           TOcaml_app (name, [ actual_inner ]) )
                       | ( TOcaml_app (name, [ current_inner ]),
                           TSeq actual_inner )
                         when Types.is_next_seq_type_name name ->
+                          Types.next_seq
+                            (merge_sequence_inner current_inner actual_inner)
+                      | ( TCompiler (Next_seq current_inner | Reversible_next_seq current_inner),
+                          TCompiler (Next_seq actual_inner | Reversible_next_seq actual_inner) ) ->
                           Types.next_seq
                             (merge_sequence_inner current_inner actual_inner)
                       | ( TOcaml_app (current_name, [ current_inner ]),
@@ -4769,6 +4784,9 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           contains_protocol inner
                       | TOcaml_app (_, arguments) | TTuple arguments ->
                           List.exists contains_protocol arguments
+                      | TCompiler marker ->
+                          List.exists contains_protocol
+                            (compiler_marker_children marker)
                       | TConstraint constraint_ ->
                           List.exists contains_protocol
                             (constraint_children constraint_)
@@ -4888,7 +4906,9 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   | Error _ as err -> err
                   | Ok (param_tys, body) ->
                   let sequence_element_type = function
-                    | TSeq inner -> Some inner
+                    | TSeq inner
+                    | TCompiler (Next_seq inner | Reversible_next_seq inner) ->
+                        Some inner
                     | TOcaml_app (name, [ inner ])
                       when Types.is_next_seq_type_name name ->
                         Some inner
@@ -4910,7 +4930,9 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                               ( Semantic_ir.Ident
                                   "Lg_runtime.Runtime_seq.of_vector",
                                 [ value.semantic_expr ] ) )
-                    | TSeq inner -> Some (inner, value.semantic_expr)
+                    | TSeq inner
+                    | TCompiler (Next_seq inner | Reversible_next_seq inner) ->
+                        Some (inner, value.semantic_expr)
                     | TOcaml_app (name, [ inner ])
                       when Types.is_next_seq_type_name name ->
                         Some (inner, value.semantic_expr)
@@ -5008,6 +5030,11 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                 ( Semantic_ir.PVar name,
                                   Structural_map.record_type_application record
                                   ^ " Seq.t" )
+                          | TCompiler (Next_seq (TNamed_record record) | Reversible_next_seq (TNamed_record record)) ->
+                              Semantic_ir.PConstraint
+                                ( Semantic_ir.PVar name,
+                                  Structural_map.record_type_application record
+                                  ^ " Seq.t" )
                           | TOcaml_app (type_name, [ TNamed_record record ])
                             when Types.is_next_seq_type_name type_name ->
                               Semantic_ir.PConstraint
@@ -5015,6 +5042,25 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                   Structural_map.record_type_application record
                                   ^ " Seq.t" )
                           | TSeq inner -> (
+                              match
+                                Function_elaborator.infer_named_record scope env
+                                  inner
+                              with
+                              | TNamed_record record ->
+                                  Semantic_ir.PConstraint
+                                    ( Semantic_ir.PVar name,
+                                      Structural_map.record_type_application record
+                                      ^ " Seq.t" )
+                              | TRecord fields -> (
+                                  match named_record_for_exact_fields fields with
+                                  | Some record ->
+                                      Semantic_ir.PConstraint
+                                        ( Semantic_ir.PVar name,
+                                          Structural_map.record_type_application record
+                                          ^ " Seq.t" )
+                                  | None -> capability_pattern name param_ty)
+                              | _ -> capability_pattern name param_ty)
+                          | TCompiler (Next_seq inner | Reversible_next_seq inner) -> (
                               match
                                 Function_elaborator.infer_named_record scope env
                                   inner

@@ -223,18 +223,27 @@ let rec infer_named_record ?(allow_dynamic_fields = false) ?preferred_record
              storage =
                infer_named_record ~allow_dynamic_fields scope env container;
            })
-  | TOcaml_app (name, arguments) ->
+  | ( TOcaml_app (name, arguments)
+    | TCompiler (Named_record_app_marker (name, arguments)) ) as ty ->
       let arguments =
         List.map
           (infer_named_record ~allow_dynamic_fields scope env)
           arguments
       in
       let record_name =
-        if String.starts_with ~prefix:"__lg_record_app:" name then
-          String.sub name
-            (String.length "__lg_record_app:")
-            (String.length name - String.length "__lg_record_app:")
-        else name
+        match ty with
+        | TOcaml_app _
+          when String.starts_with ~prefix:Types.record_app_marker_prefix name
+          ->
+            String.sub name
+              (String.length Types.record_app_marker_prefix)
+              (String.length name - String.length Types.record_app_marker_prefix)
+        | _ -> name
+      in
+      let resolved_app =
+        match ty with
+        | TCompiler _ -> TCompiler (Named_record_app_marker (name, arguments))
+        | _ -> TOcaml_app (name, arguments)
       in
       (match Resolver.lookup_type_declaration scope env record_name with
       | Some
@@ -255,10 +264,9 @@ let rec infer_named_record ?(allow_dynamic_fields = false) ?preferred_record
                     substitutions))
               manifest
           in
-          if Types.equal resolved (TOcaml_app (name, arguments)) then
-            TOcaml_app (name, arguments)
+          if Types.equal resolved resolved_app then resolved_app
           else infer_named_record ~allow_dynamic_fields scope env resolved
-      | Some { kind = Alias; _ } -> TOcaml_app (name, arguments)
+      | Some { kind = Alias; _ } -> resolved_app
       | Some { kind = (Record | Variant | Opaque); _ } | None ->
       (match
          (match Resolver.lookup_record_type scope env record_name with
@@ -279,14 +287,16 @@ let rec infer_named_record ?(allow_dynamic_fields = false) ?preferred_record
           in
           Types.instantiate_type ~templates:parameters ~actuals:arguments
             (Type_solver.apply renamings (TNamed_record record))
-      | Ok _ | Error _ -> TOcaml_app (name, arguments)))
-  | TOcaml name as ty ->
-      let record_prefix = "__lg_record:" in
+      | Ok _ | Error _ -> resolved_app))
+  | (TOcaml name | TCompiler (Named_record_marker name)) as ty ->
       let source_name =
-        if String.starts_with ~prefix:record_prefix name then
-          String.sub name (String.length record_prefix)
-            (String.length name - String.length record_prefix)
-        else name
+        match ty with
+        | TOcaml _
+          when String.starts_with ~prefix:Types.record_marker_prefix name ->
+            String.sub name
+              (String.length Types.record_marker_prefix)
+              (String.length name - String.length Types.record_marker_prefix)
+        | _ -> name
       in
       (match Resolver.lookup_record_type scope env source_name with
       | Ok record -> TNamed_record record
@@ -611,6 +621,8 @@ let rec contains_open_type = function
       contains_open_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_open_type arguments
+  | TCompiler marker ->
+      List.exists contains_open_type (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists contains_open_type (constraint_children constraint_)
   | TFn (parameters, return_ty) ->
@@ -643,6 +655,8 @@ let rec contains_structural_record = function
       contains_structural_record ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_structural_record arguments
+  | TCompiler marker ->
+      List.exists contains_structural_record (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists contains_structural_record (constraint_children constraint_)
   | TFn (parameters, return_ty) ->
@@ -1301,6 +1315,9 @@ let prepare ?(param_type_overrides = []) ?(additional_inference_params = [])
                     contains_record_shape inner
                 | TOcaml_app (_, arguments) | TTuple arguments ->
                     List.exists contains_record_shape arguments
+                | TCompiler marker ->
+                    List.exists contains_record_shape
+                      (compiler_marker_children marker)
                 | TFn (parameters, return_ty) ->
                     List.exists contains_record_shape (return_ty :: parameters)
                 | TOverloaded_fn arities ->

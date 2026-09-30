@@ -847,8 +847,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             | TSeq inner ->
                 heterogeneous_collection_type_error "sequence"
                   [ inner; value.ty ]
-            | TOcaml_app (name, [ inner ])
-              when Types.is_next_seq_type_name name ->
+            | ty when Option.is_some (Types.next_seq_element ty) ->
+                let inner = Option.get (Types.next_seq_element ty) in
                 if Types.same_shape inner value.ty then
                   let value =
                     coerce_expression_to_type inner value.ty value.semantic_expr
@@ -1378,7 +1378,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
       in
       let compile_runtime_map_get target key default =
         match Types.dynamic_map_types target.ty with
-        | None -> Error.error ~code:Error_code.Arity "get expects a map"
+        | None ->
+            Error.error ~code:Error_code.Arity "get expects a map"
         | Some (declared_key_ty, value_ty) ->
             let key_ty =
               if unresolved declared_key_ty then
@@ -1792,7 +1793,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                   ("Lg_runtime.Runtime_transient.map", [ _; _ ]) ->
                   compile_transient_get target
                     (typed_ir TKeyword (Semantic_ir.String keyword)) None
-              | TOcaml_app (type_name, arguments) as ty -> (
+              | ( TOcaml_app (type_name, arguments)
+                | TCompiler (Named_record_app_marker (type_name, arguments)) )
+              as ty -> (
                   match
                     instantiated_record_field scope env type_name arguments
                       keyword
@@ -1806,7 +1809,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                   | None when is_ocaml_owned_type ty ->
                       Ok (external_field type_name target keyword)
                   | None -> Error.error ~code:Error_code.Arity "get expects a map")
-              | TOcaml type_name as ty -> (
+              | (TOcaml type_name | TCompiler (Named_record_marker type_name))
+              as ty -> (
                   match
                     instantiated_record_field scope env type_name [] keyword
                   with

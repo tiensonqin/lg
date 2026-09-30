@@ -21,6 +21,9 @@ type t =
 
 let default_type_variable = "__lg_protocol_default_receiver"
 
+let compiler_marker_receiver_key marker =
+  Types.compiler_marker_type_name marker
+
 let of_type = function
   | Semantic_type.TVar name when name = default_type_variable ->
       Some Default_receiver
@@ -43,6 +46,7 @@ let of_type = function
   | TTuple _ -> Some Tuple_receiver
   | TRecord fields when Types.is_homogeneous_record fields ->
       Some (Host_receiver "Lg_runtime.Runtime_map.t")
+  | TCompiler marker -> Some (Host_receiver (compiler_marker_receiver_key marker))
   | TOcaml name | TOcaml_app (name, _) -> Some (Host_receiver name)
   | TNullable _ -> Some (Host_receiver "option")
   | TNamed_record record -> Some (Record_receiver record.type_id)
