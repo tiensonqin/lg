@@ -53,7 +53,7 @@ type t = {
 let ( let* ) = Result.bind
 
 let error form message =
-  Error.error ~title:"INVALID FOREIGN BINDING"
+  Error.error ~code:Error_code.Unresolved ~title:"INVALID FOREIGN BINDING"
     ?location:(Source_context.find form) message
 
 let options ~target form =

@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_2.cljc
+-- COMPILATION ERROR [LG2001] -- module_functors_reject_bad_forms_2.cljc
 
 module-functor parameter vector must not be empty
 

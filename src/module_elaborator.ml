@@ -206,7 +206,7 @@ let rec compile_module ?location ?signature_name ?signature_location
         | Ok (_scope, env, next_type, item) ->
             Ok (env, public_bindings, next_type, item :: items))
     | FList (FSymbol "module-signature" :: _) ->
-        Error.error "module-signature expects a name and signature items"
+        Error.error ~code:Error_code.Arity "module-signature expects a name and signature items"
     | FList [ FSymbol "extern-type"; ((FSymbol name) as name_form) ] -> (
         match Type_definition_elaborator.compile_opaque_type
           ?location:(Source_context.find name_form) module_path env next_type name with
@@ -214,7 +214,7 @@ let rec compile_module ?location ?signature_name ?signature_location
         | Ok (_, env, next_type, item) ->
             Ok (env, public_bindings, next_type, item :: items))
     | FList (FSymbol "extern-type" :: _) ->
-        Error.error "extern-type expects one type name"
+        Error.error ~code:Error_code.Arity "extern-type expects one type name"
     | FList
         [ FSymbol "type-alias";
           ((FSymbol name) as name_form);
@@ -278,7 +278,7 @@ let rec compile_module ?location ?signature_name ?signature_location
                     next_type,
                     item :: items )))
     | FList (FSymbol "type-record" :: _) ->
-        Error.error "type-record expects a name and fields"
+        Error.error ~code:Error_code.Arity "type-record expects a name and fields"
     | FList
         (FSymbol "type-variant" :: ((FSymbol name) as name_form)
         :: FVector parameter_forms
@@ -337,7 +337,7 @@ let rec compile_module ?location ?signature_name ?signature_location
                 location = Source_context.find module_form }
             :: items )
     | FList (FSymbol "include" :: _) ->
-        Error.error "include expects one module"
+        Error.error ~code:Error_code.Arity "include expects one module"
     | FList
         [ FSymbol "module-alias";
           ((FSymbol alias_name) as alias_form);
@@ -361,7 +361,7 @@ let rec compile_module ?location ?signature_name ?signature_location
                 next_type,
                 item :: items ))
     | FList (FSymbol "module-alias" :: _) ->
-        Error.error "module-alias expects alias and target modules"
+        Error.error ~code:Error_code.Protocol "module-alias expects alias and target modules"
     | FList
         (FSymbol "defprotocol" :: ((FSymbol protocol_name) as name_form)
         :: method_forms) -> (
@@ -437,7 +437,7 @@ let rec compile_module ?location ?signature_name ?signature_location
              ~name:local_name ~location:(Source_context.find name_form)
              parameters result options)
     | FList (FSymbol "ffi" :: _) ->
-        Error.error "ffi expects a name, argument type vector, result type, and options map"
+        Error.error ~code:Error_code.Interop "ffi expects a name, argument type vector, result type, and options map"
     | FList
         [ FSymbol ("def" | "defonce"); ((FSymbol name) as name_form); expr_form ] -> (
         match compile_expr module_path env expr_form with
@@ -738,7 +738,7 @@ let rec compile_module ?location ?signature_name ?signature_location
                       (key, public_binding),
                     next_type,
                     Group (type_items @ [ value_item ]) :: items )
-            | _ -> Error.error "defn body did not compile to a function")))
+            | _ -> Error.error ~code:Error_code.Semantic "defn body did not compile to a function")))
     | FList
         (FSymbol "module" :: FSymbol nested_segment :: FSymbol nested_signature_name
         :: nested_forms) -> (
@@ -780,11 +780,11 @@ let rec compile_module ?location ?signature_name ?signature_location
                 next_type,
                 nested_item :: items ))
     | FList (FSymbol ("defn" | "defn-") :: _) ->
-        Error.error "defn expects a name, parameter vector, and body"
+        Error.error ~code:Error_code.Arity "defn expects a name, parameter vector, and body"
     | FList (FSymbol "defonce" :: _) ->
-        Error.error "defonce expects a name and value"
+        Error.error ~code:Error_code.Arity "defonce expects a name and value"
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Protocol
           "module forms must be module-signature, type-alias, type-record, type-variant, open, include, module-alias, defprotocol, extend-type, def, defonce, defn, defn-, or module"
   and loop env public_bindings next_type items = function
     | [] ->
@@ -888,11 +888,11 @@ let compile_module_functor ?location scope env next_type functor_name parameter_
           :: acc)
           rest
     | [ _ ] ->
-        Error.error "module-functor parameters must be name/signature pairs"
-    | _ -> Error.error "module-functor parameters must be symbols"
+        Error.error ~code:Error_code.Semantic "module-functor parameters must be name/signature pairs"
+    | _ -> Error.error ~code:Error_code.Semantic "module-functor parameters must be symbols"
   in
   match parameter_form with
-  | FVector [] -> Error.error "module-functor parameter vector must not be empty"
+  | FVector [] -> Error.error ~code:Error_code.Arity "module-functor parameter vector must not be empty"
   | FVector parameter_forms -> (
       match parse_parameters [] parameter_forms with
       | Error _ as err -> err
@@ -981,8 +981,8 @@ let compile_module_functor ?location scope env next_type functor_name parameter_
                               items;
                             } ))
               | _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Internal
                     "internal error: module functor body did not compile"))))
   | _ ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "module-functor expects a name, [parameter signature ...], and body"

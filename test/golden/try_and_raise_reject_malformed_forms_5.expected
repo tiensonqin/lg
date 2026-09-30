@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- try_and_raise_reject_malformed_forms_5.cljc
+-- COMPILATION ERROR [LG2001] -- try_and_raise_reject_malformed_forms_5.cljc
 
 raise expects 1 arguments
 

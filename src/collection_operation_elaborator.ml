@@ -197,7 +197,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                     packed );
                 ] ))
           (pack_closed_edn_value item)
-    | _ -> Error.error "contains? EDN key must be closed EDN-compatible"
+    | _ -> Error.error ~code:Error_code.Semantic "contains? EDN key must be closed EDN-compatible"
   in
   let inferred_field_type env keyword =
     let candidates =
@@ -625,7 +625,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
     and compile_list_star scope env arg_forms =
       match compile_args_for scope env arg_forms with
       | Error _ as error -> error
-      | Ok [] -> Error.error "list* expects values and final collection"
+      | Ok [] -> Error.error ~code:Error_code.Arity "list* expects values and final collection"
       | Ok args ->
           let final_index = List.length args - 1 in
           let compiled_args =
@@ -654,7 +654,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             | [] -> assert false
           in
           match Core_sequence_transform.collection_to_list_expr final with
-          | Error _ -> Error.error "list* final argument must be a collection"
+          | Error _ -> Error.error ~code:Error_code.Arity "list* final argument must be a collection"
           | Ok (inner, final_list) ->
               if
                 not
@@ -662,7 +662,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                      (fun argument -> Types.equal inner argument.ty)
                      prefix)
               then
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   ("list* prefix and final collection must have one static element type; tail element is "
                    ^ Types.source_name inner ^ ", prefix elements are "
                    ^ String.concat ", " (List.map (fun arg -> Types.source_name arg.ty) prefix))
@@ -710,7 +710,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
           | Error _ as err -> err
         | Ok element_ty ->
             Ok (typed_ir (TList element_ty) (Semantic_ir.List [])))
-      | _ -> Error.error "list-of expects one type keyword"
+      | _ -> Error.error ~code:Error_code.Arity "list-of expects one type keyword"
     and compile_vector_of arg_forms =
       match arg_forms with
       | [ FKeyword keyword ] -> (
@@ -720,7 +720,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             Ok
               (typed_ir (TVector element_ty) (Semantic_ir.Ident "Rrbvec.empty"))
         )
-      | _ -> Error.error "vector-of expects one type keyword"
+      | _ -> Error.error ~code:Error_code.Arity "vector-of expects one type keyword"
     and compile_conj scope env arg_forms =
       let map_entry = function
         | FList [ FSymbol "tuple"; key; value ]
@@ -789,7 +789,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             let value = unwrap_protocol_value value in
             match collection.ty with
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "conj requires a statically typed collection; define a sum \
                    type for heterogeneous elements"
             | TNil ->
@@ -987,12 +987,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             | TSet inner ->
                 heterogeneous_collection_type_error "set" [ inner; value.ty ]
             | TMeta _ | TVar _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "conj cannot infer a concrete static collection element \
                    type; define a closed sum type containing every alternative \
                    when the collection is heterogeneous"
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("conj expects a list, vector, set, or sequence, got "
                  ^ Types.source_name collection.ty)
           in
@@ -1003,7 +1003,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                  | Error _ as err -> err
                  | Ok collection -> add_value collection value)
                (Ok collection)
-      | Ok _ -> Error.error "conj expects collection and values"
+      | Ok _ -> Error.error ~code:Error_code.Arity "conj expects collection and values"
     and compile_cons scope env arg_forms =
       match compile_args_for scope env arg_forms with
       | Error _ as err -> err
@@ -1019,10 +1019,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               heterogeneous_collection_type_error "sequence"
                 [ inner; value.ty ]
           | Error _ ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 ("cons expects a value and seqable collection, got "
                ^ Types.source_name collection.ty))
-      | Ok _ -> Error.error "cons expects a value and seqable collection"
+      | Ok _ -> Error.error ~code:Error_code.Arity "cons expects a value and seqable collection"
     and compile_subvec scope env arg_forms =
       let host_int expression = expression in
       let uses_dynamic_storage ty =
@@ -1063,8 +1063,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 "Lg_runtime.Runtime_dynamic.count_value",
                               [ vector.semantic_expr ] );
                         ] )))
-          | TVector _, _ -> Error.error "subvec indexes must be int"
-          | _ -> Error.error "subvec expects a vector")
+          | TVector _, _ -> Error.error ~code:Error_code.Semantic "subvec indexes must be int"
+          | _ -> Error.error ~code:Error_code.Arity "subvec expects a vector")
       | Ok [ vector; start; stop ] -> (
           match (vector.ty, start.ty, stop.ty) with
           | TVector _, TInt, TInt ->
@@ -1091,9 +1091,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           host_int start.semantic_expr;
                           host_int stop.semantic_expr;
                         ] )))
-          | TVector _, _, _ -> Error.error "subvec indexes must be int"
-          | _ -> Error.error "subvec expects a vector")
-      | Ok _ -> Error.error "subvec expects vector, start, and optional stop"
+          | TVector _, _, _ -> Error.error ~code:Error_code.Semantic "subvec indexes must be int"
+          | _ -> Error.error ~code:Error_code.Arity "subvec expects a vector")
+      | Ok _ -> Error.error ~code:Error_code.Arity "subvec expects vector, start, and optional stop"
     and compile_nth scope env arg_forms =
       let expected_result = Env.expected_type env in
       let collection_env =
@@ -1137,7 +1137,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             (fun semantic_expr -> typed_ir TInt semantic_expr)
             (dynamic_unpack env TInt index.semantic_expr)
         else
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("nth index must be int, got " ^ Types.source_name index.ty)
       in
       match compile_nth_args arg_forms with
@@ -1206,7 +1206,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         (Edn_value_elaborator.pack_expression default.ty
                            default.semantic_expr)
                     else
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "nth default must match collection element type"
                   else
                     Ok
@@ -1221,7 +1221,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 ( Semantic_ir.PConstructor ("None", None),
                                   default.semantic_expr );
                               ] ))))
-      | Ok _ -> Error.error "nth expects 2 or 3 arguments"
+      | Ok _ -> Error.error ~code:Error_code.Arity "nth expects 2 or 3 arguments"
     and compile_get scope env arg_forms =
       let unresolved = function TUnknown -> true | _ -> false in
       let adapt_transient_value expected (actual : typed_expr) =
@@ -1261,7 +1261,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
           Ok
             (coerce_expression_to_type expected actual.ty actual.semantic_expr)
         else
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("get value type " ^ source_name actual.ty ^ " is not compatible with "
            ^ source_name expected)
       in
@@ -1374,11 +1374,11 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                             (apply (operation "map_get_default")
                                [ target.semantic_expr; key; default ]))
                         (adapt_transient_value result_ty default))
-        | _ -> Error.error "get expects a transient map"
+        | _ -> Error.error ~code:Error_code.Arity "get expects a transient map"
       in
       let compile_runtime_map_get target key default =
         match Types.dynamic_map_types target.ty with
-        | None -> Error.error "get expects a map"
+        | None -> Error.error ~code:Error_code.Arity "get expects a map"
         | Some (declared_key_ty, value_ty) ->
             let key_ty =
               if unresolved declared_key_ty then
@@ -1585,7 +1585,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           ( Structural_map.extension_get record fields keyword,
                             protocol_lookup )
                         with
-                        | None, None -> Error.error ("unknown field " ^ keyword)
+                        | None, None -> Error.error ~code:Error_code.Unresolved ("unknown field " ^ keyword)
                         | Some lookup, _ | None, Some lookup ->
                             let result_ty, missing, present =
                               if Types.is_dynamic lookup.ty then
@@ -1709,7 +1709,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                           [ Semantic_ir.String keyword ];
                                       ] );
                                 ] )))
-                  | _ -> Error.error "get expects a map")
+                  | _ -> Error.error ~code:Error_code.Arity "get expects a map")
               | TRecord fields -> (
                   match find_field keyword fields with
                   | Some field ->
@@ -1761,7 +1761,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                               with
                               | Some result -> Ok result
                               | None when record.nominal ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Unresolved
                                     ("unknown record field "
                                    ^ Names.keyword_source_name keyword)
                               | None ->
@@ -1805,7 +1805,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                            (Structural_map.field_expr target field))
                   | None when is_ocaml_owned_type ty ->
                       Ok (external_field type_name target keyword)
-                  | None -> Error.error "get expects a map")
+                  | None -> Error.error ~code:Error_code.Arity "get expects a map")
               | TOcaml type_name as ty -> (
                   match
                     instantiated_record_field scope env type_name [] keyword
@@ -1818,14 +1818,14 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                            (Structural_map.field_expr target field))
                   | None when is_ocaml_owned_type ty ->
                       Ok (external_field type_name target keyword)
-                  | None -> Error.error "get expects a map")
+                  | None -> Error.error ~code:Error_code.Arity "get expects a map")
               | ty when is_ocaml_owned_type ty ->
                   Ok
                     (typed_ir TUnknown
                        (Semantic_ir.Field
                         ( target.semantic_expr,
                           Names.keyword_to_ocaml_name keyword )))
-              | _ -> Error.error "get expects a map"))
+              | _ -> Error.error ~code:Error_code.Arity "get expects a map"))
       | [ target_form; index_form ] -> (
         let expected_type = Env.expected_type env in
         let env = Env.with_expected_type None env in
@@ -1846,7 +1846,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                   Ok
                     (typed_ir (TNullable TChar)
                        (string_get_option target index))
-              | TString, _ -> Error.error "get string index must be int"
+              | TString, _ -> Error.error ~code:Error_code.Semantic "get string index must be int"
               | TVector inner, TInt ->
                   Ok
                     (typed_ir inner
@@ -1854,7 +1854,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         [ target.semantic_expr;
                           index.semantic_expr;
                         ]))
-              | TVector _, _ -> Error.error "get vector index must be int"
+              | TVector _, _ -> Error.error ~code:Error_code.Semantic "get vector index must be int"
               | ( (TNullable (TNamed_record record)
                   | TOcaml_app ("option", [ TNamed_record record ])),
                   _ ) ->
@@ -1874,7 +1874,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           [ value; index ]
                   in
                   (match lookup with
-                  | None -> Error.error "get key must be a keyword"
+                  | None -> Error.error ~code:Error_code.Semantic "get key must be a keyword"
                   | Some lookup ->
                       let result_ty, missing, present =
                         if Types.is_dynamic lookup.ty then
@@ -2000,7 +2000,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                             [ target; index ]
                   with
                   | Some result -> Ok result
-                  | None -> Error.error "get key must be a keyword"))
+                  | None -> Error.error ~code:Error_code.Semantic "get key must be a keyword"))
               | TRecord fields, _
                 when Types.is_homogeneous_record fields ->
                   let value_ty =
@@ -2064,7 +2064,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           | Some _ | None -> typed_ir dynamic lookup)
                         (pack_dynamic_value env dynamic index)
                   | _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Unsupported
                         ("get key type " ^ source_name index.ty
                        ^ " is not supported for " ^ source_name target.ty)))))
       | [ target_form; FKeyword keyword; default_form ] -> (
@@ -2105,7 +2105,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           [ value; key; default ]
                   in
                   (match lookup with
-                  | None -> Error.error "get expects a map"
+                  | None -> Error.error ~code:Error_code.Arity "get expects a map"
                   | Some lookup ->
                       Result.map
                         (fun missing ->
@@ -2147,7 +2147,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                     Semantic_ir.Ident value_name );
                                 ] )))
                   | Some field ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                       ("get default for " ^ keyword ^ " must be "
                      ^ source_name field.ty)
                   | None -> Ok default)
@@ -2158,7 +2158,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         (typed_ir field.ty
                            (Structural_map.field_expr target field))
                   | Some _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Type_mismatch
                         ("get default for " ^ keyword ^ " has incompatible type")
                 | None -> (
                       let key = typed_ir TKeyword (Semantic_ir.String keyword) in
@@ -2201,7 +2201,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 Semantic_ir.String keyword;
                                 default.semantic_expr;
                               ]))
-                  | _ -> Error.error "get expects a map")))
+                  | _ -> Error.error ~code:Error_code.Arity "get expects a map")))
       | [ target_form; index_form; default_form ] -> (
           match compile_expr scope env target_form with
           | Error _ as err -> err
@@ -2245,8 +2245,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                     (typed_ir (TNullable TChar)
                        (string_get_option target index))
               | TString, TInt ->
-                  Error.error "get default for string must be char or nil"
-              | TString, _ -> Error.error "get string index must be int"
+                  Error.error ~code:Error_code.Semantic "get default for string must be char or nil"
+              | TString, _ -> Error.error ~code:Error_code.Semantic "get string index must be int"
               | TVector inner, TInt
                 when Types.equal inner default.ty
                      || (Types.equal inner (TOcaml "Lg_edn_backend.t")
@@ -2265,8 +2265,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   default.semantic_expr );
                             ] )))
               | TVector _, TInt ->
-                  Error.error "get default for vector must match element type"
-              | TVector _, _ -> Error.error "get vector index must be int"
+                  Error.error ~code:Error_code.Semantic "get default for vector must match element type"
+              | TVector _, _ -> Error.error ~code:Error_code.Semantic "get vector index must be int"
               | TNamed_record { nominal = true; _ }, _
                 when (match index_form with FKeyword _ -> false | _ -> true) ->
                   let lookup_arguments =
@@ -2289,7 +2289,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         [ target; index; default ]
                   with
                   | Some result -> Ok result
-                  | None -> Error.error "get key must be a keyword")
+                  | None -> Error.error ~code:Error_code.Semantic "get key must be a keyword")
               | TRecord fields, _
                 when Types.is_homogeneous_record fields ->
                   let value_ty =
@@ -2354,10 +2354,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   default.semantic_expr;
                                 ]))
                   | _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Unsupported
                         ("get key type " ^ source_name index.ty
                        ^ " is not supported for " ^ source_name target.ty)))))))
-      | _ -> Error.error "get expects 2 or 3 arguments"
+      | _ -> Error.error ~code:Error_code.Arity "get expects 2 or 3 arguments"
     and compile_find scope env arg_forms =
       let arg_forms =
         match arg_forms with
@@ -2467,14 +2467,14 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                      (apply "Lg_runtime.Runtime_map.find"
                         [ target.semantic_expr; key.semantic_expr ]))
             | Some _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("find expects a map and key, got "
                  ^ Types.source_name target.ty ^ " and "
                  ^ Types.source_name key.ty)
             | None ->
                 compile_expr scope env
                   (FList (FSymbol "IFind/-find" :: arg_forms))))
-      | _, Ok _ -> Error.error "find expects 2 arguments"
+      | _, Ok _ -> Error.error ~code:Error_code.Arity "find expects 2 arguments"
     and compile_assoc scope env arg_forms =
       let symbol_tail name =
         match List.rev (String.split_on_char '/' name) with
@@ -2541,7 +2541,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 | Error _ as err -> err
                 | Ok value ->
                     compile_record_pairs fields ((keyword, value) :: acc) rest)
-            | _ -> Error.error "assoc expects map followed by keyword/value pairs"
+            | _ -> Error.error ~code:Error_code.Arity "assoc expects map followed by keyword/value pairs"
           in
           let adapt_dynamic_fields fields pairs =
             let rec adapt adapted = function
@@ -2609,7 +2609,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                        | TNamed_record { extensible = false; _ } -> true
                        | _ -> false)
                   ->
-                    Error.error ("unknown record field " ^ keyword)
+                    Error.error ~code:Error_code.Unresolved ("unknown record field " ^ keyword)
                 | _ ->
                     Result.bind (Structural_map.assoc target fields keyword value)
                       (fun target -> assoc_record_pairs target rest))
@@ -2626,7 +2626,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               | Ok index, Ok value ->
                   compile_vector_pairs ((index, value) :: acc) rest)
           | _ ->
-              Error.error "assoc expects collection followed by key/value pairs"
+              Error.error ~code:Error_code.Arity "assoc expects collection followed by key/value pairs"
         in
         let rec compile_map_pairs key_ty value_ty acc = function
           | [] -> Ok (List.rev acc)
@@ -2643,7 +2643,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               | Ok key, Ok value ->
                   compile_map_pairs key_ty value_ty ((key, value) :: acc) rest)
           | _ ->
-              Error.error "assoc expects collection followed by key/value pairs"
+              Error.error ~code:Error_code.Arity "assoc expects collection followed by key/value pairs"
         in
         match compile_expr scope env target_form with
           | Error _ as err -> err
@@ -2664,13 +2664,13 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               if pair_forms = [] || List.length pair_forms mod 2 <> 0 then
                 match target.ty with
                 | TRecord _ | TNamed_record _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     "assoc expects map followed by keyword/value pairs"
               | TVector _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     "assoc expects vector followed by index/value pairs"
               | _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     "assoc expects collection followed by key/value pairs"
               else
                 match target.ty with
@@ -2681,9 +2681,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           match find_field keyword record.fields with
                           | Some _ -> validate_declared_fields rest
                           | None ->
-                              Error.error ("unknown record field " ^ keyword))
+                              Error.error ~code:Error_code.Unresolved ("unknown record field " ^ keyword))
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             "assoc on a deftype requires declared keyword fields"
                     in
                     let rec protocol_assoc_form current = function
@@ -2737,7 +2737,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                           | (key, value) :: rest -> (
                               match lookup_method current key value with
                               | None ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Arity
                                     "assoc expects an associative deftype"
                               | Some updated ->
                                 apply_pairs { updated with ty = target.ty } rest
@@ -2816,7 +2816,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 | _ -> assert false
                               in
                               if not (Types.equal index.ty TInt) then
-                                Error.error "assoc vector index must be int"
+                                Error.error ~code:Error_code.Semantic "assoc vector index must be int"
                               else if Types.equal value.ty TNil then
                                 let item_name = "__lg_assoc_vector_item" in
                                 let optionalized =
@@ -2844,7 +2844,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   (Types.assignable ~policy:Host_boundary
                                      ~expected:inner ~actual:value.ty)
                               then
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   "assoc vector value must match element type"
                               else
                                 let vector_ty =
@@ -2866,7 +2866,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               | target_ty
                 when Types.is_dynamic target_ty
                      ->
-                  Error.error
+                  Error.error ~code:Error_code.Semantic
                     ("assoc requires a statically typed map, vector, or record; \
                       add a concrete type annotation; got "
                    ^ Types.source_name target_ty
@@ -2922,7 +2922,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                         pairs))
                           in
                           if List.exists Option.is_none initial_fields then
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "assoc on an optional record requires every field \
                                when the value is None"
                           else
@@ -2976,7 +2976,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                     ~expected:value_ty ~actual:value.ty)
                              pairs)
                       then
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "assoc key/value types do not match the nullable map"
                       else
                         let value_name = "__lg_assoc_map" in
@@ -3006,13 +3006,13 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               | (TNullable inner | TOcaml_app ("option", [ inner ]))
                 when Types.is_dynamic inner || Types.equal inner TUnknown
                      || match inner with TVar _ -> true | _ -> false ->
-                  Error.error
+                  Error.error ~code:Error_code.Semantic
                     "assoc requires an optional value with a concrete static \
                      map or record type"
                 | target_ty -> (
                     match Types.dynamic_map_types target_ty with
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           ("assoc expects a map or vector, got "
                           ^ Types.source_name target_ty)
                     | Some (declared_key_ty, declared_value_ty) -> (
@@ -3135,7 +3135,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                         expression)
                                     (validate pairs)))
                           ))))
-      | _ -> Error.error "assoc expects collection followed by key/value pairs"
+      | _ -> Error.error ~code:Error_code.Arity "assoc expects collection followed by key/value pairs"
     and compile_dissoc scope env arg_forms =
       match arg_forms with
       | target_form :: key_forms -> (
@@ -3202,7 +3202,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                     | [] -> Ok (List.rev acc)
                     | FKeyword keyword :: rest ->
                         parse_keywords (keyword :: acc) rest
-                  | _ -> Error.error "dissoc expects map followed by keywords"
+                  | _ -> Error.error ~code:Error_code.Arity "dissoc expects map followed by keywords"
                   in
                   let rec dissoc_keywords target = function
                     | [] -> Ok target
@@ -3226,7 +3226,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   | TNamed_record { nominal = false; _ } ->
                                       Ok target
                                   | _ ->
-                                      Error.error
+                                      Error.error ~code:Error_code.Unresolved
                                         ("cannot dissoc unknown field " ^ keyword)))
                           | Some _ -> Structural_map.dissoc target fields keyword
                         in
@@ -3338,8 +3338,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                             (Semantic_ir.Ident "map")
                                             keys)) ) ] )))
                       (pack [] keys))
-              | _ -> Error.error "dissoc expects a map"))
-      | _ -> Error.error "dissoc expects map followed by keywords"
+              | _ -> Error.error ~code:Error_code.Arity "dissoc expects a map"))
+      | _ -> Error.error ~code:Error_code.Arity "dissoc expects map followed by keywords"
     and compile_merge scope env arg_forms =
       match compile_args_for scope env arg_forms with
       | Error _ as err -> err
@@ -3356,7 +3356,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             List.map (fun map -> Types.dynamic_map_types map.ty) maps
           in
           if List.exists Option.is_none map_types then
-            Error.error
+            Error.error ~code:Error_code.Arity
               ("merge expects statically typed maps, got "
               ^ String.concat ", "
                   (List.map
@@ -3400,8 +3400,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         | key_form :: [] -> (
             match key_form with
             | FKeyword keyword ->
-                Error.error ("No value supplied for key: " ^ keyword)
-            | _ -> Error.error "No value supplied for key")
+                Error.error ~code:Error_code.Semantic ("No value supplied for key: " ^ keyword)
+            | _ -> Error.error ~code:Error_code.Semantic "No value supplied for key")
       in
       if arg_forms = [] then
         Ok
@@ -3412,8 +3412,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         let key = List.hd (List.rev arg_forms) in
         (match key with
         | FKeyword keyword ->
-            Error.error ("No value supplied for key: " ^ keyword)
-        | _ -> Error.error "No value supplied for key")
+            Error.error ~code:Error_code.Semantic ("No value supplied for key: " ^ keyword)
+        | _ -> Error.error ~code:Error_code.Semantic "No value supplied for key")
       else
         match parse_pairs [] arg_forms with
         | Error _ as err -> err
@@ -3548,7 +3548,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 ~actual:argument.ty
             then Ok argument.semantic_expr
             else
-              Error.error
+              Error.error ~code:Error_code.Type_mismatch
                 ("update called with incompatible arguments: expected "
                ^ Types.source_name expected ^ ", got "
                 ^ Types.source_name argument.ty)
@@ -3582,11 +3582,11 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
           Result.bind (prepare expected argument) (fun argument ->
               prepare_updater_arguments (argument :: prepared) expected_rest
                 argument_rest)
-      | _ -> Error.error "update function argument count mismatch"
+      | _ -> Error.error ~code:Error_code.Type_mismatch "update function argument count mismatch"
     in
     let compile_static_map target key fn extra_args =
       match Types.dynamic_map_types target.ty with
-      | None -> Error.error "update expects a map"
+      | None -> Error.error ~code:Error_code.Arity "update expects a map"
       | Some (key_ty, value_ty) -> (
           let resolved_key_ty =
             match key_ty with TUnknown | TMeta _ | TVar _ -> key.ty | _ -> key_ty
@@ -3596,7 +3596,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               (Types.assignable ~policy:Host_boundary
                  ~expected:resolved_key_ty ~actual:key.ty)
           then
-            Error.error
+            Error.error ~code:Error_code.Semantic
               ("update map key must be " ^ Types.source_name resolved_key_ty)
           else
             match fn.ty with
@@ -3672,7 +3672,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         (Types.assignable ~policy:Host_boundary
                            ~expected:resolved_value_ty ~actual:return_ty)
                     then
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         ("update map value must remain "
                        ^ Types.source_name resolved_value_ty)
                     else
@@ -3689,12 +3689,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 coerce_expression_to_type resolved_value_ty
                                   return_ty value;
                               ])))
-              | None -> Error.error "update function argument count mismatch")
-            | _ -> Error.error "update expects a function")
+              | None -> Error.error ~code:Error_code.Type_mismatch "update function argument count mismatch")
+            | _ -> Error.error ~code:Error_code.Arity "update expects a function")
     in
     let compile_extension target fields keyword fn extra_args =
       match Types.find_record_extension_field fields with
-      | None -> Error.error ("cannot update unknown field " ^ keyword)
+      | None -> Error.error ~code:Error_code.Unresolved ("cannot update unknown field " ^ keyword)
       | Some extension_field -> (
           let old_value =
             typed_ir dynamic
@@ -3727,8 +3727,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                       with
                       | Some target -> Ok target
                       | None -> assert false))
-              | None -> Error.error "update function argument count mismatch")
-          | _ -> Error.error "update expects a function")
+              | None -> Error.error ~code:Error_code.Type_mismatch "update function argument count mismatch")
+          | _ -> Error.error ~code:Error_code.Arity "update expects a function")
     in
     let compile_missing_homogeneous_field target fields keyword fn_form fn
         extra_args ~static_ifn_nil =
@@ -3757,7 +3757,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
               Structural_map.assoc target fields keyword
                 (typed_ir TBool (Semantic_ir.Bool true))
             else
-              Error.error
+              Error.error ~code:Error_code.Arity
                 "update of a missing key requires a nullable updater"
           else
             let old_value =
@@ -3773,8 +3773,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                     (Semantic_ir.Apply (fn.semantic_expr, arguments))
                 in
                 Structural_map.assoc target fields keyword result)
-          | None -> Error.error "update function argument count mismatch")
-      | _ -> Error.error "update expects a function"
+          | None -> Error.error ~code:Error_code.Type_mismatch "update function argument count mismatch")
+      | _ -> Error.error ~code:Error_code.Arity "update expects a function"
     in
     let static_ifn_nil_updater = function
       | FKeyword _, []
@@ -3903,7 +3903,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                             (TNullable field.ty)
                             (Semantic_ir.Constructor ("None", None))
                         else if type_change then
-                          Error.error
+                          Error.error ~code:Error_code.Type_mismatch
                             (Printf.sprintf
                                "cannot update %s as %s because it is already %s"
                                keyword (source_name ret) (source_name field.ty))
@@ -3928,7 +3928,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                         find_field row_field.keyword actual_fields
                                       with
                                       | None ->
-                                          Error.error
+                                          Error.error ~code:Error_code.Arity
                                             ("record argument is missing field "
                                            ^ row_field.keyword)
                                       | Some actual_field ->
@@ -3987,7 +3987,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 in
                                 match prepare_argument expected argument with
                                 | Error _ when prepared <> [] ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                                       "update function arguments do not match \
                                        field and extra arguments"
                                 | Error _ as error -> error
@@ -3995,7 +3995,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                     prepare_all (argument :: prepared)
                                       expected_rest argument_rest)
                             | _ ->
-                                Error.error
+                                Error.error ~code:Error_code.Type_mismatch
                                   "update function argument count mismatch"
                           in
                           Result.bind
@@ -4072,18 +4072,18 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   Structural_map.update_value target fields
                                     keyword field.ty stored))
                         | None ->
-                            Error.error "update function argument count mismatch")
-                      | _ -> Error.error "update expects a function"))
+                            Error.error ~code:Error_code.Type_mismatch "update function argument count mismatch")
+                      | _ -> Error.error ~code:Error_code.Arity "update expects a function"))
             | target_ty
               when Option.is_some (Types.dynamic_map_types target_ty) ->
                 compile_static_map target
                   (typed_ir TKeyword (Semantic_ir.String keyword))
                   fn extra_args
             | target_ty when Types.is_dynamic target_ty ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "update requires a statically typed map or record; add a \
                    concrete type annotation"
-              | _ -> Error.error "update expects a map"))
+              | _ -> Error.error ~code:Error_code.Arity "update expects a map"))
       | target_form :: index_form :: fn_form :: extra_forms -> (
           let static_ifn_nil =
             static_ifn_nil_updater (fn_form, extra_forms)
@@ -4278,7 +4278,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                   (pack_edn_value inner
                                      (Semantic_ir.Ident value_name))
                             | _ ->
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   "vector update result requires a closed sum \
                                    element type"
                           in
@@ -4375,25 +4375,25 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                           packed_value;
                                         ])))
                     else
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "update function arguments do not match vector element \
                          and extra arguments"
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "update function arguments do not match vector element \
                            and extra arguments")
-                  | _ -> Error.error "update expects a function")
-              | TVector _, _ -> Error.error "update vector index must be int"
+                  | _ -> Error.error ~code:Error_code.Arity "update expects a function")
+              | TVector _, _ -> Error.error ~code:Error_code.Semantic "update vector index must be int"
             | target_ty, _
               when Option.is_some (Types.dynamic_map_types target_ty) ->
                 compile_static_map target index fn extra_args
             | target_ty, _ when Types.is_dynamic target_ty ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "update requires a statically typed map or vector; add a \
                    concrete type annotation"
-              | _ -> Error.error "update expects a map or vector"))
+              | _ -> Error.error ~code:Error_code.Arity "update expects a map or vector"))
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           "update expects collection, key/index, function, and optional \
            arguments"
     and compile_select_keys scope env arg_forms =
@@ -4401,7 +4401,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
         let rec parse acc = function
           | [] -> Ok (List.rev acc)
           | FKeyword keyword :: rest -> parse (keyword :: acc) rest
-          | _ -> Error.error "select-keys expects a vector of keywords"
+          | _ -> Error.error ~code:Error_code.Arity "select-keys expects a vector of keywords"
         in
         parse [] key_forms
       in
@@ -4427,7 +4427,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
           Result.is_ok (Type_solver.unify Type_solver.empty key_ty actual_ty)
         then
           Ok sequence
-        else Error.error "select-keys key type must match map key type"
+        else Error.error ~code:Error_code.Semantic "select-keys key type must match map key type"
       in
       let select_open_record target fields keywords extension_field =
         let dynamic = Types.dynamic_constraint TUnknown in
@@ -4517,7 +4517,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                             ];
                         ]))
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "select-keys requires ILookup to return an option")
           lookup
       in
@@ -4550,7 +4550,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                   Result.bind (parse_keywords key_forms) (fun keywords ->
                       Structural_map.select_keys target fields keywords)
               | (TRecord _ | TNamed_record _), _ ->
-                  Error.error "select-keys expects a vector of keywords"
+                  Error.error ~code:Error_code.Arity "select-keys expects a vector of keywords"
               | target_ty, _ -> (
                   match Types.dynamic_map_types target_ty with
                   | None when Types.is_dynamic target_ty -> (
@@ -4559,7 +4559,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                       | Ok keys -> (
                           match Collection_capability.to_seq_expr env keys with
                           | Error _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Arity
                                 "select-keys expects a Seqable key collection"
                           | Ok (actual_ty, sequence) ->
                               Result.map
@@ -4571,14 +4571,14 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                 (adapt_key_sequence
                                    (Types.dynamic_constraint TUnknown)
                                    actual_ty sequence)))
-                  | None -> Error.error "select-keys expects a map"
+                  | None -> Error.error ~code:Error_code.Arity "select-keys expects a map"
                   | Some (key_ty, _value_ty) -> (
                       match compile_expr scope env keys_form with
                       | Error _ as error -> error
                       | Ok keys -> (
                           match Collection_capability.to_seq_expr env keys with
                           | Error _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Arity
                                 "select-keys expects a Seqable key collection"
                           | Ok (actual_ty, sequence) ->
                               Result.map
@@ -4591,7 +4591,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                           "Lg_runtime.Runtime_map.select_keys")
                                        [ target.semantic_expr; sequence ]))
                                 (adapt_key_sequence key_ty actual_ty sequence))))))
-      | _ -> Error.error "select-keys expects map and key collection"
+      | _ -> Error.error ~code:Error_code.Arity "select-keys expects map and key collection"
     and compile_contains scope env arg_forms =
       let env = Env.with_expected_type None env in
       let compile_deftype_contains target key =
@@ -4688,7 +4688,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
             Collection_capability.contains_expr target value
             |> Option.value
                  ~default:
-                   (Error.error
+                   (Error.error ~code:Error_code.Arity
                       "contains? expects a static membership witness")
         | TNil, _ -> Ok (typed_ir TBool (Semantic_ir.Bool false))
         | _, _
@@ -4705,7 +4705,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 (Types.assignable ~policy:Host_boundary ~expected:key_ty
                    ~actual:value.ty)
             then
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 ("contains? value type must match map key type: expected "
                ^ source_name key_ty ^ ", got " ^ source_name value.ty)
             else
@@ -4749,7 +4749,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                   ( Semantic_ir.Ident contains,
                       [ target.semantic_expr; value.semantic_expr ] )))
         | TOcaml_app ("Lg_runtime.Runtime_transient.set", _), _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "contains? value type must match transient set element type"
         | TSet (TUnknown | TMeta _), _ when not (Types.is_dynamic value.ty) ->
             Ok
@@ -4778,7 +4778,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                (Semantic_ir.Ident (set_module ^ ".mem"),
                                 [ value; target.semantic_expr ]))))
         | TSet inner, _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               (Printf.sprintf
                  "contains? value type must match set element type: expected %s, got %s"
                  (Types.source_name inner) (Types.source_name value.ty))
@@ -4793,7 +4793,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         ( "<",
                           value.semantic_expr,
                           apply "Rrbvec.length" [ target.semantic_expr ] ) )))
-        | TVector _, _ -> Error.error "contains? vector index must be int"
+        | TVector _, _ -> Error.error ~code:Error_code.Semantic "contains? vector index must be int"
         | TArray _, TInt ->
             Ok
               (typed_ir TBool
@@ -4835,7 +4835,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                  (Semantic_ir.Apply
                     ( Semantic_ir.Ident "Lg_runtime.Core_set.String_set.mem",
                       [ value.semantic_expr; target.semantic_expr ] )))
-        | TMap_keys, _ -> Error.error "contains? map key must be a keyword"
+        | TMap_keys, _ -> Error.error ~code:Error_code.Semantic "contains? map key must be a keyword"
         | (TRecord _ | TNamed_record _), TKeyword ->
             Result.map
               (fun adapter ->
@@ -4874,7 +4874,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                         ( Semantic_ir.Ident "Lg_runtime.Runtime_map.mem",
                           [ target.semantic_expr; value.semantic_expr ] )))
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("contains? expects a map, set, or vector, got "
                  ^ source_name target.ty))
       in
@@ -4950,7 +4950,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                              value_form;
                            ])
                   | _ -> compile_collection_contains target value)))
-      | _ -> Error.error "contains? expects collection and key"
+      | _ -> Error.error ~code:Error_code.Arity "contains? expects collection and key"
     and compile_keys scope env arg_forms =
       match compile_args_for scope env arg_forms with
       | Error _ as err -> err
@@ -5014,11 +5014,11 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                           entries.semantic_expr;
                                         ] )))
                           | Some entry_ty ->
-                              Error.error
+                              Error.error ~code:Error_code.Arity
                                 ("keys expects map entries, got "
                                ^ source_name entry_ty)
                           | None ->
-                              Error.error
+                              Error.error ~code:Error_code.Arity
                                 "keys requires a statically typed map entry sequence")
                   | TRecord fields | TNamed_record { fields; _ } ->
               let visible_fields = Types.record_constructor_fields fields in
@@ -5055,8 +5055,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                 (typed_ir (Types.next_seq TKeyword)
                    (Semantic_ir.Apply
                       ( Semantic_ir.Ident "List.to_seq", [ keys ] )))
-                  | _ -> Error.error "keys expects a map")))
-      | Ok _ -> Error.error "keys expects 1 arguments"
+                  | _ -> Error.error ~code:Error_code.Arity "keys expects a map")))
+      | Ok _ -> Error.error ~code:Error_code.Arity "keys expects 1 arguments"
     and compile_vals scope env arg_forms =
       match compile_args_for scope env arg_forms with
       | Error _ as err -> err
@@ -5122,12 +5122,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack =
                                              field));
                                 ] )))
                     else
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "vals requires all map values to have the same type"
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       ("vals expects a map, got " ^ Types.source_name target.ty)))
-      | Ok _ -> Error.error "vals expects 1 arguments"
+      | Ok _ -> Error.error ~code:Error_code.Arity "vals expects 1 arguments"
   in
   {
     compile_list;

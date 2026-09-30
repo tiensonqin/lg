@@ -21,7 +21,7 @@ let location start_offset end_offset =
 
 let unfinished_literal_error ~source ~opening_offset ~name ~closing =
   let eof = String.length source in
-  Error.error ~code:"LG1001" ~phase:`Lexing
+  Error.error ~code:Error_code.Lexing ~phase:`Lexing
     ~title:("UNFINISHED " ^ String.uppercase_ascii name)
     ~location:(location eof eof)
     ~related:
@@ -304,7 +304,7 @@ let tokenize source =
       | '#' when i + 1 < String.length source && source.[i + 1] = '\'' ->
           let value, next = read_atom source (i + 2) in
           if value = "" then
-            Error.error ~code:"LG1001" ~phase:`Lexing
+            Error.error ~code:Error_code.Lexing ~phase:`Lexing
               "var quote expects a symbol"
           else loop next (token (Var_quote value) i next :: tokens)
       | '#' when i + 1 < String.length source && source.[i + 1] = '(' ->

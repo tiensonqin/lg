@@ -113,7 +113,7 @@ let resolve_auto_keywords scope env form =
           (match Env.resolve_namespace_alias ~scope alias env with
           | Some namespace -> Ok (":" ^ namespace ^ "/" ^ local_name)
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Unresolved
                 ("cannot resolve auto-keyword namespace alias " ^ alias))
   in
   let rec walk source =
@@ -505,7 +505,7 @@ let compile_multimethod_dispatch scope env dispatch_form =
                           List.init arity (list_nth args_name) ) ),
                   static_parameter_tys )))
   | _ ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         "defmulti currently supports keyword, identity, and fn dispatch forms"
 
 let compile_multimethod_default scope env = function
@@ -518,7 +518,7 @@ let compile_multimethod_default scope env = function
       Result.map
         (fun value -> value.Types.semantic_expr)
         (Multimethod_dynamic_boundary.compile_form ~compile_expr scope env value)
-  | _ -> Error.error "defmulti options currently support only :default"
+  | _ -> Error.error ~code:Error_code.Semantic "defmulti options currently support only :default"
 
 let multimethod_dispatch_value_type = function
   | FKeyword _ -> Some TKeyword
@@ -918,7 +918,7 @@ let prepare_function scope env name params body_forms =
               })
             (Call_elaborator.plan_and_emit_argument env ~expected:return_type
                parts.body))
-  | Some _ -> Error.error ("function signature expected for " ^ name)
+  | Some _ -> Error.error ~code:Error_code.Semantic ("function signature expected for " ^ name)
   | None ->
       let forward_signature =
         match Env.find_opt (Names.scoped_key scope name) env with
@@ -1482,7 +1482,7 @@ and compile_resolved scope env next_type form =
          && (Option.is_some (Env.find_opt (Names.scoped_key "clojure.core" name) env)
              || Option.is_some (Env.find_macro ~scope:"clojure.core" name env)
              || Option.is_some (Env.find_inline_macro ~scope:"clojure.core" name env)) ->
-      Error.error
+      Error.error ~code:Error_code.Interop
         ("definition " ^ Names.scoped_key scope name ^ " conflicts with clojure.core/" ^ name
          ^ "; add (:refer-clojure :exclude [" ^ name ^ "]) to the namespace")
   | _ -> compile_definition scope env next_type form
@@ -1507,7 +1507,7 @@ and compile_definition scope env next_type form =
            ~name:ocaml_name ~location:(Source_context.find name_form)
            parameters result options)
   | FList (FSymbol "ffi" :: _) ->
-      Error.error "ffi expects a name, argument type vector, result type, and options map"
+      Error.error ~code:Error_code.Protocol "ffi expects a name, argument type vector, result type, and options map"
   | FList
       (FSymbol ("defn" | "defn-")
       :: FSymbol "^:dynamic"
@@ -1585,26 +1585,26 @@ and compile_definition scope env next_type form =
         Result.bind (Type_annotation.of_param_annotation hint) (fun ty ->
             let ty = Function_elaborator.infer_named_record scope env ty in
             match unresolved_record_hint ty with
-            | Some name -> Error.error ("unknown record type " ^ name)
+            | Some name -> Error.error ~code:Error_code.Unresolved ("unknown record type " ^ name)
             | None -> Ok ty)
       in
       let rec field_specs acc hint = function
         | [] -> (
             match hint with
             | None -> Ok (List.rev acc)
-            | Some _ -> Error.error "defrecord field hint requires a field")
+            | Some _ -> Error.error ~code:Error_code.Arity "defrecord field hint requires a field")
         | FSymbol metadata :: rest when String.starts_with ~prefix:"^" metadata
           -> (
             match hint with
             | None -> field_specs acc (Some metadata) rest
-            | Some _ -> Error.error "defrecord field has multiple type hints")
+            | Some _ -> Error.error ~code:Error_code.Semantic "defrecord field has multiple type hints")
         | FSymbol field_name :: rest -> (
             match hint with
             | None -> field_specs ((field_name, None) :: acc) None rest
             | Some hint ->
                 Result.bind (resolve_field_hint hint) (fun ty ->
                     field_specs ((field_name, Some ty) :: acc) None rest))
-        | _ -> Error.error "defrecord fields must be symbols"
+        | _ -> Error.error ~code:Error_code.Semantic "defrecord fields must be symbols"
       in
       let rec protocol_groups groups current = function
         | [] -> (
@@ -1621,12 +1621,12 @@ and compile_definition scope env next_type form =
             protocol_groups groups (Some (protocol_name, [])) rest
         | (FList _ as method_form) :: rest -> (
             match current with
-            | None -> Error.error "defrecord method requires a protocol name"
+            | None -> Error.error ~code:Error_code.Protocol "defrecord method requires a protocol name"
             | Some (protocol_name, methods) ->
                 protocol_groups groups
                   (Some (protocol_name, method_form :: methods))
                   rest)
-        | _ :: _ -> Error.error "invalid defrecord protocol implementation"
+        | _ :: _ -> Error.error ~code:Error_code.Protocol "invalid defrecord protocol implementation"
       in
       let items_of = function Group items -> items | item -> [ item ] in
       Result.bind (field_specs [] None raw_fields) (fun field_specs ->
@@ -1666,7 +1666,7 @@ and compile_definition scope env next_type form =
           in
           match conflicting_field with
           | Some (field_name, _) ->
-              Error.error
+              Error.error ~code:Error_code.Invalid_form
                 ("defrecord field annotation does not match its signature: "
                 ^ name ^ "/" ^ field_name)
           | None ->
@@ -1848,7 +1848,7 @@ and compile_definition scope env next_type form =
             field_specs
               ((field_name, metadata, mutable_field) :: acc)
               None false rest
-        | _ -> Error.error "deftype fields must be symbols"
+        | _ -> Error.error ~code:Error_code.Semantic "deftype fields must be symbols"
       in
       Result.bind (field_specs [] None false raw_fields) (fun fields ->
           let signature_fields =
@@ -2482,7 +2482,7 @@ and compile_definition scope env next_type form =
                 | Error _ as error -> error
                 | Ok body_forms -> compile_expanded_body body_forms)
             | _ :: _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "deftype methods must be (method-name [params] body...)"
           in
           compile_methods env [] None interface_forms))
@@ -2662,7 +2662,7 @@ and compile_definition scope env next_type form =
       :: body_forms) -> (
       let source_key = resolve_multimethod_key scope env method_name in
       match Env.find_opt source_key env with
-      | None -> Error.error ("unknown multimethod " ^ method_name)
+      | None -> Error.error ~code:Error_code.Unresolved ("unknown multimethod " ^ method_name)
       | Some binding -> (
           match binding.ty with
           | TFn (parameter_tys, _) ->
@@ -2677,7 +2677,7 @@ and compile_definition scope env next_type form =
               in
               let arity = List.length parameter_tys in
               if arity <> List.length params then
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("defmethod for " ^ method_name ^ " expects "
                  ^ string_of_int arity ^ " parameters")
               else
@@ -2730,7 +2730,7 @@ and compile_definition scope env next_type form =
                            | Ok substitutions ->
                                Ok (Type_solver.apply substitutions binding.ty)
                            | Error _ ->
-                               Error.error
+                               Error.error ~code:Error_code.Type_mismatch
                                  ("defmethod " ^ method_name
                                 ^ " requires a closed sum type for incompatible method signatures: "
                                 ^ Types.source_name binding.ty ^ " versus "
@@ -2816,9 +2816,9 @@ and compile_definition scope env next_type form =
                                      { pattern = Named method_name; expression };
                                  ]) ))
                  | (Error _ as error), _ | _, (Error _ as error) -> error)
-          | _ -> Error.error (method_name ^ " is not a multimethod")))
+          | _ -> Error.error ~code:Error_code.Type_mismatch (method_name ^ " is not a multimethod")))
   | FList (FSymbol "defmethod" :: _) ->
-      Error.error "defmethod currently supports print-method"
+      Error.error ~code:Error_code.Semantic "defmethod currently supports print-method"
   | FList (FSymbol "recursive-definition-group" :: definitions) ->
       let definitions =
         definitions
@@ -3241,7 +3241,7 @@ and compile_definition scope env next_type form =
           | Recursive_value_bindings recursive :: rest ->
               collect (List.rev_append recursive bindings) rest
           | _ :: _ ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "recursive deftype methods must compile to named functions"
         in
         collect [] items
@@ -3295,7 +3295,7 @@ and compile_definition scope env next_type form =
         in
         match substitutions with
         | Error _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               ("recursive function " ^ name
              ^ " implementation does not match its inferred signature: "
              ^ Types.source_name predeclared_ty ^ " vs "
@@ -3512,7 +3512,7 @@ and compile_definition scope env next_type form =
                       (recursive_binding :: bindings)
                       rest))
         | _ :: _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "recursive definition groups only support functions and deftype methods"
       in
       let env =
@@ -3622,7 +3622,7 @@ and compile_definition scope env next_type form =
         ?location:(Source_context.find name_form)
         scope env next_type signature_name item_forms
   | FList (FSymbol "module-signature" :: _) ->
-      Error.error "module-signature expects a name and signature items"
+      Error.error ~code:Error_code.Arity "module-signature expects a name and signature items"
   | FList
       [ FSymbol "optional-sequential-adapter";
         FKeyword storage_annotation;
@@ -3654,7 +3654,7 @@ and compile_definition scope env next_type form =
                 ("optional sequential adapter " ^ Types.source_name storage_ty)
             ))
   | FList (FSymbol "optional-sequential-adapter" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "optional-sequential-adapter expects storage type, element type, and adapter"
   | FList
       [ FSymbol "optional-map-adapter";
@@ -3689,7 +3689,7 @@ and compile_definition scope env next_type form =
               Comment ("optional map adapter " ^ Types.source_name storage_ty)
             ))
   | FList (FSymbol "optional-map-adapter" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "optional-map-adapter expects storage, key, value types, and adapter"
   | FList
       [ FSymbol "nil-value-adapter";
@@ -3718,12 +3718,12 @@ and compile_definition scope env next_type form =
                   Comment ("nil value adapter " ^ Types.source_name value_ty)
                 )
           | Some _ ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "nil-value-adapter must have the exact type () -> T"
           | None ->
-              Error.error ("unknown nil-value-adapter function " ^ adapter)))
+              Error.error ~code:Error_code.Unresolved ("unknown nil-value-adapter function " ^ adapter)))
   | FList (FSymbol "nil-value-adapter" :: _) ->
-      Error.error "nil-value-adapter expects value type and adapter"
+      Error.error ~code:Error_code.Arity "nil-value-adapter expects value type and adapter"
   | FList
       [ FSymbol "truthiness-adapter";
         FKeyword value_annotation;
@@ -3751,12 +3751,12 @@ and compile_definition scope env next_type form =
                   Comment ("truthiness adapter " ^ Types.source_name value_ty)
                 )
           | Some _ ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "truthiness-adapter must have the exact type T -> bool"
           | None ->
-              Error.error ("unknown truthiness-adapter function " ^ adapter)))
+              Error.error ~code:Error_code.Unresolved ("unknown truthiness-adapter function " ^ adapter)))
   | FList (FSymbol "truthiness-adapter" :: _) ->
-      Error.error "truthiness-adapter expects value type and adapter"
+      Error.error ~code:Error_code.Arity "truthiness-adapter expects value type and adapter"
   | FList
       [ FSymbol "exception-data-adapter";
         FKeyword value_annotation;
@@ -3815,16 +3815,16 @@ and compile_definition scope env next_type form =
             when (match parameter_tys with
                  | [ parameter_ty ] -> Types.equal parameter_ty value_ty
                  | _ -> matches_fields parameter_tys) ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "exception-data-adapter must return Lg_edn_backend.t"
           | Some _ ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "exception-data-adapter parameters must match the declared value or its fields"
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Unresolved
                 ("unknown exception-data-adapter function " ^ adapter)))
   | FList (FSymbol "exception-data-adapter" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "exception-data-adapter expects value type and adapter"
   | FList
       [ FSymbol "empty-map-default";
@@ -3847,7 +3847,7 @@ and compile_definition scope env next_type form =
               next_type,
               Comment ("empty map default " ^ Types.source_name target_ty) ))
   | FList (FSymbol "empty-map-default" :: _) ->
-      Error.error "empty-map-default expects target type and factory"
+      Error.error ~code:Error_code.Arity "empty-map-default expects target type and factory"
   | FList
       (FSymbol constructor_directive
       :: FKeyword target_annotation
@@ -3869,12 +3869,12 @@ and compile_definition scope env next_type form =
                       in
                       parse_payloads (ty :: acc) rest)
               | _ :: _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Invalid_form
                     "closed-sum constructor payloads must be type annotations"
             in
             parse_payloads [] payload_forms
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "closed-sum constructors must be symbols or constructor lists"
       in
       let rec parse acc = function
@@ -3887,7 +3887,7 @@ and compile_definition scope env next_type form =
       match (Type_annotation.of_keyword target_annotation, parse [] constructor_forms) with
       | (Error _ as error), _ | _, (Error _ as error) -> error
       | Ok _, Ok [] ->
-          Error.error "closed-sum-constructors expects at least one constructor"
+          Error.error ~code:Error_code.Arity "closed-sum-constructors expects at least one constructor"
       | Ok target_ty, Ok constructors ->
           let target_ty =
             Function_elaborator.infer_named_record scope env target_ty
@@ -3906,10 +3906,10 @@ and compile_definition scope env next_type form =
               Comment ("closed sum constructors " ^ Types.source_name target_ty)
             ))
   | FList (FSymbol "closed-sum-constructors" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "closed-sum-constructors expects a target type and constructors"
   | FList (FSymbol "contextual-closed-sum-constructors" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "contextual-closed-sum-constructors expects a target type and constructors"
   | FList [ FSymbol "signature"; FSymbol name; fields ] ->
       compile_signature scope env next_type name fields
@@ -3920,17 +3920,17 @@ and compile_definition scope env next_type form =
       | Ok type_parameters ->
           compile_signature ~type_parameters scope env next_type name fields)
   | FList (FSymbol "signature" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         "signature expects a name, optional type parameters, and a type or \
          record field map"
   | FList (FSymbol "dynamic-codec" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Unsupported
         "dynamic-codec is not supported; use explicit sum constructors"
   | FList [ FSymbol "extern-type"; (FSymbol name as name_form) ] ->
       Type_definition_elaborator.compile_opaque_type
         ?location:(Source_context.find name_form) scope env next_type name
   | FList (FSymbol "extern-type" :: _) ->
-      Error.error "extern-type expects one type name"
+      Error.error ~code:Error_code.Arity "extern-type expects one type name"
   | FList [ FSymbol "type-alias"; (FSymbol name as name_form); manifest_form ]
     ->
       compile_type_alias
@@ -3978,7 +3978,7 @@ and compile_definition scope env next_type form =
       |> Result.map (fun (_, env, next_type, item) ->
              (scope, env, next_type, item))
   | FList (FSymbol "external-record" :: _) ->
-      Error.error "external-record expects a type name and fields"
+      Error.error ~code:Error_code.Arity "external-record expects a type name and fields"
   | FList
       (FSymbol "type-record"
       :: (FSymbol name as name_form)
@@ -3996,7 +3996,7 @@ and compile_definition scope env next_type form =
         ?location:(Source_context.find name_form)
         scope env next_type name [] field_forms
   | FList (FSymbol "type-record" :: _) ->
-      Error.error "type-record expects a name and fields"
+      Error.error ~code:Error_code.Arity "type-record expects a name and fields"
   | FList
       (FSymbol "type-variant"
       :: (FSymbol name as name_form)
@@ -4037,7 +4037,7 @@ and compile_definition scope env next_type form =
               module_name = Names.module_path_to_ocaml module_path;
               location = Source_context.find module_form;
             } )
-  | FList (FSymbol "include" :: _) -> Error.error "include expects one module"
+  | FList (FSymbol "include" :: _) -> Error.error ~code:Error_code.Arity "include expects one module"
   | FList
       [
         FSymbol "module-alias";
@@ -4049,7 +4049,7 @@ and compile_definition scope env next_type form =
         ?target_location:(Source_context.find target_form)
         scope env next_type alias_name target_name
   | FList (FSymbol "module-alias" :: _) ->
-      Error.error "module-alias expects alias and target modules"
+      Error.error ~code:Error_code.Arity "module-alias expects alias and target modules"
   | FList
       (FSymbol "module-functor"
       :: (FSymbol functor_name as name_form)
@@ -4058,7 +4058,7 @@ and compile_definition scope env next_type form =
         ?location:(Source_context.find name_form)
         scope env next_type functor_name parameter_form body_forms
   | FList (FSymbol "module-functor" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "module-functor expects a name, [parameter signature ...], and body"
   | FList
       (FSymbol "module-apply"
@@ -4073,7 +4073,7 @@ and compile_definition scope env next_type form =
               :: acc)
               rest
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "module-apply expects result, functor, and one or more argument \
                modules"
       in
@@ -4085,7 +4085,7 @@ and compile_definition scope env next_type form =
             ?functor_location:(Source_context.find functor_form)
             scope env next_type module_name functor_name argument_names)
   | FList (FSymbol "module-apply" :: _) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         "module-apply expects result, functor, and one or more argument modules"
   | FList
       [
@@ -4253,7 +4253,7 @@ and compile_definition scope env next_type form =
                           }
                            : Error.related))
                 in
-                Error.error ~title:"ANNOTATION TYPE MISMATCH"
+                Error.error ~code:Error_code.Arity ~title:"ANNOTATION TYPE MISMATCH"
                   ?location:(Source_context.find expr_form) ~related
                   ~type_mismatch:
                     (Error.type_mismatch ~context:Error.Annotation
@@ -4276,7 +4276,7 @@ and compile_definition scope env next_type form =
       match expr with
       | Error _ as err -> err
       | Ok expr when unresolved_contextual_type expr.ty ->
-          Error.error "empty list requires a contextual element type"
+          Error.error ~code:Error_code.Arity "empty list requires a contextual element type"
       | Ok expr -> (
           let ocaml_name = Names.ocaml_binding_name scope name in
           let env_key = Names.scoped_key scope name in
@@ -4746,13 +4746,13 @@ and compile_definition scope env next_type form =
               | Error _ -> -1
             in
             if List.length parameter_tys <> parameter_count then
-              Error.error
+              Error.error ~code:Error_code.Arity
                 ("function signature arity does not match recursive defn "
                ^ name)
             else
               prepare_recursive_fn ~ocaml_name scope signature_env name
                 return_ty params body_forms
-        | Some _ -> Error.error ("function signature expected for " ^ name)
+        | Some _ -> Error.error ~code:Error_code.Semantic ("function signature expected for " ^ name)
         | None ->
             prepare_inferred_recursive_fn ~ocaml_name scope env name params
               body_forms
@@ -4849,7 +4849,7 @@ and compile_definition scope env next_type form =
       match prepare_function scope env name params body_forms with
       | Error _ as err -> err
       | Ok parts when unresolved_contextual_type parts.body.ty ->
-          Error.error "empty list requires a contextual element type"
+          Error.error ~code:Error_code.Arity "empty list requires a contextual element type"
       | Ok parts -> (
           let env, next_type, local_type_items, parts =
             allocate_function_local_records env next_type parts
@@ -4959,7 +4959,7 @@ and compile_definition scope env next_type form =
                         env,
                       next_type,
                       Group (type_items @ [ value_item ]) )
-          | _ -> Error.error "defn body did not compile to a function")))
+          | _ -> Error.error ~code:Error_code.Protocol "defn body did not compile to a function")))
   | FList
       (FSymbol "defprotocol"
       :: (FSymbol protocol_name as name_form)
@@ -4986,12 +4986,12 @@ and compile_definition scope env next_type form =
             groups grouped (Some (protocol_name, [])) rest
         | (FList _ as method_form) :: rest -> (
             match current with
-            | None -> Error.error "extend-type requires a protocol name"
+            | None -> Error.error ~code:Error_code.Protocol "extend-type requires a protocol name"
             | Some (protocol_name, methods) ->
                 groups grouped
                   (Some (protocol_name, method_form :: methods))
                   rest)
-        | _ :: _ -> Error.error "invalid extend-type implementation"
+        | _ :: _ -> Error.error ~code:Error_code.Protocol "invalid extend-type implementation"
       in
       let items_of = function Group items -> items | item -> [ item ] in
       Result.bind (groups [] None implementations) (fun groups ->
@@ -5039,10 +5039,10 @@ and compile_definition scope env next_type form =
         | (FList _ as method_form) :: rest -> (
             match current with
             | None ->
-                Error.error "extend-protocol method requires a receiver type"
+                Error.error ~code:Error_code.Protocol "extend-protocol method requires a receiver type"
             | Some (receiver, methods) ->
                 groups grouped (Some (receiver, method_form :: methods)) rest)
-        | _ :: _ -> Error.error "invalid extend-protocol implementation"
+        | _ :: _ -> Error.error ~code:Error_code.Protocol "invalid extend-protocol implementation"
       in
       let items_of = function Group items -> items | item -> [ item ] in
       match groups [] None implementations with
@@ -5114,7 +5114,7 @@ and compile_definition scope env next_type form =
       let rec parse_names acc = function
         | [] -> Ok (List.rev acc)
         | FSymbol name :: rest -> parse_names (name :: acc) rest
-        | _ -> Error.error ":refer-clojure :exclude expects a vector of symbols"
+        | _ -> Error.error ~code:Error_code.Macro ":refer-clojure :exclude expects a vector of symbols"
       in
       Result.map
         (fun names ->
@@ -5169,7 +5169,7 @@ and compile_definition scope env next_type form =
             in
             let env = Env.add key binding env in
             add_declarations (Env.add_explicit_declaration key env) rest
-        | _ -> Error.error "declare expects symbols"
+        | _ -> Error.error ~code:Error_code.Interop "declare expects symbols"
       in
       Result.map
         (fun env -> (scope, env, next_type, Comment "declare"))
@@ -5246,7 +5246,7 @@ and compile_definition scope env next_type form =
               Value_binding
                 { pattern = Ignore_pattern; expression = expr.semantic_expr } ))
   | FList (FSymbol "recur" :: _) ->
-      Error.error "recur is only valid in a loop tail position"
+      Error.error ~code:Error_code.Semantic "recur is only valid in a loop tail position"
   | FList
       [
         FSymbol operation;
@@ -5293,9 +5293,9 @@ and compile_definition scope env next_type form =
                   expression = expr.semantic_expr;
                 } ))
   | FList (FSymbol ("defn" | "defn-") :: _) ->
-      Error.error "defn expects a name, parameter vector, and body"
+      Error.error ~code:Error_code.Arity "defn expects a name, parameter vector, and body"
   | FList (FSymbol "defonce" :: _) ->
-      Error.error "defonce expects a name and value"
+      Error.error ~code:Error_code.Arity "defonce expects a name and value"
   | FList (FSymbol name :: args) as form -> (
       match Env.find_macro ~scope name env with
       | None -> (
@@ -5304,7 +5304,7 @@ and compile_definition scope env next_type form =
           | Ok expr -> (
               match expr.record_values with
               | Some _ ->
-                  Error.error "top-level map literals must be bound with def"
+                  Error.error ~code:Error_code.Semantic "top-level map literals must be bound with def"
               | None ->
                   Ok
                     ( scope,
@@ -5328,7 +5328,7 @@ and compile_definition scope env next_type form =
       | Ok expr -> (
           match expr.record_values with
           | Some _ ->
-              Error.error "top-level map literals must be bound with def"
+              Error.error ~code:Error_code.Semantic "top-level map literals must be bound with def"
           | None ->
               Ok
                 ( scope,

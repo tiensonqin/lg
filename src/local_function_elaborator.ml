@@ -108,7 +108,7 @@ let constraints scope env members types expressions =
                     substitutions expected actual with
             | Ok substitutions -> Ok substitutions
             | Error conflict ->
-                Error.error
+                Error.error ~code:Error_code.Type_mismatch
                   ("incompatible recursive types: "
                   ^ Types.source_name conflict.left
                   ^ " and "
@@ -208,7 +208,7 @@ let compile ~compile_named_fn ~prepare_recursive ~compile_body scope env
       | FList (FSymbol name :: (FVector _ as params) :: (_ :: _ as body))
         :: rest ->
           if List.mem name names then
-            Error.error ("duplicate letfn binding " ^ name)
+            Error.error ~code:Error_code.Duplicate ("duplicate letfn binding " ^ name)
           else
             Result.bind (Destructure.parse_param_specs params) (fun specs ->
                 let parameter_types =
@@ -242,7 +242,7 @@ let compile ~compile_named_fn ~prepare_recursive ~compile_body scope env
                     in
                     parse (name :: names) (function_ :: acc) rest))
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             "letfn binding must be a list of name, parameter vector, and body"
     in
     parse [] [] forms
@@ -341,7 +341,7 @@ let compile ~compile_named_fn ~prepare_recursive ~compile_body scope env
                 and current = canonical preflight_inferred in
                 if not (Types.equal previous current) then
                   if List.exists (Types.equal current) seen then
-                    Error.error
+                    Error.error ~code:Error_code.Type_mismatch
                       "letfn recursive type constraints do not converge"
                   else solve (previous :: seen) preflight_inferred
                 else
@@ -404,7 +404,7 @@ let compile ~compile_named_fn ~prepare_recursive ~compile_body scope env
                           in
                           complete final_env bindings true
                         else if List.exists (Types.equal current) seen then
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             "letfn recursive type constraints do not converge"
                         else solve (previous :: seen) inferred)))
               in
@@ -413,8 +413,8 @@ let compile ~compile_named_fn ~prepare_recursive ~compile_body scope env
     compile_components env components
   in
   match (bindings, body_forms) with
-  | _, [] -> Error.error "letfn requires a body"
+  | _, [] -> Error.error ~code:Error_code.Arity "letfn requires a body"
   | FVector [], _ ->
-      Error.error "letfn requires at least one local function binding"
+      Error.error ~code:Error_code.Arity "letfn requires at least one local function binding"
   | FVector forms, _ -> Result.bind (parse_functions forms) compile_functions
-  | _ -> Error.error "letfn expects a vector of local function bindings"
+  | _ -> Error.error ~code:Error_code.Arity "letfn expects a vector of local function bindings"

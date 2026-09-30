@@ -17,7 +17,7 @@ let drop_docstring = function FString _ :: rest -> rest | forms -> forms
 
 let parse_arity = function
   | FList (FVector params :: body) -> Ok { params; body }
-  | _ -> Error.error "macro arity expects a parameter vector and body"
+  | _ -> Error.error ~code:Error_code.Macro "macro arity expects a parameter vector and body"
 
 let create ~namespace ~name forms =
   let provenance = Source_context.capture forms in
@@ -33,7 +33,7 @@ let create ~namespace ~name forms =
   | FVector params :: body -> finish [ { params; body } ]
   | arity_forms ->
       let rec parse acc = function
-        | [] when acc = [] -> Error.error "defmacro expects at least one arity"
+        | [] when acc = [] -> Error.error ~code:Error_code.Arity "defmacro expects at least one arity"
         | [] -> finish (List.rev acc)
         | form :: rest -> (
             match parse_arity form with

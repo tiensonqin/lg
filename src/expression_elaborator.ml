@@ -188,7 +188,7 @@ and compile_expr_unlocated scope (env : Env.t) = function
                   ( Semantic_ir.Ident "Lg_runtime.Runtime_reference.deref",
                     [ Semantic_ir.Ident ocaml_name ] )))
       | Some binding when Option.is_some (Protocol.binding_protocol_id binding) ->
-          Error.error
+          Error.error ~code:Error_code.Protocol
             ("protocol " ^ name
            ^ " is a compile-time marker and cannot be used as a runtime value")
       | Some binding ->
@@ -202,14 +202,14 @@ and compile_expr_unlocated scope (env : Env.t) = function
                (Semantic_ir.Constructor (name, None)))
       | None -> (
           match untyped_first_class_function_error name with
-          | Some message -> Error.error message
+          | Some message -> Error.error ~code:Error_code.Semantic message
           | None -> (
               match source_type_tag_symbol scope env name with
               | Some expression -> Ok expression
               | None -> (
                   match lookup_function scope env name with
                   | Ok function_ -> Ok function_
-                  | Error _ -> Error.error ("unknown symbol " ^ name)))))
+                  | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown symbol " ^ name)))))
   | FCoreSymbol core_symbol ->
       lookup_function scope env (Ast.core_symbol_qualified_name core_symbol)
   | FVector forms -> compile_vector scope env forms
@@ -257,11 +257,11 @@ and compile_expr_unlocated scope (env : Env.t) = function
   | FList
       (FSymbol ("dotimes" | "clojure.core/dotimes" | "cljs.core/dotimes")
       :: _) ->
-      Error.error "dotimes expects [name count] and optional body forms"
+      Error.error ~code:Error_code.Arity "dotimes expects [name count] and optional body forms"
   | FList (FSymbol "loop" :: bindings :: body_forms) ->
       compile_loop scope env bindings body_forms
   | FList (FSymbol "recur" :: _) ->
-      Error.error "recur is only valid in a loop tail position"
+      Error.error ~code:Error_code.Semantic "recur is only valid in a loop tail position"
   | (FList (FSymbol "let*" :: _) as form) ->
       Result.bind (Macro_expander.expand_all ~scope ~compiler_env:env form)
         (compile_expr scope env)
@@ -280,7 +280,7 @@ and compile_expr_unlocated scope (env : Env.t) = function
                 compile_let scope env expanded_bindings expanded_body_forms
             | _ -> assert false)
   | FList (FSymbol "tag" :: FSymbol name :: payload) ->
-      if not (Variant_row.valid_tag name) then Error.error "invalid polymorphic variant tag"
+      if not (Variant_row.valid_tag name) then Error.error ~code:Error_code.Invalid_form "invalid polymorphic variant tag"
       else
         (match payload with
          | [] -> Ok (typed_ir (TPoly_variant {tags = [name, None]; bound = Lower_row}) (Semantic_ir.PolyTag (name, None)))
@@ -288,11 +288,11 @@ and compile_expr_unlocated scope (env : Env.t) = function
              typed_ir (TPoly_variant {tags = [name, Some payload.ty]; bound = Lower_row})
                (Semantic_ir.PolyTag (name, Some payload.semantic_expr)))
              (compile_expr scope (Env.with_expected_type None env) payload)
-         | _ -> Error.error "tag expects a name and at most one payload")
+         | _ -> Error.error ~code:Error_code.Arity "tag expects a name and at most one payload")
   | FList [FSymbol "pack-module"; FSymbol name; FSymbol signature] ->
       Module_value_elaborator.pack name signature
   | FList (FSymbol "pack-module" :: _) ->
-      Error.error "pack-module expects a module and a module signature"
+      Error.error ~code:Error_code.Arity "pack-module expects a module and a module signature"
   | FList (FSymbol "let-module" :: binding :: body_forms) ->
       Module_value_elaborator.unpack ~compile_expr ~compile_body scope env binding body_forms
   | FList (FSymbol "letfn" :: bindings :: body_forms) ->
@@ -304,11 +304,11 @@ and compile_expr_unlocated scope (env : Env.t) = function
   | FList [ FSymbol "__lg_some-thread"; binding; then_form ] ->
       compile_some_thread scope env binding then_form
   | FList (FSymbol "__lg_if-let" :: _) ->
-      Error.error "if-let requires [name option], then, and else"
+      Error.error ~code:Error_code.Semantic "if-let requires [name option], then, and else"
   | FList (FSymbol "__lg_if-some" :: _) ->
-      Error.error "if-some requires [name option], then, and else"
+      Error.error ~code:Error_code.Semantic "if-some requires [name option], then, and else"
   | FList (FSymbol "__lg_some-thread" :: _) ->
-      Error.error "some-> requires [name option] and a threaded form"
+      Error.error ~code:Error_code.Semantic "some-> requires [name option] and a threaded form"
   | FList (FSymbol "__lg_when-let" :: binding :: body_forms) ->
       compile_when_let scope env binding body_forms
   | FList (FSymbol "__lg_when-some" :: binding :: body_forms) ->
@@ -316,7 +316,7 @@ and compile_expr_unlocated scope (env : Env.t) = function
   | FList [ FSymbol "let-some"; bindings; then_form; else_form ] ->
       compile_let_some scope env bindings then_form else_form
   | FList (FSymbol "let-some" :: _) ->
-      Error.error "let-some requires bindings, then, and else"
+      Error.error ~code:Error_code.Protocol "let-some requires bindings, then, and else"
   | FList
       (FSymbol "fn" :: FSymbol name :: (FVector _ as params) :: body_forms) ->
       compile_named_fn scope env name params body_forms
@@ -329,10 +329,10 @@ and compile_expr_unlocated scope (env : Env.t) = function
   | FList (FSymbol "new" :: FSymbol type_name :: args) ->
       compile_call scope env (type_name ^ ".") args
   | FList [ FSymbol "quote"; value ] -> compile_quoted scope env value
-  | FList (FSymbol "quote" :: _) -> Error.error "quote expects one form"
+  | FList (FSymbol "quote" :: _) -> Error.error ~code:Error_code.Arity "quote expects one form"
   | FList [ FSymbol "syntax-quote"; value ] -> compile_quoted scope env value
   | FList (FSymbol "syntax-quote" :: _) ->
-      Error.error "syntax-quote expects one form"
+      Error.error ~code:Error_code.Arity "syntax-quote expects one form"
   | FList [ FSymbol "#uuid"; FString source ] ->
       Ok
         (typed_ir (TOcaml "Lg_runtime.Runtime_uuid.t")
@@ -340,10 +340,10 @@ and compile_expr_unlocated scope (env : Env.t) = function
               ( Semantic_ir.Ident "Lg_runtime.Runtime_uuid.of_string",
                 [ Semantic_ir.String source ] )))
   | FList (FSymbol "#uuid" :: _) ->
-      Error.error "#uuid expects one string literal"
+      Error.error ~code:Error_code.Arity "#uuid expects one string literal"
   | FList [ FSymbol "#inst"; FString source ] -> (
       match Instant_literal.parse source with
-      | Error message -> Error.error message
+      | Error message -> Error.error ~code:Error_code.Semantic message
       | Ok epoch_millis ->
           Ok
             (typed_ir (TOcaml "Lg_runtime.Runtime_instant.t")
@@ -352,7 +352,7 @@ and compile_expr_unlocated scope (env : Env.t) = function
                       "Lg_runtime.Runtime_instant.of_epoch_millis",
                     [ Semantic_ir.Int64 epoch_millis ] ))))
   | FList (FSymbol "#inst" :: _) ->
-      Error.error "#inst expects one string literal"
+      Error.error ~code:Error_code.Arity "#inst expects one string literal"
   | FList (FSymbol "do" :: body_forms) ->
       compile_body scope env "do requires at least one form" body_forms
   | FList [ FKeyword keyword; target ] ->
@@ -360,7 +360,7 @@ and compile_expr_unlocated scope (env : Env.t) = function
   | FList [ FKeyword keyword; target; default ] ->
       compile_call scope env "__lg_get"
         [ target; FKeyword keyword; default ]
-  | FList (FKeyword _ :: _) -> Error.error "keyword lookup expects one argument"
+  | FList (FKeyword _ :: _) -> Error.error ~code:Error_code.Arity "keyword lookup expects one argument"
   | FList [ FSymbol "if"; condition; then_form; else_form ] ->
       compile_if scope env condition then_form else_form
   | FList [ FSymbol "if"; condition; then_form ] ->
@@ -369,13 +369,13 @@ and compile_expr_unlocated scope (env : Env.t) = function
       compile_condp scope env predicate target clauses
   | FList (FSymbol "case" :: target :: clauses) ->
       compile_case scope env target clauses
-  | FList [ FSymbol "case" ] -> Error.error "case expects a target"
+  | FList [ FSymbol "case" ] -> Error.error ~code:Error_code.Arity "case expects a target"
   | FList (FSymbol "__lg_doseq" :: bindings :: body_forms) ->
       compile_doseq scope env bindings body_forms
   | FList [ FSymbol "for"; bindings; body ] ->
       compile_for scope env bindings body
   | FList (FSymbol "for" :: _) ->
-      Error.error "for expects a binding vector and body"
+      Error.error ~code:Error_code.Arity "for expects a binding vector and body"
   | FList (FSymbol "__lg_logical-and" :: forms) ->
       compile_logical scope env `And forms
   | FList (FSymbol "__lg_logical-or" :: forms) ->
@@ -615,7 +615,7 @@ and compile_doseq scope env bindings body_forms =
     | FKeyword ":when" :: condition :: rest ->
         Result.bind (expand recur_form rest) (fun (needs_recur, body) ->
             match recur_form with
-            | None -> Error.error "doseq modifier requires a preceding binding"
+            | None -> Error.error ~code:Error_code.Arity "doseq modifier requires a preceding binding"
             | Some recur_form ->
                 let then_form =
                   if needs_recur then append_recur body recur_form else body
@@ -626,7 +626,7 @@ and compile_doseq scope env bindings body_forms =
     | FKeyword ":while" :: condition :: rest ->
         Result.bind (expand recur_form rest) (fun (needs_recur, body) ->
             match recur_form with
-            | None -> Error.error "doseq modifier requires a preceding binding"
+            | None -> Error.error ~code:Error_code.Arity "doseq modifier requires a preceding binding"
             | Some recur_form ->
                 let then_form =
                   if needs_recur then append_recur body recur_form else body
@@ -636,7 +636,7 @@ and compile_doseq scope env bindings body_forms =
                     FList
                       [ FSymbol "if"; condition; then_form; FSymbol "nil" ] ))
     | FKeyword keyword :: _ ->
-        Error.error ("Invalid 'doseq' keyword " ^ keyword)
+        Error.error ~code:Error_code.Invalid_form ("Invalid 'doseq' keyword " ^ keyword)
     | ((FSymbol _ | FVector _ | FMap _) as pattern) :: collection :: rest ->
         let remaining_name = fresh_name "remaining" in
         let current_name = fresh_name "current" in
@@ -693,7 +693,7 @@ and compile_doseq scope env bindings body_forms =
                     ];
                 ] ))
           (expand (Some recur_form) rest)
-    | _ -> Error.error "doseq requires binding/collection pairs"
+    | _ -> Error.error ~code:Error_code.Semantic "doseq requires binding/collection pairs"
   in
   match bindings with
   | FVector forms ->
@@ -705,7 +705,7 @@ and compile_doseq scope env bindings body_forms =
                    ( [ (Semantic_ir.PAny, expression.semantic_expr) ],
                      Semantic_ir.Constructor ("None", None) )))
             (compile_expr scope env expanded))
-  | _ -> Error.error "doseq bindings must be a vector"
+  | _ -> Error.error ~code:Error_code.Semantic "doseq bindings must be a vector"
 
 and compile_for scope env bindings body =
   let erased_seqable_parameter = function
@@ -745,7 +745,7 @@ and compile_for scope env bindings body =
             in
             FList [ FSymbol "if"; condition; when_true; FVector [] ])
           (expand rest)
-    | FKeyword ":while" :: _ -> Error.error "for :while is not supported yet"
+    | FKeyword ":while" :: _ -> Error.error ~code:Error_code.Unsupported "for :while is not supported yet"
     | ((FSymbol _ | FVector _ | FMap _) as pattern) :: collection :: rest ->
         Result.map
           (fun body ->
@@ -758,14 +758,14 @@ and compile_for scope env bindings body =
             in
             FList [ FSymbol function_name; mapper; collection ])
           (expand rest)
-    | _ -> Error.error "for requires binding/collection pairs"
+    | _ -> Error.error ~code:Error_code.Semantic "for requires binding/collection pairs"
   in
   match bindings with
   | FVector forms -> (
       match expand forms with
       | Error _ as error -> error
       | Ok expanded -> compile_expr scope env expanded)
-  | _ -> Error.error "for bindings must be a vector"
+  | _ -> Error.error ~code:Error_code.Semantic "for bindings must be a vector"
 
 and compile_map scope env pairs =
   (Lazy.force context).special_forms.compile_map scope env pairs
@@ -1024,7 +1024,7 @@ and vector_rest_bindings rest_name = function
             | Some name -> [ FSymbol name; rest_form ]
           in
           Ok (item_bindings @ rest_bindings @ as_bindings))
-  | _ -> Error.error "variadic rest destructuring expects a vector"
+  | _ -> Error.error ~code:Error_code.Destructure "variadic rest destructuring expects a vector"
 
 and parse_multi_arity_clauses source_name forms =
   let rec parse_clause = function
@@ -1079,7 +1079,7 @@ and parse_multi_arity_clauses source_name forms =
                           FSymbol "__lg_kwargs_rest";
                         ] ] )
           | FSymbol "&" :: _ ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 ("defn " ^ source_name
                ^ " variadic arity requires one rest parameter")
           | form :: rest -> split (form :: fixed) rest
@@ -1148,7 +1148,7 @@ and parse_multi_arity_clauses source_name forms =
     | FList [ (FVector _ as params_form) ] ->
         parse_clause (FList [ params_form; FSymbol "nil" ])
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           ("defn " ^ source_name
          ^ " multi-arity clauses must contain a parameter vector and body")
   in
@@ -1168,19 +1168,19 @@ and parse_multi_arity_clauses source_name forms =
             match clause.rest_index with
             | None ->
                 if seen_variadic then
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("defn " ^ source_name ^ " variadic arity must be last")
                 else if List.mem clause.fixed_count seen_fixed then
-                  Error.error
+                  Error.error ~code:Error_code.Duplicate
                     ("defn " ^ source_name ^ " has duplicate arity "
                    ^ string_of_int clause.fixed_count)
                 else validate (clause.fixed_count :: seen_fixed) false rest
             | Some _ ->
                 if seen_variadic then
-                  Error.error
+                  Error.error ~code:Error_code.Semantic
                     ("defn " ^ source_name ^ " has multiple variadic arities")
                 else if rest <> [] then
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("defn " ^ source_name ^ " variadic arity must be last")
                 else validate seen_fixed true rest)
       in
@@ -1713,7 +1713,7 @@ and prepare_multi_arity_fn ?(infer_state_return = false) ?signature ~ocaml_name
                 compile pass state_return_ty starting_arities
                   ({ target_name; parts; row_param_types } :: compiled)
                   arities rest rest_targets))
-        | _ -> Error.error "internal error: multi-arity clause targets"
+        | _ -> Error.error ~code:Error_code.Internal "internal error: multi-arity clause targets"
       in
       compile 0 None initial_arities [] initial_arities parsed_clauses targets
 
@@ -1785,7 +1785,7 @@ and prepare_recursive_fn ~ocaml_name scope env source_name return_ty params
           specs
       in
       if List.exists Option.is_none explicit_param_tys then
-        Error.error "recursive defn parameters require type annotations"
+        Error.error ~code:Error_code.Invalid_form "recursive defn parameters require type annotations"
       else
         let param_tys = List.map Option.get explicit_param_tys in
         let self_binding =
@@ -1814,7 +1814,7 @@ and prepare_recursive_fn ~ocaml_name scope env source_name return_ty params
                 (Call_elaborator.plan_and_emit_argument env ~expected:return_ty
                    parts.body)
             else
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 ("recursive defn " ^ source_name ^ " must return "
                 ^ Types.source_name return_ty))
 
@@ -1880,7 +1880,7 @@ and prepare_inferred_recursive_fn_body ?explicit_return_ty ~ocaml_name scope env
             false
       in
       if List.exists contains_polymorphic_self_call body_forms then
-        Error.error
+        Error.error ~code:Error_code.Semantic
           (source_name
          ^ ": polymorphic recursion requires an explicit signature")
       else
@@ -2184,7 +2184,7 @@ and prepare_inferred_recursive_fn_body ?explicit_return_ty ~ocaml_name scope env
                         if Types.equal specialized.body.ty return_ty then
                           Ok specialized
                         else if remaining = 0 then
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             ("recursive defn " ^ source_name
                            ^ " return type did not stabilize")
                         else
@@ -2262,7 +2262,7 @@ and prepare_inferred_recursive_fn_with_return ~ocaml_name scope env source_name
           (Call_elaborator.plan_and_emit_argument env ~expected:return_ty
              parts.body)
       else
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("recursive defn " ^ source_name ^ " must return "
          ^ Types.source_name return_ty))
 
@@ -2327,7 +2327,7 @@ and compile_fn ?(param_type_overrides = []) ?preferred_record
                           FSymbol "__lg_kwargs_rest";
                         ] ] )
           | FSymbol "&" :: _ ->
-              Error.error "fn variadic arity requires one rest parameter"
+              Error.error ~code:Error_code.Arity "fn variadic arity requires one rest parameter"
           | form :: rest -> split (form :: fixed) rest
         in
         split [] forms
@@ -2409,7 +2409,7 @@ and compile_fn ?(param_type_overrides = []) ?preferred_record
   with
   | Error _ as err -> err
   | Ok parts when unresolved_contextual_type parts.body.ty ->
-      Error.error "empty list requires a contextual element type"
+      Error.error ~code:Error_code.Arity "empty list requires a contextual element type"
   | Ok parts -> (
       let function_ = fn_code parts in
       match variadic_rest_index with
@@ -2484,7 +2484,7 @@ and compile_named_fn scope env name params body_forms =
                          Semantic_ir.Tuple
                            [ Semantic_ir.Ident ocaml_name; Semantic_ir.Unit ] ));
               }
-        | _ -> Error.error "named fn requires a function body")
+        | _ -> Error.error ~code:Error_code.Arity "named fn requires a function body")
 
 and compile_call scope env name arg_forms =
   (Lazy.force context).calls.compile_call scope env name arg_forms

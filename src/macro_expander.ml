@@ -110,12 +110,12 @@ let string_of_value = function
   | Form (FChar value) -> Ok (String.make 1 value)
   | Form form -> Ok (string_of_form form)
   | Closure _ | Macro_function _ | Builtin _ | Juxt _ | Volatile _ | Recur _ ->
-      Error.error "str expects macro form values"
+      Error.error ~code:Error_code.Macro "str expects macro form values"
 
 let form_of_value = function
   | Form form -> Ok form
   | Closure _ | Macro_function _ | Builtin _ | Juxt _ | Volatile _ | Recur _ ->
-      Error.error "expected macro form"
+      Error.error ~code:Error_code.Macro "expected macro form"
 
 let rec sequence_forms = function
   | Form (FList [ FSymbol "__type-hint"; _; form ]) ->
@@ -137,17 +137,17 @@ let rec sequence_forms = function
       Ok (List.map (fun (key, value) -> FVector [ key; value ]) entries)
   | Form (FSymbol "nil") -> Ok []
   | Form (FSymbol symbol) ->
-      Error.error ("expected sequential macro value, got symbol " ^ symbol)
+      Error.error ~code:Error_code.Macro ("expected sequential macro value, got symbol " ^ symbol)
   | Form (FKeyword keyword) ->
-      Error.error ("expected sequential macro value, got keyword " ^ keyword)
-  | Form _ -> Error.error "expected sequential macro value, got scalar form"
-  | Closure _ -> Error.error "expected sequential macro value, got function"
+      Error.error ~code:Error_code.Macro ("expected sequential macro value, got keyword " ^ keyword)
+  | Form _ -> Error.error ~code:Error_code.Macro "expected sequential macro value, got scalar form"
+  | Closure _ -> Error.error ~code:Error_code.Macro "expected sequential macro value, got function"
   | Macro_function _ ->
-      Error.error "expected sequential macro value, got function"
+      Error.error ~code:Error_code.Macro "expected sequential macro value, got function"
   | Builtin _ | Juxt _ ->
-      Error.error "expected sequential macro value, got function"
-  | Recur _ -> Error.error "recur is only valid in macro loop tail position"
-  | Volatile _ -> Error.error "expected sequential macro value, got volatile"
+      Error.error ~code:Error_code.Macro "expected sequential macro value, got function"
+  | Recur _ -> Error.error ~code:Error_code.Macro "recur is only valid in macro loop tail position"
+  | Volatile _ -> Error.error ~code:Error_code.Macro "expected sequential macro value, got volatile"
 
 let concat_sequence_values values =
   let rec concat reversed = function
@@ -165,12 +165,12 @@ let assoc_macro_values = function
         | Form key :: Form value :: rest ->
             associate ((key, value) :: List.remove_assoc key entries) rest
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Macro
               "assoc expects a macro map followed by key/value pairs"
       in
       associate entries pairs
   | _ ->
-      Error.error "assoc expects a macro map followed by key/value pairs"
+      Error.error ~code:Error_code.Macro "assoc expects a macro map followed by key/value pairs"
 
 let truthy = function
   | Form (FSymbol "nil" | FBool false) -> false
@@ -190,7 +190,7 @@ let macro_form_matches predicate = function
 let rec split_params fixed = function
   | [] -> Ok (List.rev fixed, None)
   | FSymbol "&" :: [ rest ] -> Ok (List.rev fixed, Some rest)
-  | FSymbol "&" :: _ -> Error.error "macro rest parameter must be last"
+  | FSymbol "&" :: _ -> Error.error ~code:Error_code.Macro "macro rest parameter must be last"
   | param :: rest -> split_params (param :: fixed) rest
 
 let rec bind_pattern locals pattern value =
@@ -206,7 +206,7 @@ let rec bind_pattern locals pattern value =
               message = error.message ^ " while binding a vector pattern";
             }
       | Ok values -> bind_vector_pattern locals patterns values)
-  | _ -> Error.error "unsupported macro binding pattern"
+  | _ -> Error.error ~code:Error_code.Unsupported "unsupported macro binding pattern"
 
 and bind_vector_pattern locals patterns values =
   let rec loop locals patterns values =
@@ -239,7 +239,7 @@ let bind_params locals params args =
       if
         List.length args < fixed_count
         || (Option.is_none rest_pattern && List.length args <> fixed_count)
-      then Error.error "macro called with unsupported arity"
+      then Error.error ~code:Error_code.Unsupported "macro called with unsupported arity"
       else
         let rec bind_fixed locals patterns values =
           match patterns with
@@ -271,7 +271,7 @@ let bind_value_params locals params args =
       if
         List.length args < fixed_count
         || (Option.is_none rest_pattern && List.length args <> fixed_count)
-      then Error.error "macro helper called with unsupported arity"
+      then Error.error ~code:Error_code.Unsupported "macro helper called with unsupported arity"
       else
         let rec bind_fixed locals patterns values =
           match (patterns, values) with
@@ -346,9 +346,9 @@ let rec eval context = function
                 when String.starts_with ~prefix:"java." name
                      || String.starts_with ~prefix:"javax." name
                      || String.starts_with ~prefix:"clojure.lang." name ->
-                  Error.error
+                  Error.error ~code:Error_code.Unsupported
                     "Java interop is not supported; use static LG types and functions"
-              | None -> Error.error ("unknown macro symbol " ^ name))))
+              | None -> Error.error ~code:Error_code.Unresolved ("unknown macro symbol " ^ name))))
   | (FInt _ | FFloat _ | FDecimal _ | FChar _ | FString _ | FRegex _ | FBool _
     | FKeyword _)
     as form ->
@@ -380,7 +380,7 @@ let rec eval context = function
   | FList [ FSymbol "deref"; reference ] -> (
       match eval context reference with
       | Ok (Volatile value) -> Ok !value
-      | Ok _ -> Error.error "deref expects a volatile macro value"
+      | Ok _ -> Error.error ~code:Error_code.Macro "deref expects a volatile macro value"
       | Error _ as err -> err)
   | FList (FSymbol "if" :: condition :: then_form :: else_forms) -> (
       match eval context condition with
@@ -493,7 +493,7 @@ let rec eval context = function
       eval_for context pattern collection body
   | FList (FSymbol name :: args) -> eval_call context name args
   | FList [] -> Ok (Form (FList []))
-  | FList _ -> Error.error "macro call head must be a symbol"
+  | FList _ -> Error.error ~code:Error_code.Macro "macro call head must be a symbol"
 
 and eval_forms context forms =
   let rec loop acc = function
@@ -523,7 +523,7 @@ and eval_let context bindings body =
             match bind_pattern locals pattern value with
             | Error _ as err -> err
             | Ok locals -> bind locals rest))
-    | _ -> Error.error "macro let requires binding pairs"
+    | _ -> Error.error ~code:Error_code.Macro "macro let requires binding pairs"
   in
   bind context.locals bindings
 
@@ -539,7 +539,7 @@ and eval_loop context bindings body =
             | Ok locals ->
                 evaluate_bindings locals (pattern :: patterns) (value :: values)
                   rest))
-    | _ -> Error.error "macro loop requires binding pairs"
+    | _ -> Error.error ~code:Error_code.Macro "macro loop requires binding pairs"
   in
   let rec bind_values locals patterns values =
     match (patterns, values) with
@@ -548,7 +548,7 @@ and eval_loop context bindings body =
         match bind_pattern locals pattern value with
         | Error _ as error -> error
         | Ok locals -> bind_values locals patterns values)
-    | _ -> Error.error "macro recur argument count mismatch"
+    | _ -> Error.error ~code:Error_code.Macro "macro recur argument count mismatch"
   in
   Result.bind (evaluate_bindings context.locals [] [] bindings)
     (fun (patterns, initial_values) ->
@@ -585,7 +585,7 @@ and eval_cond context = function
       | Ok value ->
           if truthy value then eval context expression
           else eval_cond context rest)
-  | _ -> Error.error "macro cond requires test/expression pairs"
+  | _ -> Error.error ~code:Error_code.Macro "macro cond requires test/expression pairs"
 
 and eval_condp context predicate target clauses =
   match (predicate, eval context target) with
@@ -599,7 +599,7 @@ and eval_condp context predicate target clauses =
         }
       in
       let rec select = function
-        | [] -> Error.error "macro condp requires a default expression"
+        | [] -> Error.error ~code:Error_code.Macro "macro condp requires a default expression"
         | [ default ] -> eval context default
         | test :: expression :: rest -> (
             match
@@ -610,7 +610,7 @@ and eval_condp context predicate target clauses =
                 if truthy matched then eval context expression else select rest)
       in
       select clauses
-  | _ -> Error.error "macro condp predicate must be a symbol"
+  | _ -> Error.error ~code:Error_code.Macro "macro condp predicate must be a symbol"
 
 and eval_case context target clauses =
   match eval context target with
@@ -667,7 +667,7 @@ and eval_call context name arg_forms =
               match invoke_definition context definition arg_forms with
               | Error _ as error -> error
               | Ok (Form expanded) -> eval context expanded
-              | Ok _ -> Error.error "macro expansion must return a form")
+              | Ok _ -> Error.error ~code:Error_code.Macro "macro expansion must return a form")
           | None -> (
               match
                 Env.find_macro_function ~scope:context.namespace name
@@ -740,7 +740,7 @@ and apply_value context callable args =
   | Builtin "identity" -> (
       match args with
       | [ value ] -> Ok value
-      | _ -> Error.error "identity expects one macro argument")
+      | _ -> Error.error ~code:Error_code.Macro "identity expects one macro argument")
   | Builtin "conj" -> (
       match args with
       | [ collection; value ] -> (
@@ -749,8 +749,8 @@ and apply_value context callable args =
               Ok (Form (FVector (forms @ [ value ])))
           | Form (FList forms), Ok value -> Ok (Form (FList (value :: forms)))
           | _, (Error _ as error) -> error
-          | _ -> Error.error "conj expects a macro vector or list")
-      | _ -> Error.error "conj expects two macro arguments")
+          | _ -> Error.error ~code:Error_code.Macro "conj expects a macro vector or list")
+      | _ -> Error.error ~code:Error_code.Macro "conj expects two macro arguments")
   | Builtin ("assoc" | "clojure.lang.RT/assoc") -> assoc_macro_values args
   | Builtin "list" ->
       let rec collect forms = function
@@ -768,7 +768,7 @@ and apply_value context callable args =
     -> (
       match args with
       | [ value ] -> sequence_operation name value
-      | _ -> Error.error (name ^ " expects one macro argument"))
+      | _ -> Error.error ~code:Error_code.Macro (name ^ " expects one macro argument"))
   | Juxt functions ->
       let rec invoke results = function
         | [] -> Ok (Form (FVector (List.rev results)))
@@ -781,9 +781,9 @@ and apply_value context callable args =
                 | Ok form -> invoke (form :: results) rest))
       in
       invoke [] functions
-  | Builtin name -> Error.error ("unsupported macro function value " ^ name)
-  | Recur _ -> Error.error "recur value is not callable"
-  | _ -> Error.error "macro value is not callable"
+  | Builtin name -> Error.error ~code:Error_code.Unsupported ("unsupported macro function value " ^ name)
+  | Recur _ -> Error.error ~code:Error_code.Macro "recur value is not callable"
+  | _ -> Error.error ~code:Error_code.Macro "macro value is not callable"
 
 and invoke_definition context (definition : Macro_definition.t) arg_forms =
   match select_arity definition arg_forms with
@@ -829,13 +829,13 @@ and expand_are assertion_symbol parameters expression arguments =
     if count = 0 then Ok (List.rev taken, remaining)
     else
       match remaining with
-      | [] -> Error.error "The number of args doesn't match are's argv."
+      | [] -> Error.error ~code:Error_code.Macro "The number of args doesn't match are's argv."
       | value :: rest -> take (count - 1) (value :: taken) rest
   in
   match parameters with
   | [] when arguments = [] ->
       Ok (Form (FList [ FList [ FSymbol assertion_symbol; expression ] ]))
-  | [] -> Error.error "The number of args doesn't match are's argv."
+  | [] -> Error.error ~code:Error_code.Macro "The number of args doesn't match are's argv."
   | parameters ->
       let rec expanded_assertions accumulated = function
         | [] -> Ok (Form (FList (List.rev accumulated)))
@@ -857,23 +857,24 @@ and expand_are assertion_symbol parameters expression arguments =
 and parse_are_parameters accumulated = function
   | [] -> Ok (List.rev accumulated)
   | FSymbol name :: rest -> parse_are_parameters (name :: accumulated) rest
-  | _ -> Error.error "are expects a vector of symbols"
+  | _ -> Error.error ~code:Error_code.Arity "are expects a vector of symbols"
 
 and eval_builtin context name arg_forms =
   let eval_args () = eval_forms context arg_forms in
   let unary fn =
     match eval_args () with
     | Ok [ value ] -> fn value
-    | Ok _ -> Error.error (name ^ " expects one macro argument")
+    | Ok _ -> Error.error ~code:Error_code.Macro (name ^ " expects one macro argument")
     | Error _ as err -> err
   in
   match name with
   | "assert" -> (
       let fail = function
-        | None -> Error.error "Assert failed"
+        | None -> Error.error ~code:Error_code.Macro "Assert failed"
         | Some message ->
             Result.bind (eval context message) (fun message ->
-                Result.bind (string_of_value message) Error.error)
+                Result.bind (string_of_value message)
+                  (Error.error ~code:Error_code.Macro))
       in
       match arg_forms with
       | [ condition ] ->
@@ -882,7 +883,7 @@ and eval_builtin context name arg_forms =
       | [ condition; message ] ->
           Result.bind (eval context condition) (fun condition ->
               if truthy condition then Ok nil else fail (Some message))
-      | _ -> Error.error "assert expects one or two macro arguments")
+      | _ -> Error.error ~code:Error_code.Macro "assert expects one or two macro arguments")
   | "str" ->
       Result.bind (eval_args ()) (fun values ->
           let rec concatenate buffer = function
@@ -899,7 +900,7 @@ and eval_builtin context name arg_forms =
         when start >= 0 && finish >= start && finish <= String.length value ->
           Ok (Form (FString (String.sub value start (finish - start))))
       | Ok _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             "subs expects a string and valid start/end integer indexes"
       | Error _ as error -> error)
   | "namespace" ->
@@ -917,7 +918,7 @@ and eval_builtin context name arg_forms =
             (match String.index_opt value '/' with
             | Some index -> Ok (Form (FString (String.sub value 0 index)))
             | None -> Ok nil)
-        | _ -> Error.error "namespace expects a macro symbol or keyword")
+        | _ -> Error.error ~code:Error_code.Macro "namespace expects a macro symbol or keyword")
   | "identity" | "num" -> unary (fun value -> Ok value)
   | "boolean" -> unary (fun value -> Ok (Form (FBool (truthy value))))
   | "string?" ->
@@ -938,7 +939,7 @@ and eval_builtin context name arg_forms =
   | "regex-source" ->
       unary (function
         | Form (FRegex value) -> Ok (Form (FString value))
-        | _ -> Error.error "regex-source expects a macro regex")
+        | _ -> Error.error ~code:Error_code.Macro "regex-source expects a macro regex")
   | "float?" ->
       unary (fun value ->
           Ok
@@ -1012,7 +1013,7 @@ and eval_builtin context name arg_forms =
   | "even?" ->
       unary (function
         | Form (FInt value) -> Ok (Form (FBool (value mod 2 = 0)))
-        | _ -> Error.error "even? expects an integer macro argument")
+        | _ -> Error.error ~code:Error_code.Macro "even? expects an integer macro argument")
   | "int?" ->
       unary (function
         | Form (FInt _) -> Ok (Form (FBool true))
@@ -1045,12 +1046,12 @@ and eval_builtin context name arg_forms =
             in
             Ok (Form (FString name))
         | Form (FString value) -> Ok (Form (FString value))
-        | _ -> Error.error "name expects a macro symbol, keyword, or string")
+        | _ -> Error.error ~code:Error_code.Macro "name expects a macro symbol, keyword, or string")
   | "symbol" ->
       unary (function
         | Form (FString value) | Form (FSymbol value) ->
             Ok (Form (FSymbol value))
-        | _ -> Error.error "symbol expects a macro string or symbol")
+        | _ -> Error.error ~code:Error_code.Macro "symbol expects a macro string or symbol")
   | "keyword" ->
       unary (function
         | Form (FKeyword value) -> Ok (Form (FKeyword value))
@@ -1060,7 +1061,7 @@ and eval_builtin context name arg_forms =
               else ":" ^ value
             in
             Ok (Form (FKeyword keyword))
-        | _ -> Error.error "keyword expects a macro string, symbol, or keyword")
+        | _ -> Error.error ~code:Error_code.Macro "keyword expects a macro string, symbol, or keyword")
   | "partition" -> (
       match eval_args () with
       | Ok [ Form (FInt size); collection ] when size > 0 ->
@@ -1081,7 +1082,7 @@ and eval_builtin context name arg_forms =
               groups [] forms)
             (sequence_forms collection)
       | Ok _ ->
-          Error.error
+          Error.error ~code:Error_code.Macro
             "partition expects a positive integer and macro collection"
       | Error _ as error -> error)
   | "take" | "drop" -> (
@@ -1108,13 +1109,13 @@ and eval_builtin context name arg_forms =
                    (if name = "take" then take count [] forms
                     else drop count forms)))
             (sequence_forms collection)
-      | Ok _ -> Error.error (name ^ " expects an int and collection")
+      | Ok _ -> Error.error ~code:Error_code.Arity (name ^ " expects an int and collection")
       | Error _ as error -> error)
   | "/" -> (
       match eval_args () with
       | Ok [ Form (FInt left); Form (FInt right) ] when right <> 0 ->
           Ok (Form (FInt (left / right)))
-      | Ok _ -> Error.error "/ expects two integer macro arguments"
+      | Ok _ -> Error.error ~code:Error_code.Macro "/ expects two integer macro arguments"
       | Error _ as error -> error)
   | "nil?" -> unary (fun value -> Ok (Form (FBool (value = nil))))
   | "first" | "second" | "last" | "next" | "nnext" | "butlast" ->
@@ -1145,7 +1146,7 @@ and eval_builtin context name arg_forms =
           match (form_of_value value, sequence_forms collection) with
           | Ok value, Ok forms -> Ok (Form (FList (value :: forms)))
           | (Error _ as err), _ | _, (Error _ as err) -> err)
-      | Ok _ -> Error.error "cons expects two macro arguments"
+      | Ok _ -> Error.error ~code:Error_code.Macro "cons expects two macro arguments"
       | Error _ as err -> err)
   | "conj" -> (
       match eval_args () with
@@ -1155,8 +1156,8 @@ and eval_builtin context name arg_forms =
               Ok (Form (FVector (forms @ [ value ])))
           | Form (FList forms), Ok value -> Ok (Form (FList (value :: forms)))
           | _, (Error _ as err) -> err
-          | _ -> Error.error "conj expects a macro vector or list")
-      | Ok _ -> Error.error "conj expects two macro arguments"
+          | _ -> Error.error ~code:Error_code.Macro "conj expects a macro vector or list")
+      | Ok _ -> Error.error ~code:Error_code.Macro "conj expects two macro arguments"
       | Error _ as err -> err)
   | "assoc" -> Result.bind (eval_args ()) assoc_macro_values
   | "meta" ->
@@ -1166,7 +1167,7 @@ and eval_builtin context name arg_forms =
               [ FSymbol "__type-hint"; (FSymbol _ as annotation); _value ]) ->
             Ok (Form (FMap [ (FKeyword ":tag", annotation) ]))
         | Form _ -> Ok (Form (FMap []))
-        | _ -> Error.error "meta expects a macro form")
+        | _ -> Error.error ~code:Error_code.Macro "meta expects a macro form")
   | "with-meta" -> (
       match eval_args () with
       | Ok [ Form form; Form (FMap entries) ] ->
@@ -1178,7 +1179,7 @@ and eval_builtin context name arg_forms =
             | Some _ | None -> form
           in
           Ok (Form form)
-      | Ok _ -> Error.error "with-meta expects a form and metadata map"
+      | Ok _ -> Error.error ~code:Error_code.Arity "with-meta expects a form and metadata map"
       | Error _ as error -> error)
   | "vary-meta" -> eval_vary_meta context arg_forms
   | "vec" ->
@@ -1194,25 +1195,25 @@ and eval_builtin context name arg_forms =
   | "deref" ->
       unary (function
         | Volatile value -> Ok !value
-        | _ -> Error.error "deref expects a volatile macro value")
+        | _ -> Error.error ~code:Error_code.Macro "deref expects a volatile macro value")
   | "volatile-reset" -> (
       match eval_args () with
       | Ok [ Volatile reference; value ] ->
           reference := value;
           Ok value
       | Ok _ ->
-          Error.error "volatile reset expects a volatile and a macro value"
+          Error.error ~code:Error_code.Macro "volatile reset expects a volatile and a macro value"
       | Error _ as error -> error)
   | "throw" | "raise" -> (
       match arg_forms with
-      | [ exception_form ] -> Error.error (macro_exception_message exception_form)
-      | _ -> Error.error (name ^ " expects one macro argument"))
+      | [ exception_form ] -> Error.error ~code:Error_code.Macro (macro_exception_message exception_form)
+      | _ -> Error.error ~code:Error_code.Macro (name ^ " expects one macro argument"))
   | "System/getProperty" -> (
       match eval_args () with
       | Ok [ Form (FString "line.separator") ] ->
           Ok (Form (FString (if Sys.win32 then "\r\n" else "\n")))
       | Ok [ Form (FString _property) ] -> Ok nil
-      | Ok _ -> Error.error "System/getProperty expects a string property name"
+      | Ok _ -> Error.error ~code:Error_code.Arity "System/getProperty expects a string property name"
       | Error _ as error -> error)
   | "gensym" ->
       incr gensym_counter;
@@ -1237,10 +1238,10 @@ and eval_builtin context name arg_forms =
           Result.bind (parse_are_parameters [] parameters) (fun parameters ->
               expand_are assertion_symbol parameters expression arguments)
       | Ok _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             "clojure.test/expand-are expects an optional assertion symbol, parameters, expression, and arguments"
       | Error _ as error -> error)
-  | _ -> Error.error ("unsupported macro function " ^ name)
+  | _ -> Error.error ~code:Error_code.Unsupported ("unsupported macro function " ^ name)
 
 and eval_apply context = function
   | callable_form :: argument_forms when argument_forms <> [] -> (
@@ -1263,7 +1264,7 @@ and eval_apply context = function
           Result.bind (sequence_forms sequence) (fun forms ->
               apply_value context callable
                 (fixed @ List.map (fun form -> Form form) forms)))
-  | _ -> Error.error "apply expects a function and an argument sequence"
+  | _ -> Error.error ~code:Error_code.Arity "apply expects a function and an argument sequence"
 
 and eval_filter context = function
   | [ predicate_form; collection_form ] -> (
@@ -1282,7 +1283,7 @@ and eval_filter context = function
                           rest)
               in
               filter [] forms))
-  | _ -> Error.error "filter expects a predicate and collection"
+  | _ -> Error.error ~code:Error_code.Arity "filter expects a predicate and collection"
 
 and eval_into context = function
   | [ target_form; source_form ] -> (
@@ -1300,11 +1301,11 @@ and eval_into context = function
                     | FVector [ key; value ] :: rest
                     | FList [ key; value ] :: rest ->
                         add ((key, value) :: List.remove_assoc key entries) rest
-                    | _ -> Error.error "into map expects key/value entries"
+                    | _ -> Error.error ~code:Error_code.Arity "into map expects key/value entries"
                   in
                   add entries forms
-              | _ -> Error.error "into expects a macro collection"))
-  | _ -> Error.error "into expects a target and source collection"
+              | _ -> Error.error ~code:Error_code.Macro "into expects a macro collection"))
+  | _ -> Error.error ~code:Error_code.Arity "into expects a target and source collection"
 
 and sequence_operation name value =
   match sequence_forms value with
@@ -1351,7 +1352,7 @@ and eval_map context name = function
               in
               loop [] forms)
       | (Error _ as err), _ | _, (Error _ as err) -> err)
-  | _ -> Error.error (name ^ " expects a function and collection")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects a function and collection")
 
 and eval_reduce context = function
   | [ fn_form; initial_form; collection_form ] -> (
@@ -1375,7 +1376,7 @@ and eval_reduce context = function
                     | Ok result -> loop result rest)
               in
               loop initial forms))
-  | _ -> Error.error "reduce expects a function, initial value, and collection"
+  | _ -> Error.error ~code:Error_code.Arity "reduce expects a function, initial value, and collection"
 
 and eval_vary_meta context = function
   | form :: function_form :: extra_forms -> (
@@ -1395,7 +1396,7 @@ and eval_vary_meta context = function
               | Form form -> Ok (Form (strip_internal_metadata form))
               | _ -> Ok form)))
   | _ ->
-      Error.error "vary-meta expects a form, function, and optional arguments"
+      Error.error ~code:Error_code.Arity "vary-meta expects a form, function, and optional arguments"
 
 and syntax_quote context form =
   let generated = ref [] in
@@ -1482,7 +1483,7 @@ and select_arity (definition : Macro_definition.t) args :
   match List.find_opt matches definition.arities with
   | Some (arity : Macro_definition.arity) -> Ok arity
   | None ->
-      Error.error
+      Error.error ~code:Error_code.Unsupported
         (definition.name ^ " called with unsupported macro arity "
        ^ string_of_int (List.length args))
 
@@ -1529,14 +1530,14 @@ let expand ?call_site ~scope ~compiler_env (definition : Macro_definition.t) arg
   | None when definition.name = "defn+" -> (
       match args with
       | name :: forms -> Ok (FList (FSymbol "defn" :: name :: forms))
-      | [] -> Error.error "defn+ expects a function name")
+      | [] -> Error.error ~code:Error_code.Arity "defn+ expects a function name")
   | None when definition.name = "declare+" ->
     let rec declared_name = function
       | FList [ FSymbol "__type-hint"; _; FSymbol name ] :: _ -> Ok name
       | FSymbol metadata :: rest when String.starts_with ~prefix:"^" metadata ->
           declared_name rest
       | FSymbol name :: _ -> Ok name
-      | _ -> Error.error "declare+ expects a function name"
+      | _ -> Error.error ~code:Error_code.Macro "declare+ expects a function name"
     in
     Result.map
       (fun name -> FList [ FSymbol "declare"; FSymbol name ])
@@ -1640,12 +1641,12 @@ let rec expand_all ~scope ~compiler_env = function
                         FList [ FSymbol "Error"; error ];
                         FList [ FSymbol "Error"; error ] ])
                   (expand_bindings body_env rest))
-        | [ _ ] -> Error.error "let* bindings require an even number of forms"
+        | [ _ ] -> Error.error ~code:Error_code.Macro "let* bindings require an even number of forms"
       in
-      if body_forms = [] then Error.error "let* requires a result body"
+      if body_forms = [] then Error.error ~code:Error_code.Arity "let* requires a result body"
       else expand_bindings compiler_env bindings
   | FList (FSymbol "let*" :: _) ->
-      Error.error "let* requires a binding vector and a result body"
+      Error.error ~code:Error_code.Arity "let* requires a binding vector and a result body"
   | FList (FSymbol "record" :: record_type :: field_forms) ->
       let rec expand_fields expanded = function
         | [] ->
@@ -1657,7 +1658,7 @@ let rec expand_all ~scope ~compiler_env = function
                 expand_fields
                   (FList [ field_name; value ] :: expanded)
                   rest)
-        | _ -> Error.error "record fields must be (field value) pairs"
+        | _ -> Error.error ~code:Error_code.Macro "record fields must be (field value) pairs"
       in
       expand_fields [] field_forms
   | FList (FSymbol "match" :: target :: clauses) ->

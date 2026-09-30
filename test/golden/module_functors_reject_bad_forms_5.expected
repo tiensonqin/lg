@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_5.cljc
+-- COMPILATION ERROR [LG2001] -- module_functors_reject_bad_forms_5.cljc
 
 module-apply expects result, functor, and one or more argument modules
 

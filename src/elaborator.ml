@@ -962,7 +962,7 @@ let compile_forms_incremental (state : Compiler_state.t) forms =
           else (
             match first_error with
             | Some error -> Error error
-            | None -> Error.error "declared forms made no compilation progress")
+            | None -> Error.error ~code:Error_code.Protocol "declared forms made no compilation progress")
       | (index, form) :: rest -> (
         let started_at = if report_timings then Sys.time () else 0.0 in
         let compiled = compile_top_level scope env next_type form in

@@ -32,10 +32,10 @@ let compile ?(type_parameters = []) scope env next_type name fields_form =
                 (fun (existing : Types.field) ->
                   existing.keyword = field.keyword)
                 fields
-            then Error.error ("duplicate sidecar signature field " ^ keyword)
+            then Error.error ~code:Error_code.Duplicate ("duplicate sidecar signature field " ^ keyword)
             else parse (field :: fields) rest)
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           "sidecar record signature fields must map keywords to type keywords"
   in
   match fields_form with
@@ -72,4 +72,4 @@ let compile ?(type_parameters = []) scope env next_type name fields_form =
             (Signature_overlay.add name
                (Signature_overlay.Value { ty; type_dependencies })
                (Env.signatures env)))
-  | _ -> Error.error "signature expects a type keyword or record field map"
+  | _ -> Error.error ~code:Error_code.Arity "signature expects a type keyword or record field map"

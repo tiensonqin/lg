@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- try_and_raise_reject_malformed_forms_1.cljc
+-- COMPILATION ERROR [LG2001] -- try_and_raise_reject_malformed_forms_1.cljc
 
 try requires at least one catch or finally clause
 

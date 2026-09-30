@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- println_rejects_unknown_symbols.cljc
+-- COMPILATION ERROR [LG2003] -- println_rejects_unknown_symbols.cljc
 
 unknown symbol missing
 

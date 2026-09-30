@@ -15,7 +15,7 @@ let unpack ~compile_expr ~compile_body scope env binding body_forms =
   | FVector [ FSymbol name; value ], _ :: _ ->
       Result.bind (compile_expr scope env value) (fun package ->
           match Types.module_package_signature package.ty with
-          | None -> Error.error "let-module requires a module package"
+          | None -> Error.error ~code:Error_code.Arity "let-module requires a module package"
           | Some signature ->
               Result.bind
                 (Module_metadata.signature_parameter_bindings ~scope env name
@@ -46,5 +46,5 @@ let unpack ~compile_expr ~compile_body scope env binding body_forms =
                       })
                     (compile_body scope env "let-module requires a body"
                        body_forms)))
-  | _, [] -> Error.error "let-module requires a body"
-  | _ -> Error.error "let-module expects [module-name package] and a body"
+  | _, [] -> Error.error ~code:Error_code.Arity "let-module requires a body"
+  | _ -> Error.error ~code:Error_code.Arity "let-module expects [module-name package] and a body"

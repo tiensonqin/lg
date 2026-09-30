@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- include_module_rejects_bad_forms_2.cljc
+-- COMPILATION ERROR [LG2001] -- include_module_rejects_bad_forms_2.cljc
 
 include expects one module
 

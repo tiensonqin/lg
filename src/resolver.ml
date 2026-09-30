@@ -82,7 +82,7 @@ let lookup_record_type scope env type_name =
   let local_lookup owner local_name =
     match lookup owner local_name with
     | Some ({ ty = TNamed_record record; _ } : binding) -> Ok record
-    | Some _ -> Error.error ("invalid record type metadata for " ^ type_name)
+    | Some _ -> Error.error ~code:Error_code.Invalid_form ("invalid record type metadata for " ^ type_name)
     | None ->
         let records =
           Env.record_bindings_named ~scope:owner ~type_name:local_name env
@@ -93,7 +93,7 @@ let lookup_record_type scope env type_name =
         in
         (match records with
         | [ record ] -> Ok record
-        | [] | _ :: _ :: _ -> Error.error ("unknown record type " ^ type_name))
+        | [] | _ :: _ :: _ -> Error.error ~code:Error_code.Unresolved ("unknown record type " ^ type_name))
   in
   match String.rindex_opt type_name '/' with
   | Some index ->
@@ -136,7 +136,7 @@ let lookup_binding scope env name =
          explicit require, mirroring Clojure's auto-loading. *)
       match Core_namespaces.lookup_qualified_member name with
       | Some (binding : binding) -> Ok binding
-      | None -> Error.error ("unknown function " ^ name))
+      | None -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name))
 
 let binding_owner key =
   match String.rindex_opt key '/' with
@@ -158,7 +158,7 @@ let check_emitted_name_collision env ~source_key ~ocaml_name =
   | Some (existing_key, _) ->
       let source_name = Protocol.method_basename source_key in
       let existing_name = Protocol.method_basename existing_key in
-      Error.error
+      Error.error ~code:Error_code.Interop
         ("OCaml name collision: " ^ existing_name ^ " and " ^ source_name
        ^ " both emit " ^ ocaml_name)
 

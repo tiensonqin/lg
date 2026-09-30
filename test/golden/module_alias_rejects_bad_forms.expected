@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- module_alias_rejects_bad_forms.cljc
+-- COMPILATION ERROR [LG2001] -- module_alias_rejects_bad_forms.cljc
 
 module-alias expects alias and target modules
 

@@ -58,7 +58,7 @@ let rec convert_typed_value value =
             (apply (runtime "dynamic_map_of_runtime_map")
                [ key_mapper; value_mapper; value.semantic_expr ]))
   | ty ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         ("cljs.test/report dynamic boundary does not support "
         ^ Types.source_name ty)
 
@@ -72,7 +72,7 @@ let rec compile_form ~compile_expr scope env form =
   | FInt value -> Ok (typed_dynamic (apply (runtime "dynamic_int") [ Semantic_ir.Int value ]))
   | FFloat value -> Ok (typed_dynamic (apply (runtime "dynamic_float") [ Semantic_ir.Float value ]))
   | FDecimal _ ->
-      Error.error "static decimal values cannot cross the report dynamic boundary"
+      Error.error ~code:Error_code.Semantic "static decimal values cannot cross the report dynamic boundary"
   | FChar value -> Ok (typed_dynamic (apply (runtime "dynamic_char") [ Semantic_ir.Char value ]))
   | FBool value -> Ok (typed_dynamic (apply (runtime "dynamic_bool") [ Semantic_ir.Bool value ]))
   | FRegex value -> Ok (typed_dynamic (apply (runtime "dynamic_regex") [ Semantic_ir.String value ]))

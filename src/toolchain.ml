@@ -566,7 +566,7 @@ module Lg_frontend : FRONTEND = struct
     | [] -> Ok []
     | { Ast.form = Ast.FList (Ast.FSymbol "ns" :: forms); span; _ } :: body -> (
         if List.exists is_namespace body then
-          Error.error "ns may only appear once at the start of a file"
+          Error.error ~code:Error_code.Semantic "ns may only appear once at the start of a file"
         else
           let rec drop_namespace_metadata = function
             | Ast.FSymbol metadata :: rest
@@ -578,7 +578,7 @@ module Lg_frontend : FRONTEND = struct
           | Ast.FSymbol namespace_name :: clauses ->
               let segments = String.split_on_char '.' namespace_name in
               if List.exists (fun segment -> segment = "") segments then
-                Error.error "ns expects a namespace symbol and optional clauses"
+                Error.error ~code:Error_code.Interop "ns expects a namespace symbol and optional clauses"
               else
                 let import_require_entry = function
                   | Ast.FVector (Ast.FSymbol package_name :: _imported_names)
@@ -599,10 +599,10 @@ module Lg_frontend : FRONTEND = struct
                                   Ast.FKeyword ":refer";
                                   Ast.FVector imported_names ]))
                       else
-                        Error.error
+                        Error.error ~code:Error_code.Namespace
                           "ns :import class names must be symbols"
                   | form ->
-                      Error.error
+                      Error.error ~code:Error_code.Macro
                         ("lg namespaces do not support :import "
                         ^ Macro_expander.string_of_form form)
                 in
@@ -645,7 +645,7 @@ module Lg_frontend : FRONTEND = struct
                             (imported :: require_entries)
                             exclusions rest)
                   | _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                           "ns supports :require, :require-macros, :refer-clojure \
                          :exclude clauses"
                 in
@@ -676,10 +676,10 @@ module Lg_frontend : FRONTEND = struct
                     (namespace_form :: clauses) @ body)
                   (parse_clauses [] [] clauses)
           | _ ->
-              Error.error "ns expects a namespace symbol and optional clauses")
+              Error.error ~code:Error_code.Arity "ns expects a namespace symbol and optional clauses")
     | first :: rest ->
         if List.exists is_namespace rest then
-          Error.error "ns may only appear once at the start of a file"
+          Error.error ~code:Error_code.Semantic "ns may only appear once at the start of a file"
         else Ok (first :: rest)
 
   let split_deftype_methods located_ast =
@@ -1118,7 +1118,7 @@ module Ocaml_typechecker = struct
         Option.fold ~none:[] ~some:(related_origins structure)
           raw_location
       in
-      Error.error ?location ~related ~code:"LG4000"
+      Error.error ?location ~related ~code:Error_code.Ocaml
         ~phase:`Ocaml
         ("OCaml typecheck failed: " ^ exception_message exn)
 
@@ -1270,7 +1270,7 @@ let restore_ocaml_environment ?(target = Target.default) ~packages state
               | Ok analysis ->
                   restore (Some analysis.compiler_env) (index + 1) rest
             with exn ->
-              Error.error
+              Error.error ~code:Error_code.Interop
                 ("failed to restore cached OCaml environment: "
                ^ Ocaml_typechecker.exception_message exn))
       in
@@ -1924,7 +1924,7 @@ let stabilize_typecheck ?compile_evidence ?compile_evidence_subset ~compile
   in
   let rec continue_full remaining pass declarations protocol_evidence =
     if remaining = 0 then
-      Error.error "type evidence did not stabilize after 16 passes"
+      Error.error ~code:Error_code.Semantic "type evidence did not stabilize after 16 passes"
     else
       match
         compile_pass compile pass
@@ -1948,7 +1948,7 @@ let stabilize_typecheck ?compile_evidence ?compile_evidence_subset ~compile
     | None -> Ok evidence_result
     | Some _ ->
         if remaining = 0 then
-          Error.error "type evidence did not stabilize after 16 passes"
+          Error.error ~code:Error_code.Semantic "type evidence did not stabilize after 16 passes"
         else
           match
             compile_pass compile pass
@@ -1973,7 +1973,7 @@ let stabilize_typecheck ?compile_evidence ?compile_evidence_subset ~compile
   let rec continue remaining pass declarations protocol_evidence
       (evidence_base : Compiler_state.t) changed_names =
     if remaining = 0 then
-      Error.error "type evidence did not stabilize after 16 passes"
+      Error.error ~code:Error_code.Semantic "type evidence did not stabilize after 16 passes"
     else
       let full_state = seeded_state declarations protocol_evidence in
       let subset_state =
@@ -2223,7 +2223,7 @@ let typecheck_incremental state (parsed : parser_result) =
   match parsed.parsed_as with
   | `Mli signature ->
       if List.mem_assoc stem state.pending_interfaces then
-        Error.error ("Duplicate OCaml interface for " ^ stem)
+        Error.error ~code:Error_code.Duplicate ("Duplicate OCaml interface for " ^ stem)
       else
         let state = { state with pending_interfaces =
           (stem, signature) :: state.pending_interfaces } in
@@ -2378,7 +2378,7 @@ let order_workspace_from_state ?(target = Target.default) ?reader_target
           | [] -> (
               match first_error with
               | Some error -> Error error
-              | None -> Error.error "unable to order workspace sources")
+              | None -> Error.error ~code:Error_code.Semantic "unable to order workspace sources")
           | group :: rest -> (
               match typecheck_group state group with
               | Error error ->
@@ -2500,7 +2500,7 @@ let analyze_from_state ?(target = Target.default) ?(filename = "<string>")
   | Error _ as err -> err
   | Ok ((_, analysis) :: _, []) -> Ok analysis
   | Ok ([], (_, error) :: _) -> Error error
-  | Ok ([], []) -> Error.error "source contains no analyzable lg forms"
+  | Ok ([], []) -> Error.error ~code:Error_code.Semantic "source contains no analyzable lg forms"
   | Ok ((_, analysis) :: _, _errors) -> Ok analysis
 
 let interface_from_state ?(target = Target.default) ?(filename = "<string>")
@@ -2512,7 +2512,7 @@ let analyze_workspace ?(target = Target.default) sources =
   match analyze_workspace_with_errors ~target sources with
   | Error _ as err -> err
   | Ok ([], (_, error) :: _) -> Error error
-  | Ok ([], []) -> Error.error "workspace contains no analyzable lg files"
+  | Ok ([], []) -> Error.error ~code:Error_code.Semantic "workspace contains no analyzable lg files"
   | Ok (analyses, []) -> Ok analyses
   | Ok (analyses, _errors) -> Ok analyses
 
@@ -2670,7 +2670,7 @@ type pending_repl_kind =
   | Pending_summary of string
 
 let repl_form_error ?location message =
-  Error.error ?location ~code:"LG5001" ~phase:`Semantic message
+  Error.error ?location ~code:Error_code.Repl ~phase:`Semantic message
 
 let rec first_source_name = function
   | Ast.FSymbol name :: _ when not (String.starts_with ~prefix:"^" name) ->

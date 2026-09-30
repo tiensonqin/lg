@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- ocaml_variants_reject_bad_declarations_1.cljc
+-- COMPILATION ERROR [LG2001] -- ocaml_variants_reject_bad_declarations_1.cljc
 
 type-variant expects at least one constructor
 

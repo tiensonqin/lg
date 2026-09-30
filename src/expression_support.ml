@@ -116,7 +116,7 @@ let rec inject_contextual_closed_sum env ~expected (argument : typed_expr) =
     | TOcaml _, TOcaml _ -> Some (Ok { argument with ty = expected })
     | _ ->
         Some
-          (Error.error
+          (Error.error ~code:Error_code.Semantic
              ("cannot inject " ^ Types.source_name argument.ty
             ^ " into closed sum " ^ Types.source_name expected))
   else if
@@ -418,7 +418,7 @@ let rec inject_contextual_closed_sum env ~expected (argument : typed_expr) =
              payload)
     | [] ->
         Some
-          (Error.error
+          (Error.error ~code:Error_code.Semantic
              ("cannot inject " ^ Types.source_name argument.ty
             ^ " into closed sum " ^ Types.source_name expected))
     | candidates ->
@@ -427,7 +427,7 @@ let rec inject_contextual_closed_sum env ~expected (argument : typed_expr) =
           |> String.concat ", "
         in
         Some
-          (Error.error
+          (Error.error ~code:Error_code.Inference
              ("ambiguous closed sum injection into " ^ Types.source_name expected
             ^ ": " ^ names ^ " from " ^ Types.source_name argument.ty)))
 
@@ -1019,7 +1019,7 @@ let heterogeneous_collection_type_error collection types =
   let types =
     types |> List.map Types.source_name |> List.sort_uniq String.compare
   in
-  Error.error
+  Error.error ~code:Error_code.Semantic
     ("heterogeneous " ^ collection
    ^ (if collection = "map keys" || collection = "map values" then
         " have types "
@@ -1933,7 +1933,7 @@ let lookup_function scope env name =
       Ok (binding_runtime_value binding)
   | Error _ -> (
       match untyped_first_class_function_error name with
-      | Some message -> Error.error message
+      | Some message -> Error.error ~code:Error_code.Semantic message
       | None -> (
           match Resolver.ocaml_call_target scope env name with
           | Some target -> (
@@ -1952,8 +1952,8 @@ let lookup_function scope env name =
                     |> clj_function_type
                   in
                   Ok (typed_ir ty (Semantic_ir.Ident target))
-              | Ok _ | Error _ -> Error.error ("unknown function " ^ name))
-          | None -> Error.error ("unknown function " ^ name)))
+              | Ok _ | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name))
+          | None -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)))
 
 let record_constructor_type scope env name =
   if String.ends_with ~suffix:"." name then
@@ -2230,9 +2230,9 @@ let lookup_function_ty scope env name =
                             (TFn
                                ( signature.payload_types,
                                  signature.result_type ))
-                      | Error _ -> Error.error ("unknown function " ^ name))
-                  | _ :: _ :: _ -> Error.error ("ambiguous constructor " ^ name))
-              | None -> Error.error ("unknown function " ^ name))))
+                      | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name))
+                  | _ :: _ :: _ -> Error.error ~code:Error_code.Inference ("ambiguous constructor " ^ name))
+              | None -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name))))
 
 let lookup_call_ty scope env name forms =
   let source_binding_shadows_call_target =
@@ -2589,7 +2589,7 @@ let coerce_set_element element_ty value =
                 ] ))
           (coerce_closed expected_item actual_item (Semantic_ir.Ident item_name))
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("set value type must match element type: expected "
          ^ Types.source_name expected ^ ", got " ^ Types.source_name actual)
   in
@@ -2605,7 +2605,7 @@ let coerce_set_element element_ty value =
             | [] -> Ok (List.rev acc)
             | (field : field) :: rest -> (
                 match find_field field.keyword actual_fields with
-                | None -> Error.error "set record coercion is missing a field"
+                | None -> Error.error ~code:Error_code.Semantic "set record coercion is missing a field"
                 | Some actual_field ->
                     project_fields
                       (( field.ocaml_name,
@@ -2621,7 +2621,7 @@ let coerce_set_element element_ty value =
                     (record_type_application expected.type_name
                        expected.type_arguments) ))
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("set value type must match record element type: expected "
            ^ Types.source_name element_ty ^ ", got "
             ^ Types.source_name value.ty))

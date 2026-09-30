@@ -19,7 +19,7 @@ let is_delimiter = function
 
 let read_string source start =
   let rec loop index escaped =
-    if index >= String.length source then Error.error "unterminated string"
+    if index >= String.length source then Error.error ~code:Error_code.Semantic "unterminated string"
     else if escaped then loop (index + 1) false
     else
       match source.[index] with
@@ -31,7 +31,7 @@ let read_string source start =
 
 let read_regex source start =
   let rec loop index escaped =
-    if index >= String.length source then Error.error "unterminated regex"
+    if index >= String.length source then Error.error ~code:Error_code.Semantic "unterminated regex"
     else if escaped then loop (index + 1) false
     else
       match source.[index] with
@@ -66,7 +66,7 @@ let parse source =
       match closing with
       | None -> Ok (List.rev acc, index)
       | Some expected ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("unterminated delimiter "
             ^ String.make 1
                 (match expected with ')' -> '(' | ']' -> '[' | '}' -> '{' | _ -> expected))
@@ -87,7 +87,7 @@ let parse source =
         | ')' | ']' | '}' -> (
             match closing with
             | Some expected when ch = expected -> Ok (List.rev acc, index + 1)
-            | _ -> Error.error ("mismatched closing delimiter " ^ String.make 1 ch))
+            | _ -> Error.error ~code:Error_code.Type_mismatch ("mismatched closing delimiter " ^ String.make 1 ch))
         | '#' when index + 1 < String.length source && source.[index + 1] = '"'
           -> (
             match read_regex source index with
@@ -99,7 +99,7 @@ let parse source =
             | Ok (value, next) -> nodes closing (Atom value :: acc) next)
         | _ ->
             let atom, next = read_atom source index in
-            if atom = "" then Error.error "invalid formatter token"
+            if atom = "" then Error.error ~code:Error_code.Invalid_form "invalid formatter token"
             else nodes closing (Atom atom :: acc) next
   in
   nodes None [] 0 |> Result.map fst

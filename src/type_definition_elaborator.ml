@@ -44,13 +44,13 @@ let compile_type_alias ?location scope env next_type name type_parameters
                   next_type,
                   Type_alias { type_name; type_parameters; manifest; location }
                 )))
-  | _ -> Error.error "type-alias expects a type keyword target"
+  | _ -> Error.error ~code:Error_code.Arity "type-alias expects a type keyword target"
 
 let compile_type_record_fields ?location ?(allow_empty = false) ?emitted_name
     ?(nominal = true) ?(reuse_existing = false) scope env next_type name
     type_parameters fields =
   if fields = [] && not allow_empty then
-    Error.error "type-record expects at least one field"
+    Error.error ~code:Error_code.Arity "type-record expects at least one field"
   else
     let type_name =
       Option.value emitted_name ~default:(Names.sanitize_name name)
@@ -80,7 +80,7 @@ let compile_type_record_fields ?location ?(allow_empty = false) ?emitted_name
                record.fields fields
         in
         if not compatible_fields then
-          Error.error ("defrecord does not match declared type " ^ name)
+          Error.error ~code:Error_code.Semantic ("defrecord does not match declared type " ^ name)
         else Ok (scope, env, next_type, Group [])
     | None -> (
         match declare_type scope env name Record with
@@ -134,14 +134,14 @@ let compile_type_record ?location ?(allow_empty = false) ?emitted_name
                 (fun parameters -> (parameters, keyword))
                 (Type_parameters.parse parameters)
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "record field type must be :type or (forall [parameters] :type)"
         in
         Result.bind annotation (fun (quantified, keyword) ->
             if
               List.exists (fun name -> List.mem name type_parameters) quantified
             then
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "record field quantifiers must not shadow record type \
                  parameters"
             else
@@ -159,7 +159,7 @@ let compile_type_record ?location ?(allow_empty = false) ?emitted_name
                 (Type_annotation.of_keyword_with_parameters
                    (quantified @ type_parameters)
                    keyword))
-    | _ -> Error.error "type-record fields must be (name :type)"
+    | _ -> Error.error ~code:Error_code.Semantic "type-record fields must be (name :type)"
   in
   let rec parse (fields : field list) = function
     | [] -> Ok (List.rev fields)
@@ -172,7 +172,7 @@ let compile_type_record ?location ?(allow_empty = false) ?emitted_name
                 (fun (existing : field) ->
                   existing.ocaml_name = field.ocaml_name)
                 fields
-            then Error.error "duplicate record field name"
+            then Error.error ~code:Error_code.Duplicate "duplicate record field name"
             else parse (field :: fields) rest)
   in
   match parse [] field_forms with
@@ -194,7 +194,7 @@ let record_type_public_binding module_path name env =
                 (Names.module_path_to_ocaml module_path)
                 binding.ty;
           } )
-  | None -> Error.error ("internal error: missing record metadata for " ^ name)
+  | None -> Error.error ~code:Error_code.Internal ("internal error: missing record metadata for " ^ name)
 
 let compile_type_variant ?location scope env next_type name type_parameters
     constructor_forms =
@@ -211,14 +211,14 @@ let compile_type_variant ?location scope env next_type name type_parameters
   in
   let constructor_name = function
     | FSymbol constructor as form -> Ok (constructor, Source_context.find form)
-    | _ -> Error.error "type-variant constructors must be symbols"
+    | _ -> Error.error ~code:Error_code.Semantic "type-variant constructors must be symbols"
   in
   let payload_type parameters = function
     | FKeyword keyword -> (
         match Type_annotation.of_keyword_with_parameters parameters keyword with
         | Ok ty -> Ok (Function_elaborator.infer_named_record scope env ty)
         | Error _ as error -> error)
-    | _ -> Error.error "type-variant payload types must be keywords"
+    | _ -> Error.error ~code:Error_code.Semantic "type-variant payload types must be keywords"
   in
   let constructor_spec = function
     | FSymbol constructor as form ->
@@ -274,7 +274,7 @@ let compile_type_variant ?location scope env next_type name type_parameters
                           result_type;
                           location;
                         }))))
-    | _ -> Error.error "type-variant constructors must be symbols"
+    | _ -> Error.error ~code:Error_code.Semantic "type-variant constructors must be symbols"
   in
   let rec parse constructors = function
     | [] -> Ok (List.rev constructors)
@@ -289,13 +289,13 @@ let compile_type_variant ?location scope env next_type name type_parameters
                   = emitted_constructor_name constructor.constructor_name)
                 constructors
             then
-              Error.error
+              Error.error ~code:Error_code.Duplicate
                 ("duplicate variant constructor " ^ constructor.constructor_name)
             else parse (constructor :: constructors) rest)
   in
   match parse [] constructor_forms with
   | Error _ as err -> err
-  | Ok [] -> Error.error "type-variant expects at least one constructor"
+  | Ok [] -> Error.error ~code:Error_code.Arity "type-variant expects at least one constructor"
   | Ok constructors -> (
       let type_name = Names.sanitize_name name in
       let result_type =

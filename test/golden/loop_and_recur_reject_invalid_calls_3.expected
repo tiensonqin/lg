@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- loop_and_recur_reject_invalid_calls_3.cljc
+-- COMPILATION ERROR [LG2001] -- loop_and_recur_reject_invalid_calls_3.cljc
 
 recur argument 1 must be int, got string
 

@@ -1,5 +1,14 @@
 (copy_files ../runtime/runtime_format_spec.ml)
 
+; Embed docs/errors/*.md so `lg --explain` works without repo access, and
+; fail the build when the docs and the Error_code registry drift apart.
+(rule
+ (target error_docs.ml)
+ (deps gen_error_docs.py error_code.ml (source_tree ../docs/errors))
+ (action
+  (with-stdout-to %{target}
+   (run python3 %{dep:gen_error_docs.py} %{workspace_root}))))
+
 (library
  (name lg)
  (public_name lg)

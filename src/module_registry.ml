@@ -42,7 +42,7 @@ let empty =
 
 let declare_signature signature_id items registry =
   if Signature_map.mem signature_id registry.signatures then
-    Error.error
+    Error.error ~code:Error_code.Duplicate
       ("duplicate module signature " ^ Signature_id.to_string signature_id)
   else
     let emitted_name =
@@ -52,7 +52,7 @@ let declare_signature signature_id items registry =
     in
     match Emitted_signature_map.find_opt emitted_name registry.emitted_signatures with
     | Some existing ->
-        Error.error
+        Error.error ~code:Error_code.Interop
           ("OCaml module type name collision: " ^ Signature_id.to_string existing
          ^ " and " ^ Signature_id.to_string signature_id ^ " both emit "
          ^ emitted_name)
@@ -86,7 +86,7 @@ let expanded_signature signature_id registry =
     | None -> Ok []
     | Some (resolved_id, items) ->
         if Signature_set.mem resolved_id visiting then
-          Error.error ("cyclic module signature include " ^ Signature_id.to_string resolved_id)
+          Error.error ~code:Error_code.Semantic ("cyclic module signature include " ^ Signature_id.to_string resolved_id)
         else
           let visiting = Signature_set.add resolved_id visiting in
           let rec collect acc = function
@@ -180,9 +180,9 @@ let declare_module module_id kind registry =
   let emitted_name = emitted_module_name module_id in
   match Emitted_module_map.find_opt emitted_name registry.module_declarations with
   | Some existing when Module_id.equal existing.module_id module_id ->
-      Error.error ("duplicate module " ^ Module_id.to_string module_id)
+      Error.error ~code:Error_code.Duplicate ("duplicate module " ^ Module_id.to_string module_id)
   | Some existing ->
-      Error.error
+      Error.error ~code:Error_code.Interop
         ("OCaml module name collision: " ^ Module_id.to_string existing.module_id
        ^ " and " ^ Module_id.to_string module_id ^ " both emit " ^ emitted_name)
   | None ->

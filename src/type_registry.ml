@@ -26,9 +26,9 @@ let declare ?(type_parameters = []) ?manifest ~scope source_name kind registry =
   let emitted_name = emitted_name ~scope source_name in
   match Emitted_map.find_opt emitted_name registry with
   | Some existing when Type_id.equal existing.type_id type_id ->
-      Error.error ("duplicate type " ^ Type_id.to_string type_id)
+      Error.error ~code:Error_code.Duplicate ("duplicate type " ^ Type_id.to_string type_id)
   | Some existing ->
-      Error.error
+      Error.error ~code:Error_code.Interop
         ("OCaml type name collision: " ^ Type_id.to_string existing.type_id
        ^ " and " ^ Type_id.to_string type_id ^ " both emit " ^ emitted_name)
   | None ->

@@ -112,14 +112,14 @@ let index_declarations declarations =
 
 let declare ?location ?(method_locations = []) protocol_id signatures registry =
   if Protocol_map.mem protocol_id registry.declarations then
-    Error.error
+    Error.error ~code:Error_code.Duplicate
       ("duplicate protocol declaration " ^ Protocol_id.to_string protocol_id)
   else
     let rec methods acc = function
       | [] -> Ok acc
       | signature :: rest ->
           if Method_map.mem signature.method_id acc then
-            Error.error
+            Error.error ~code:Error_code.Duplicate
               ("duplicate protocol method "
              ^ Method_id.to_string signature.method_id)
           else methods (Method_map.add signature.method_id signature acc) rest
@@ -176,7 +176,7 @@ let add_implementation ?location protocol_id method_id receiver_id binding
     registry =
   let key = (protocol_id, method_id, receiver_id) in
   if Implementation_map.mem key registry.implementations then
-    Error.error
+    Error.error ~code:Error_code.Duplicate
       ("duplicate protocol implementation "
       ^ Protocol_id.to_string protocol_id
      ^ "/" ^ Method_id.name method_id)
@@ -209,7 +209,7 @@ let add_implementation ?location protocol_id method_id receiver_id binding
            && Method_id.equal existing_method method_id ->
         add ~track_name:false
     | Some (existing_protocol, existing_method, _existing_receiver) ->
-        Error.error
+        Error.error ~code:Error_code.Protocol
           ("OCaml protocol implementation name collision: "
           ^ Protocol_id.to_string existing_protocol
           ^ "/"

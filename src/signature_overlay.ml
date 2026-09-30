@@ -12,7 +12,7 @@ let empty = String_map.empty
 
 let add name entry overlays =
   if String_map.mem name overlays then
-    Error.error ("duplicate sidecar signature " ^ name)
+    Error.error ~code:Error_code.Duplicate ("duplicate sidecar signature " ^ name)
   else Ok (String_map.add name entry overlays)
 
 let find name overlays = String_map.find_opt name overlays

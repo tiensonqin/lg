@@ -36,7 +36,7 @@ let location_of_span span =
 
 let error_at span message =
   Error.error
-    ~code:"LG1002" ~phase:`Parsing
+    ~code:Error_code.Parsing ~phase:`Parsing
     ~location:(location_of_span span)
     message
 
@@ -64,7 +64,7 @@ let unfinished_delimiter_error closing open_span description =
   let name, _, expected = delimiter_description closing description in
   let eof = current_eof_offset open_span in
   let eof_location = location_of_span { start_offset = eof; end_offset = eof } in
-  Error.error ~code:"LG1002" ~phase:`Parsing
+  Error.error ~code:Error_code.Parsing ~phase:`Parsing
     ~title:("UNFINISHED " ^ String.uppercase_ascii name)
     ~location:eof_location
     ~related:
@@ -92,7 +92,7 @@ let unfinished_delimiter_error closing open_span description =
 let mismatched_delimiter_error closing open_span description actual_span actual =
   let name, opening, expected = delimiter_description closing description in
   let actual_location = location_of_span actual_span in
-  Error.error ~code:"LG1002" ~phase:`Parsing ~title:"MISMATCHED DELIMITER"
+  Error.error ~code:Error_code.Parsing ~phase:`Parsing ~title:"MISMATCHED DELIMITER"
     ~location:actual_location
     ~related:
       [
@@ -124,7 +124,7 @@ let mismatched_delimiter_error closing open_span description actual_span actual 
 
 let missing_reader_form_error prefix_span name =
   let eof = current_eof_offset prefix_span in
-  Error.error ~code:"LG1002" ~phase:`Parsing ~title:"MISSING FORM"
+  Error.error ~code:Error_code.Parsing ~phase:`Parsing ~title:"MISSING FORM"
     ~location:(location_of_span { start_offset = eof; end_offset = eof })
     ~related:
       [
@@ -316,7 +316,7 @@ let rec parse_one ~target ~reader_features = function
                 end_offset = close_span.end_offset;
               },
             rest ))
-  | [] -> Error.error ~code:"LG1002" ~phase:`Parsing "expected form"
+  | [] -> Error.error ~code:Error_code.Parsing ~phase:`Parsing "expected form"
   | { desc = Rparen; span } :: _ -> error_at span "unexpected ')'"
   | { desc = Rbracket; span } :: _ -> error_at span "unexpected ']'"
   | { desc = Rbrace; span } :: _ -> error_at span "unexpected '}'"
@@ -458,7 +458,7 @@ and map_of_forms open_span close_span forms =
     | [] -> Ok (List.rev acc)
     | key :: value :: rest -> pairs ((key, value) :: acc) rest
     | [ key ] ->
-        Error.error ~code:"LG1002" ~phase:`Parsing ~title:"INCOMPLETE MAP"
+        Error.error ~code:Error_code.Parsing ~phase:`Parsing ~title:"INCOMPLETE MAP"
           ~location:(location_of_span key.span)
           ~related:
             [
@@ -527,7 +527,7 @@ and select_reader_conditional reader_features reader_span close_span forms =
     | [ feature ] -> (
         match feature.form with
         | FKeyword name ->
-            Error.error ~code:"LG1002" ~phase:`Parsing
+            Error.error ~code:Error_code.Parsing ~phase:`Parsing
               ~title:"INCOMPLETE READER CONDITIONAL"
               ~location:(location_of_span feature.span)
               ~related:

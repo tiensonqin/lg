@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- set_positional_sequence_helpers_reject_non_collections.cljc
+-- COMPILATION ERROR [LG2001] -- set_positional_sequence_helpers_reject_non_collections.cljc
 
 first expects a seqable value
 

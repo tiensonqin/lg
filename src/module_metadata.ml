@@ -36,7 +36,7 @@ let typed_signature_bindings ?(module_path = "") modules signature_id =
     | None -> Ok []
     | Some (resolved_id, _) ->
         if Signature_set.mem resolved_id visiting then
-          Error.error ("cyclic module signature include " ^ Signature_id.to_string resolved_id)
+          Error.error ~code:Error_code.Semantic ("cyclic module signature include " ^ Signature_id.to_string resolved_id)
         else Result.bind (Module_registry.expanded_signature resolved_id modules)
           (collect_items (Signature_set.add resolved_id visiting) module_path (Signature_id.owner resolved_id))
   and collect_items visiting module_path owner items =

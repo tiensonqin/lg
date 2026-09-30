@@ -277,7 +277,7 @@ let rec pack_expression ty expression =
                    ( Semantic_ir.Ident "Lg_runtime.Runtime_metadata.of_map",
                      [ key_mapper; value_mapper; expression ] )))
       | None ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("value cannot be represented as closed EDN: "
             ^ Types.source_name ty))
 
@@ -352,7 +352,7 @@ let map_entry_mapper ~pack_constrained expected_element actual_element =
           in
           decode_fields [] fields
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("EDN value cannot be decoded as " ^ Types.source_name expected)
   in
   match (actual_element, expected_element) with

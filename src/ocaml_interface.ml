@@ -20,7 +20,7 @@ let parse ~filename source =
   try Ok (Parse.interface lexbuf)
   with exn ->
     let location = Location.curr lexbuf in
-    Error.error ~location ~phase:`Parsing
+    Error.error ~code:Error_code.Unsupported ~location ~phase:`Parsing
       ("Invalid OCaml interface: "
       ^ Format.asprintf "%a" Location.report_exception exn)
 
@@ -546,4 +546,4 @@ let translate ~filename ~scope ~env forms signature =
         declarations translated
     in
     Ok (declarations, locations, if types = [] then None else Some module_name)
-  with Invalid (location, message) -> Error.error ~location message
+  with Invalid (location, message) -> Error.error ~code:Error_code.Interop ~location message

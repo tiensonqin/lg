@@ -1172,12 +1172,12 @@ let parse_method_signature = function
                 Result.bind (Type_annotation.parse_params params) (fun params ->
                     let fixed_params = List.map snd params in
                     if fixed_params = [] then
-                      Error.error
+                      Error.error ~code:Error_code.Protocol
                         "protocol methods must have a receiver parameter"
                     else
                       let count = List.length fixed_params in
                       if List.mem count seen then
-                        Error.error
+                        Error.error ~code:Error_code.Duplicate
                           ("protocol method " ^ method_name
                          ^ " declares duplicate arity " ^ string_of_int count)
                       else
@@ -1186,14 +1186,14 @@ let parse_method_signature = function
                           :: arities)
                           (count :: seen) rest)
             | _ :: _ ->
-                Error.error
+                Error.error ~code:Error_code.Protocol
                   "protocol method arities must be parameter vectors"
           in
           if parameter_forms = [] then
-            Error.error "protocol methods must declare at least one arity"
+            Error.error ~code:Error_code.Protocol "protocol methods must declare at least one arity"
           else parse [] [] parameter_forms)
   | _ ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         "defprotocol methods must be (method-name [params]...)"
 
 let defprotocol scope protocol_name method_forms =
@@ -1205,7 +1205,7 @@ let defprotocol scope protocol_name method_forms =
         | Error _ as err -> err
         | Ok signature ->
             if List.mem signature.method_name seen then
-              Error.error
+              Error.error ~code:Error_code.Duplicate
                 ("protocol " ^ protocol_name ^ " declares duplicate method "
                ^ signature.method_name)
             else
@@ -1242,7 +1242,7 @@ let annotate_receiver receiver_ty =
                  (registry_receiver_id receiver_ty)
           then Ok (FVector params)
           else
-            Error.error
+            Error.error ~code:Error_code.Protocol
               ("protocol implementation receiver must be " ^ source_name receiver_ty))
   | FVector (FSymbol name :: rest) -> (
       match registry_receiver_id receiver_ty with
@@ -1255,11 +1255,11 @@ let annotate_receiver receiver_ty =
                    :: FSymbol name :: rest))
           | _ -> Ok (FVector (FSymbol name :: rest)))
       | None ->
-          Error.error
+          Error.error ~code:Error_code.Protocol
             ("protocol implementations do not support receiver type "
            ^ source_name receiver_ty))
-  | FVector _ -> Error.error "protocol methods must have a receiver parameter"
-  | _ -> Error.error "protocol method parameters must be a vector"
+  | FVector _ -> Error.error ~code:Error_code.Protocol "protocol methods must have a receiver parameter"
+  | _ -> Error.error ~code:Error_code.Protocol "protocol method parameters must be a vector"
 
 let impl_ocaml_name scope protocol_name method_name receiver_ty =
   Names.ocaml_binding_name scope

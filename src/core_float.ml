@@ -59,8 +59,8 @@ let fold_infix operator first rest =
 
 let compile_operator name args =
   match (name, args) with
-  | "/", [] -> Error.error "/ expects at least 1 arguments"
-  | _, [] -> Error.error (name ^ " expects at least 1 arguments")
+  | "/", [] -> Error.error ~code:Error_code.Arity "/ expects at least 1 arguments"
+  | _, [] -> Error.error ~code:Error_code.Arity (name ^ " expects at least 1 arguments")
   | _, [ arg ] when name = "-" ->
       Ok (typed_ir TFloat (Semantic_ir.Prefix ("~-.", float_expression arg)))
   | _, [ arg ] when name = "/" ->
@@ -84,9 +84,9 @@ let compile_min_max name args =
   let is_max = name = "max" || name = "__lg_max" in
   let display_name = if is_max then "max" else "min" in
   match args with
-  | [] -> Error.error (display_name ^ " expects at least 1 arguments")
+  | [] -> Error.error ~code:Error_code.Arity (display_name ^ " expects at least 1 arguments")
   | _ :: _ when not (List.for_all (fun arg -> accepts_float arg.ty) args) ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         (display_name ^ " numeric arguments must all have the same type")
   | first :: rest ->
       let fn =

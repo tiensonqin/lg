@@ -3,12 +3,12 @@ open Types
 let one_arg name args =
   match args with
   | [ arg ] -> Ok arg
-  | _ -> Error.error (name ^ " expects 1 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
 
 let two_args name args =
   match args with
   | [ left; right ] -> Ok (left, right)
-  | _ -> Error.error (name ^ " expects count and collection")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects count and collection")
 
 let apply name args = Semantic_ir.Apply (Semantic_ir.Ident name, args)
 
@@ -71,15 +71,15 @@ let second collection =
                   ( Semantic_ir.PTuple patterns,
                     Semantic_ir.Ident "__lg_tuple_second" );
                 ] )))
-  | TTuple _ -> Error.error "second expects at least two tuple elements"
-  | _ -> Error.error "second expects a tuple"
+  | TTuple _ -> Error.error ~code:Error_code.Arity "second expects at least two tuple elements"
+  | _ -> Error.error ~code:Error_code.Arity "second expects a tuple"
 
 let peek collection =
   match collection.ty with
   | TList inner -> Ok (typed_ir inner (apply "List.hd" [ collection.semantic_expr ]))
   | TVector inner ->
       Ok (typed_ir inner (apply "Option.get" [ apply "Rrbvec.peek_back" [ collection.semantic_expr ] ]))
-  | _ -> Error.error "peek expects a list or vector"
+  | _ -> Error.error ~code:Error_code.Arity "peek expects a list or vector"
 
 let pop collection =
   match collection.ty with
@@ -88,7 +88,7 @@ let pop collection =
       Ok
         (typed_ir collection.ty
            (apply "snd" [ apply "Option.get" [ apply "Rrbvec.pop_back" [ collection.semantic_expr ] ] ]))
-  | _ -> Error.error "pop expects a list or vector"
+  | _ -> Error.error ~code:Error_code.Arity "pop expects a list or vector"
 
 let rest env collection = Collection_capability.rest_expr env collection
 
@@ -176,7 +176,7 @@ let empty env collection =
             | TNamed_record record -> "record " ^ record.type_name
             | ty -> Types.source_name ty
           in
-          Error.error
+          Error.error ~code:Error_code.Arity
             ("empty expects a collection or string, got "
             ^ collection_type)) )
 
@@ -217,10 +217,10 @@ let drop_list_expr count source =
   Semantic_ir.LetRec ("drop__", [ Semantic_ir.PVar "n"; Semantic_ir.PVar "xs" ], body, [ count; source ])
 
 let take_drop env name count collection =
-  if not (Types.equal count.ty TInt) then Error.error (name ^ " count must be int")
+  if not (Types.equal count.ty TInt) then Error.error ~code:Error_code.Semantic (name ^ " count must be int")
   else
     match Collection_capability.to_seq_expr env collection with
-    | Error _ -> Error.error (name ^ " expects a seqable value")
+    | Error _ -> Error.error ~code:Error_code.Arity (name ^ " expects a seqable value")
     | Ok (inner, sequence) ->
         let runtime_name =
           if name = "take" then "Lg_runtime.Runtime_seq.take"
@@ -252,4 +252,4 @@ let compile env name args =
       match two_args name args with
       | Error _ as err -> err
       | Ok (count, collection) -> take_drop env name count collection)
-  | _ -> Error.error ("unknown function " ^ name)
+  | _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)

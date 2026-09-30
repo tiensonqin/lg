@@ -214,7 +214,7 @@ let rec to_seq_expr env collection =
             ( TTuple [ TKeyword; value_ty ],
               apply "List.to_seq" [ Semantic_ir.List entries ] )
         else
-          Error.error
+          Error.error ~code:Error_code.Type_mismatch
             ("map literal sequence has heterogeneous values: "
            ^ String.concat " | "
                (List.map
@@ -244,7 +244,7 @@ let rec to_seq_expr env collection =
             ( TTuple [ TKeyword; value_ty ],
               apply "List.to_seq" [ Semantic_ir.List entries ] )
         else
-          Error.error
+          Error.error ~code:Error_code.Type_mismatch
             ("record map sequence has heterogeneous values: "
            ^ String.concat " | "
                (List.map
@@ -279,7 +279,7 @@ let rec to_seq_expr env collection =
           match collection.ty with
           | TRecord fields | TNamed_record { fields; _ } ->
               record_fields_to_seq fields
-          | _ -> Error.error "record map value is not seqable"))
+          | _ -> Error.error ~code:Error_code.Type_mismatch "record map value is not seqable"))
   | TOcaml_app ("Lg_runtime.Runtime_map.t", [ key_ty; value_ty ]) ->
       Ok
         ( TTuple [ key_ty; value_ty ],
@@ -305,7 +305,7 @@ let rec to_seq_expr env collection =
       let value = typed_ir value_ty (Semantic_ir.Ident value_name) in
         match to_seq_expr env value with
       | Error _ ->
-          Error.error
+          Error.error ~code:Error_code.Type_mismatch
             ("optional value is not seqable: " ^ Types.source_name value_ty)
       | Ok (element_ty, sequence) ->
           Ok
@@ -409,7 +409,7 @@ let rec to_seq_expr env collection =
         Compiler_environment.find_optional_sequential_adapter collection.ty env
       with
       | None ->
-          Error.error
+          Error.error ~code:Error_code.Invalid_form
             ("collection value is not seqable: "
             ^ Types.source_name collection.ty)
       | Some (element_ty, adapter) ->
@@ -448,7 +448,7 @@ let rec to_seq_expr env collection =
                           when Types.assignable ~policy:Host_boundary
                                  ~expected:receiver_ty ~actual:collection.ty ->
               if Types.equal return_ty collection.ty then
-                Error.error
+                Error.error ~code:Error_code.Type_mismatch
                   "Seqable/-seq implementation cannot return its receiver type"
               else
                 to_seq_expr env
@@ -456,7 +456,7 @@ let rec to_seq_expr env collection =
                      (apply implementation.ocaml_name
                         [ collection.semantic_expr ]))
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Type_mismatch
                               "Seqable/-seq implementation must return a \
                                seqable value"))))))
 
@@ -552,7 +552,7 @@ let contains_adapter ?key_ty argument =
                 (apply "Lg_runtime.Runtime_edn.contains"
                    [ argument.semantic_expr; packed_key ])
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Type_mismatch
                 "contains? cannot encode the key as a closed EDN value")
       | map_ty when Option.is_some (Types.dynamic_map_types map_ty) ->
           let key_ty, _ = Option.get (Types.dynamic_map_types map_ty) in
@@ -566,7 +566,7 @@ let contains_adapter ?key_ty argument =
           witness
             (apply operation [ argument.semantic_expr; key ])
       | ty ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             ("contains? expects a map, set, or vector, got "
            ^ Types.source_name ty))
 
@@ -578,7 +578,7 @@ let contains_expr target key =
         not
           (Types.assignable ~policy:Host_boundary ~expected:expected_key
              ~actual:key.ty)
-      then Some (Error.error "contains? key type does not match collection")
+      then Some (Error.error ~code:Error_code.Type_mismatch "contains? key type does not match collection")
       else
         Some
           (Result.map
@@ -599,7 +599,7 @@ let element_type_of_ty env ty =
 let seq_expr env collection =
   match to_seq_expr env collection with
   | Error _ ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         ("seq expects a seqable value, got " ^ Types.source_name collection.ty)
   | Ok (inner, sequence) ->
       let sequence_type =
@@ -611,7 +611,7 @@ let seq_expr env collection =
 
 let rest_expr env collection =
   match to_seq_expr env collection with
-  | Error _ -> Error.error "rest expects a seqable value"
+  | Error _ -> Error.error ~code:Error_code.Arity "rest expects a seqable value"
   | Ok (inner, sequence) ->
       Ok
         (typed_ir (TSeq inner)
@@ -619,7 +619,7 @@ let rest_expr env collection =
 
 let next_expr env collection =
   match to_seq_expr env collection with
-  | Error _ -> Error.error "next expects a seqable value"
+  | Error _ -> Error.error ~code:Error_code.Arity "next expects a seqable value"
   | Ok (inner, sequence) ->
       Ok
         (typed_ir (Types.next_seq inner)
@@ -627,16 +627,16 @@ let next_expr env collection =
 
 let second_expr env collection =
   match to_seq_expr env collection with
-  | Error _ -> Error.error "second expects a seqable value"
+  | Error _ -> Error.error ~code:Error_code.Arity "second expects a seqable value"
   | Ok (inner, sequence) ->
       Ok (typed_ir inner (apply "Lg_runtime.Runtime_seq.second" [ sequence ]))
 
 let drop_expr env name collection count =
   if not (Types.equal count.ty TInt) then
-    Error.error (name ^ " count must be int")
+    Error.error ~code:Error_code.Type_mismatch (name ^ " count must be int")
   else
     match to_seq_expr env collection with
-    | Error _ -> Error.error (name ^ " expects a seqable value")
+    | Error _ -> Error.error ~code:Error_code.Arity (name ^ " expects a seqable value")
     | Ok (inner, sequence) ->
         Ok
           (typed_ir (TSeq inner)
@@ -873,7 +873,7 @@ let rec count_expr env collection =
       | Ok (_, sequence) ->
           Ok (of_host_int (apply "Seq.length" [ sequence ]))
       | Error _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             ("count expects a counted or seqable value, got "
            ^ Types.source_name collection.ty))
 
@@ -882,7 +882,7 @@ let is_counted env collection =
 
 let first_expr env collection =
   match to_seq_expr env collection with
-  | Error _ -> Error.error "first expects a seqable value"
+  | Error _ -> Error.error ~code:Error_code.Arity "first expects a seqable value"
     | Ok (inner, sequence) ->
       let expression =
         if Types.is_dynamic inner then
@@ -963,7 +963,7 @@ let first_expr env collection =
 
 let last_expr env collection =
   match to_seq_expr env collection with
-  | Error _ -> Error.error "last expects a seqable value"
+  | Error _ -> Error.error ~code:Error_code.Arity "last expects a seqable value"
   | Ok (inner, sequence) ->
       let last_index length =
         Semantic_ir.Infix ("-", length, Semantic_ir.Int 1)
@@ -1073,21 +1073,21 @@ let nth_expr env collection index =
                 not
                   (Types.assignable ~policy:Host_boundary ~expected:TInt
                      ~actual:index_ty)
-              then Error.error "Indexed/-nth index parameter must be int"
+              then Error.error ~code:Error_code.Type_mismatch "Indexed/-nth index parameter must be int"
               else
               Ok
                 (typed_ir return_ty
                    (apply implementation.ocaml_name
                       [ collection.semantic_expr; index.semantic_expr ]))
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Type_mismatch
                 "Indexed/-nth implementation must return a typed value"))
   | None -> (
       match collection.ty with
-      | TSet _ -> Error.error "nth expects an indexed or sequential value"
+      | TSet _ -> Error.error ~code:Error_code.Arity "nth expects an indexed or sequential value"
       | _ -> (
           match to_seq_expr env collection with
-          | Error _ -> Error.error "nth expects an indexed or sequential value"
+          | Error _ -> Error.error ~code:Error_code.Arity "nth expects an indexed or sequential value"
           | Ok (inner, sequence) ->
               Ok
                 (typed_ir inner

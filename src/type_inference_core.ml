@@ -890,7 +890,7 @@ let rec constrain_symbol expected_ty params name =
             with
             | Some overloaded -> Ok (replace_param name overloaded params)
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Type_mismatch
                   (name ^ " called with incompatible arguments: expected "
                  ^ Types.source_name instantiated ^ ", got "
                  ^ Types.source_name expected_ty)))
@@ -1016,7 +1016,7 @@ let constrain_array_index_symbol params name =
       if Types.equal value_ty TInt || Types.equal value_ty TFloat then
         Ok (replace_param name (Types.array_index_constraint value_ty) params)
       else
-        Error.error
+        Error.error ~code:Error_code.Inference
           ("array index requires int or float, got " ^ Types.source_name value_ty)
   | None -> Ok params
 

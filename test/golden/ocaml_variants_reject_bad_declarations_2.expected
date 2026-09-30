@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- ocaml_variants_reject_bad_declarations_2.cljc
+-- COMPILATION ERROR [LG2004] -- ocaml_variants_reject_bad_declarations_2.cljc
 
 duplicate variant constructor Active
 

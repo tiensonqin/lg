@@ -320,7 +320,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         ~actual:argument.ty
     then Ok argument.semantic_expr
     else
-      Error.error
+      Error.error ~code:Error_code.Type_mismatch
         ("apply argument type mismatch: expected "
         ^ Types.source_name expected_ty
         ^ ", got "
@@ -408,7 +408,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               (prepare_apply_argument env ~expected_ty argument)
               (fun expression ->
                 prepare_fixed (expression :: prepared) expected arguments)
-        | _ -> Error.error "internal apply argument mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "internal apply argument mismatch"
       in
       let rec prepare_remaining prepared expected names =
         match (expected, names) with
@@ -419,7 +419,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                  (typed_ir inner (Semantic_ir.Ident name)))
               (fun expression ->
                 prepare_remaining (expression :: prepared) expected names)
-        | _ -> Error.error "internal apply argument mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "internal apply argument mismatch"
       in
       Some
         (Result.bind (prepare_fixed [] fixed_parameter_tys fixed_args)
@@ -465,7 +465,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 (prepare_apply_argument env ~expected_ty argument)
                 (fun expression ->
                   prepare_fixed (expression :: prepared) expected arguments)
-          | _ -> Error.error "internal apply argument mismatch"
+          | _ -> Error.error ~code:Error_code.Type_mismatch "internal apply argument mismatch"
         in
         let adapt_rest_list list_expr =
           if Types.equal inner rest_ty then Ok list_expr
@@ -582,7 +582,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     | TKeyword -> convert "of_keyword"
     | TRegex -> convert "of_regex"
     | ty ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("apply conj over a static map cannot pack "
          ^ Types.source_name ty ^ " as an EDN map entry value")
   in
@@ -638,7 +638,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       match arg_forms with
       | fn_form :: rest -> (
           match split_last [] rest with
-          | None -> Error.error "apply expects function and collection"
+          | None -> Error.error ~code:Error_code.Arity "apply expects function and collection"
           | Some
               ( fixed_forms,
                 FList
@@ -713,7 +713,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   | _ -> (
                   match collection_to_list_expr env collection with
                   | Error _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         ("apply expects a seqable value, got "
                         ^ Types.source_name collection.ty)
                   | Ok (inner, list_expr) -> (
@@ -833,10 +833,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                   (plan_and_emit_argument env
                                      ~expected:resolved_element_ty item)
                             | None ->
-                                Error.error
+                                Error.error ~code:Error_code.Arity
                                   "apply conj expects a vector target")
                         | _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "apply conj expects one fixed collection \
                                argument")
                     | FSymbol "__lg_pr" -> (
@@ -939,7 +939,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                           values_expr;
                                         ]))
                           | TFn ([ TInt; TInt ], TInt) ->
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   "apply currently supports int binary reducers"
                           | TFn (parameter_tys, return_ty) -> (
                               match
@@ -948,7 +948,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                     ~fixed_args ~inner ~parameter_tys ~return_ty
                               with
                                 | None ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Arity
                                       "apply has too many fixed arguments"
                               | Some result ->
                                   Result.map
@@ -1033,7 +1033,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                                         substitutions ty))
                                                   rest
                                             | Error _ ->
-                                                Error.error
+                                                Error.error ~code:Error_code.Semantic
                                                   ("apply overloads must return the same type, got "
                                                   ^ Types.source_name ty
                                                   ^ " and "
@@ -1044,10 +1044,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                 (fun (cases, return_ty) ->
                                   match (cases, return_ty) with
                                     | [], _ ->
-                                        Error.error
+                                        Error.error ~code:Error_code.Arity
                                           "apply has no matching function arity"
                                     | _, None ->
-                                        Error.error
+                                        Error.error ~code:Error_code.Arity
                                           "apply has no matching function arity"
                                   | cases, Some return_ty ->
                                       Ok
@@ -1070,12 +1070,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                  || (match fn_type with
                                     | TUnknown | TMeta _ | TVar _ -> true
                                     | _ -> false) ->
-                              Error.error
+                              Error.error ~code:Error_code.Semantic
                                 "apply requires a statically typed function; \
                                  define a closed sum type for multiple function \
                                  shapes"
-                          | _ -> Error.error "apply expects a function")))))))
-      | _ -> Error.error "apply expects function and collection"
+                          | _ -> Error.error ~code:Error_code.Arity "apply expects a function")))))))
+      | _ -> Error.error ~code:Error_code.Arity "apply expects function and collection"
     and compile_static_comp scope env arg_forms =
       match arg_forms with
       | [] ->
@@ -1104,7 +1104,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               let select_unary fn =
                 match fn.ty with
                 | TFn ([ _ ], _) -> Ok fn
-                | TFn _ -> Error.error "comp expects unary functions"
+                | TFn _ -> Error.error ~code:Error_code.Arity "comp expects unary functions"
                 | TOverloaded_fn arities -> (
                     match
                       arities
@@ -1120,8 +1120,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                              | _ -> None)
                     with
                     | Some fn -> Ok fn
-                    | None -> Error.error "comp expects unary functions")
-                | _ -> Error.error "comp expects functions"
+                    | None -> Error.error ~code:Error_code.Arity "comp expects unary functions")
+                | _ -> Error.error ~code:Error_code.Arity "comp expects functions"
               in
               let rec select_unary_functions selected = function
                 | [] -> Ok (List.rev selected)
@@ -1189,7 +1189,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                              with
                             | Ok substitutions -> Ok substitutions
                             | Error _ ->
-                                Error.error "incompatible sequence elements")
+                                Error.error ~code:Error_code.Type_mismatch "incompatible sequence elements")
                         | _ -> (
                         match
                           ( Types.seqable_constraint_info expected,
@@ -1202,7 +1202,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                              with
                             | Ok substitutions -> Ok substitutions
                             | Error _ ->
-                                Error.error "incompatible sequence elements")
+                                Error.error ~code:Error_code.Type_mismatch "incompatible sequence elements")
                         | _ -> (
                             match (expected, actual) with
                             | TFn (expected_params, expected_return),
@@ -1227,7 +1227,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                           expected_arity actual_arity))
                                   (Ok substitutions) expected_arities
                                   actual_arities
-                            | _ -> Error.error "incompatible function types"))))
+                            | _ -> Error.error ~code:Error_code.Type_mismatch "incompatible function types"))))
               and unify_function_parameters substitutions expected actual =
                 List.fold_left2
                   (fun result expected_parameter actual_parameter ->
@@ -1240,7 +1240,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 if
                   List.length expected.fixed_params
                   <> List.length actual.fixed_params
-                then Error.error "incompatible function arities"
+                then Error.error ~code:Error_code.Type_mismatch "incompatible function arities"
                 else
                   Result.bind
                     (unify_function_parameters substitutions
@@ -1252,7 +1252,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                         | Some expected, Some actual ->
                             unify_assignable substitutions ~expected:actual
                               ~actual:expected
-                        | _ -> Error.error "incompatible function arities"
+                        | _ -> Error.error ~code:Error_code.Type_mismatch "incompatible function arities"
                       in
                       Result.bind rest (fun substitutions ->
                           unify_assignable substitutions
@@ -1262,8 +1262,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               let unary_type fn =
                 match fn.ty with
                 | TFn ([ arg ], ret) -> Ok (arg, ret)
-                | TFn _ -> Error.error "comp expects unary functions"
-                | _ -> Error.error "comp expects functions"
+                | TFn _ -> Error.error ~code:Error_code.Arity "comp expects unary functions"
+                | _ -> Error.error ~code:Error_code.Arity "comp expects functions"
               in
               let rec unify_chain substitutions = function
                 | [] | [ _ ] -> Ok substitutions
@@ -1277,7 +1277,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             | Ok substitutions ->
                                 unify_chain substitutions rest
                             | Error _ ->
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   ("comp function types do not line up: "
                                  ^ Types.source_name left_arg ^ " and "
                                  ^ Types.source_name right_ret)))
@@ -1391,10 +1391,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                               [ value; collection ] )))
                     (Types.set_module_name element_type)
               | _ ->
-                  Error.error "fnil conj default must be a vector or set")
+                  Error.error ~code:Error_code.Semantic "fnil conj default must be a vector or set")
       | [ FSymbol "__lg_conj"; _; _ ]
       | [ FSymbol "__lg_conj"; _; _; _ ] ->
-          Error.error "fnil conj currently supports one default argument"
+          Error.error ~code:Error_code.Arity "fnil conj currently supports one default argument"
       | function_form :: default_forms
         when List.length default_forms >= 1
              && List.length default_forms <= 3 -> (
@@ -1409,7 +1409,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   let default_count = List.length defaults in
                   let minimum_arity = if default_count = 3 then 2 else default_count in
                   if List.length parameter_tys < minimum_arity then
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "fnil function has fewer parameters than required defaults"
                   else
                     let rec adapt_defaults adapted index = function
@@ -1506,7 +1506,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   in
                   (match selected_arities with
                   | [] ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "fnil has no function arity accepting the default positions"
                   | _ ->
                       let expected_default_type index =
@@ -1521,7 +1521,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           when List.for_all (Types.equal expected) rest ->
                             Ok (Some expected)
                         | _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Arity
                               "fnil overloaded function arities disagree on default argument types"
                       in
                       let rec adapt_defaults adapted index = function
@@ -1780,8 +1780,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             (capture_bindings bindings
                                (overloaded_functions returned_functions)))
                         (adapt_defaults [] 0 defaults))
-              | _ -> Error.error "fnil expects a statically typed function"))
-      | _ -> Error.error "fnil called with incompatible arguments"
+              | _ -> Error.error ~code:Error_code.Arity "fnil expects a statically typed function"))
+      | _ -> Error.error ~code:Error_code.Type_mismatch "fnil called with incompatible arguments"
     
     and compile_static_partial scope env arg_forms =
       match arg_forms with
@@ -1821,7 +1821,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             adapt_fixed
                               (typed_ir expected expression :: adapted)
                               expected_rest actual_rest)
-                    | _ -> Error.error "partial fixed arguments do not match function"
+                    | _ -> Error.error ~code:Error_code.Arity "partial fixed arguments do not match function"
                   in
                   Result.map
                     (fun adapted_fixed_args ->
@@ -1882,7 +1882,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   in
                   (match selected_arities with
                   | [] ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "partial has no function arity accepting the fixed arguments"
                   | (_, first_arity) :: _ ->
                       let expected_type_at arity index =
@@ -1907,7 +1907,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           selected_arities
                       in
                       if not compatible_prefix then
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           "partial overloaded function arities disagree on fixed argument types"
                       else
                         let rec adapt_fixed adapted expected actual =
@@ -1921,7 +1921,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                     (typed_ir expected expression :: adapted)
                                     expected_rest actual_rest)
                           | _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Arity
                                 "partial fixed arguments do not match function"
                         in
                         Result.map
@@ -2068,10 +2068,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                  (overloaded_functions returned_functions)))
                           (adapt_fixed [] expected_fixed_tys fixed_args))
               | other ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("partial expects a function, got "
                    ^ Types.source_name other)))
-      | _ -> Error.error "partial called with incompatible arguments"
+      | _ -> Error.error ~code:Error_code.Type_mismatch "partial called with incompatible arguments"
 
     and compile_static_juxt scope env arg_forms =
       let compile_fns =
@@ -2089,7 +2089,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       in
       match compile_fns with
       | Error _ as err -> err
-      | Ok [] -> Error.error "juxt expects at least 1 function"
+      | Ok [] -> Error.error ~code:Error_code.Arity "juxt expects at least 1 function"
       | Ok fns -> (
           let rec collect arg_ty ret_ty exprs = function
             | [] -> Ok (arg_ty, ret_ty, List.rev exprs)
@@ -2139,11 +2139,11 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                            Types.assignable ~policy:Host_boundary ~expected:arg_ty
                              ~actual:current_arg)
                          arg_ty ->
-                    Error.error "juxt functions must return the same type"
+                    Error.error ~code:Error_code.Semantic "juxt functions must return the same type"
                 | Some _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "juxt functions must accept the same argument type"
-                | None -> Error.error "juxt expects unary functions")
+                | None -> Error.error ~code:Error_code.Arity "juxt expects unary functions")
           in
           match collect None None [] fns with
           | Error _ as err -> err
@@ -2165,7 +2165,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           ( result_bindings,
                             apply "Rrbvec.of_list"
                               [ Semantic_ir.List results ] ) )))
-          | Ok _ -> Error.error "juxt expects at least 1 function")
+          | Ok _ -> Error.error ~code:Error_code.Arity "juxt expects at least 1 function")
 
   in
   {
