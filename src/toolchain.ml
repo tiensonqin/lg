@@ -1217,9 +1217,8 @@ let target_include_dirs target include_dirs =
 let restore_ocaml_environment ?(target = Target.default) ~packages state
     sources =
   let report_timings =
-    match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
-    | Some ("1" | "details" | "debug") -> true
-    | _ -> false
+    Trace.enabled_any
+      [ "compile.timing"; "compile.timing.details"; "compile.timing.debug" ]
   in
   let timed label f =
     let started_at = if report_timings then Unix.gettimeofday () else 0.0 in
@@ -1318,7 +1317,7 @@ let checked_parsetree (typed : typed_result) =
   match Ocaml_parsetree_backend.implementation typed with
   | Error _ as err -> err
   | Ok result -> (
-      if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
+      if Trace.enabled "compile.dump" then
         Printf.eprintf "%s\n%!"
           (Ocaml_parsetree.print_implementation result.structure);
       match Ocaml_typechecker.structure result.structure with
@@ -1730,12 +1729,8 @@ let affected_stabilization_forms ast evidence_ast changed_names =
 
 let stabilize_typecheck ?compile_evidence ?compile_evidence_subset ~compile
     ~(initial_state : Compiler_state.t) ast =
-  let report_timings = Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" in
-  let report_timing_details =
-    match Sys.getenv_opt "LG_COMPILE_TIMINGS" with
-    | Some ("details" | "debug") -> true
-    | _ -> false
-  in
+  let report_timings = Trace.enabled "compile.timing" in
+  let report_timing_details = Trace.enabled "compile.timing.details" in
   let module Signed_names = Set.Make (String) in
   let scope =
     ast
@@ -2056,7 +2051,7 @@ let typecheck (parsed : parser_result) =
         |> Signature_overlay.value_names
       in
       let evidence_ast = stabilization_ast ~signed_names parsed.ast in
-      if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "debug" then begin
+      if Trace.enabled "compile.timing.debug" then begin
         let evidence_names =
           evidence_ast
           |> List.filter_map (fun form ->
@@ -2083,7 +2078,7 @@ let typecheck (parsed : parser_result) =
               affected_stabilization_forms parsed.ast evidence_ast
                 changed_names
             in
-            if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+            if Trace.enabled "compile.timing" then
               Printf.eprintf "lg: stabilization subset: %d forms\n%!"
                 (List.length forms);
             Source_context.with_source_unit parsed.source_unit (fun () ->
@@ -2140,7 +2135,7 @@ let typecheck_lg_incremental state (parsed : parser_result) =
         |> Signature_overlay.value_names
       in
       let evidence_ast = stabilization_ast ~signed_names parsed.ast in
-      if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "debug" then begin
+      if Trace.enabled "compile.timing.debug" then begin
         let evidence_names =
           evidence_ast
           |> List.filter_map (fun form ->
@@ -2168,7 +2163,7 @@ let typecheck_lg_incremental state (parsed : parser_result) =
               affected_stabilization_forms parsed.ast evidence_ast
                 changed_names
             in
-            if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+            if Trace.enabled "compile.timing" then
               Printf.eprintf "lg: stabilization subset: %d forms\n%!"
                 (List.length forms);
             Source_context.with_source_unit parsed.source_unit (fun () ->
@@ -2297,7 +2292,7 @@ let analyze ?(target = Target.default) ?(filename = "<string>") source =
           match Ocaml_parsetree_backend.implementation typed with
           | Error _ as err -> err
           | Ok parsetree -> (
-              if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
+              if Trace.enabled "compile.dump" then
                 Printf.eprintf "%s\n%!"
                   (Ocaml_parsetree.print_implementation parsetree.structure);
               let structure =
@@ -2457,7 +2452,7 @@ let analyze_workspace_with_errors_from_state ?(target = Target.default)
           match Lowering.structure_of_located_items state.located_items with
           | Error _ as err -> err
           | Ok structure -> (
-              if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
+              if Trace.enabled "compile.dump" then
                 Printf.eprintf "%s\n%!"
                   (Ocaml_parsetree.print_implementation structure);
               match
@@ -2600,7 +2595,7 @@ let compile_prepared_chunk_with_diagnostics ?(check_ocaml = true) state
               let ocaml_source =
                 Ocaml_parsetree_backend.print ~reserved_modules result.structure
               in
-              if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
+              if Trace.enabled "compile.dump" then
                 Printf.eprintf "%s\n%!" ocaml_source;
               if not check_ocaml then
                 Ok (state, { ocaml_source; diagnostics = [] })
@@ -2647,7 +2642,7 @@ let compile_chunk_parsetree ?(target = Target.default) ?(filename = "<string>")
           with
           | Error _ as err -> err
           | Ok result -> (
-              if Sys.getenv_opt "LG_DUMP_ML" = Some "1" then
+              if Trace.enabled "compile.dump" then
                 Printf.eprintf "%s\n%!"
                   (Ocaml_parsetree_backend.print result.structure);
               if not check_ocaml then Ok (state, result.structure)

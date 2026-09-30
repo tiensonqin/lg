@@ -645,7 +645,7 @@ let touch_cache_entry key =
   |> List.iter (fun path -> if Sys.file_exists path then Unix.utimes path now now)
 
 let report_corrupt_cache_entry key messages =
-  if Sys.getenv_opt "LG_COMPILE_CACHE_DEBUG" = Some "1" then
+  if Lg.Trace.enabled "compile.cache" then
     Printf.eprintf "lg: compile cache ignored corrupt entry %s: %s\n%!" key
       (String.concat "; " messages)
 
@@ -749,13 +749,13 @@ let prefix_cache_writer () =
              state is always saved, even for a single cheap source file. *)
           if Option.is_none explicit_interval then
             interval := max 1. (20. *. write_elapsed));
-        if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+        if Lg.Trace.enabled "compile.timing" then
           Printf.eprintf "lg: wrote cached prefix: %.3fs\n%!"
             (Sys.time () -. started_at)
       with _ -> ()
 
 let timed_step label f =
-  if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then (
+  if Lg.Trace.enabled "compile.timing" then (
     let started_at = Unix.gettimeofday () in
     Fun.protect
       ~finally:(fun () ->
@@ -765,11 +765,11 @@ let timed_step label f =
   else f ()
 
 let report_cache_hit input_path =
-  if Sys.getenv_opt "LG_COMPILE_CACHE_DEBUG" = Some "1" then
+  if Lg.Trace.enabled "compile.cache" then
     Printf.eprintf "lg: compile cache hit: %s\n%!" input_path
 
 let report_cache_miss input_path key reason =
-  if Sys.getenv_opt "LG_COMPILE_CACHE_DEBUG" = Some "1" then
+  if Lg.Trace.enabled "compile.cache" then
     let short_key =
       String.sub key 0 (min 8 (String.length key))
     in
@@ -846,8 +846,12 @@ let extract_compilation_options args =
         | Error message ->
             prerr_endline ("lg: " ^ message);
             exit 2)
+    | "--trace" :: value :: rest ->
+        Lg.Trace.add_classes value;
+        loop target reader_target reversed rest
     | [ "--target" ] -> usage ()
     | [ "--reader-dialect" ] -> usage ()
+    | [ "--trace" ] -> usage ()
     | argument :: rest -> loop target reader_target (argument :: reversed) rest
   in
   loop Lg.Target.default None [] args
@@ -1691,7 +1695,7 @@ let run_ocaml_source ?archive_scan_source packages ocaml_source =
         : cached_runner_manifest option)
     with
     | Some manifest when Sys.file_exists manifest.runner_executable ->
-        if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+        if Lg.Trace.enabled "compile.timing" then
           Printf.eprintf "lg: runner source cache hit: %s\n%!"
             manifest.runner_key;
         if not keep_temp_ml then Sys.remove ml_path;
@@ -1768,7 +1772,7 @@ let run_ocaml_source ?archive_scan_source packages ocaml_source =
     | _ when bytecode_missing = [] && bytecode_layout_available ->
         (".cma", "ocamlc")
     | _ ->
-        (if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+        (if Lg.Trace.enabled "compile.timing" then
           let missing =
             match bytecode_missing with
             | [] -> "runtime layout"
@@ -1873,7 +1877,7 @@ let run_ocaml_source ?archive_scan_source packages ocaml_source =
   in
   let cached_exe_path = runner_cache_path runner_key in
   if cache_runner && Sys.file_exists cached_exe_path then (
-    if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+    if Lg.Trace.enabled "compile.timing" then
       Printf.eprintf "lg: runner cache hit: %s\n%!" runner_key;
     write_marshal_file (runner_manifest_path runner_source_key)
       {
@@ -2167,7 +2171,7 @@ let compile_files ?(use_cache = true) ?(check_ocaml = true) ?reader_target
                        resume_compiler_state ~target ~packages
                          ~sources:(List.rev outputs) compiler_state))
                   (fun state ->
-                    if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+                    if Lg.Trace.enabled "compile.timing" then
                       Printf.eprintf "lg: compiling %s\n%!" input_path;
                     let started_at = Sys.time () in
                       match
@@ -2299,7 +2303,7 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
     if saved.target <> target then
       compiler_error "saved compiler state target does not match --target"
     else (
-      if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+      if Lg.Trace.enabled "compile.timing" then
         Printf.eprintf "lg: saved state has OCaml env: %b\n%!"
           (Lg.Compiler.has_ocaml_environment saved.state);
     let result =
@@ -2378,7 +2382,7 @@ let compile_files_from_saved_state ?(use_cache = true) ?(check_ocaml = true)
                              compiler_state
                          else read_compiler_state compiler_state))
                     (fun state ->
-                      if Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" then
+                      if Lg.Trace.enabled "compile.timing" then
                         Printf.eprintf "lg: compiling %s\n%!" input_path;
                       let started_at = Sys.time () in
                       match
