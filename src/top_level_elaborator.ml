@@ -5126,6 +5126,7 @@ and compile_definition scope env next_type form =
           in
           Ok (scope, env, next_type, item))
   | FList [ FSymbol "namespace-scope"; FSymbol namespace_name ] ->
+      Macro_expander.reset_gensym ~namespace:namespace_name;
       let env = Require.add_source_core_bindings env namespace_name in
       let env =
         Env.add (Names.scoped_key namespace_name "read-string")
