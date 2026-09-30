@@ -21,9 +21,28 @@ and closure = {
 
 and locals = value String_map.t
 
-type context = { compiler_env : Env.t; namespace : string; locals : locals }
+type context = {
+  compiler_env : Env.t;
+  namespace : string;
+  gensym_scope : string;
+  locals : locals;
+}
 
-let gensym_counter = ref 0
+(* Gensym counters are kept per expansion scope so a namespace's expanded
+   form depends only on that namespace's own source, not on which other
+   namespaces the process compiled or re-analysed before it.  The counter
+   for a scope resets when the namespace's `namespace-scope` form is
+   elaborated. *)
+let gensym_counters : (string, int) Hashtbl.t = Hashtbl.create 8
+
+let reset_gensym ~namespace = Hashtbl.remove gensym_counters namespace
+
+let fresh_gensym ~scope =
+  let next =
+    Option.value (Hashtbl.find_opt gensym_counters scope) ~default:0 + 1
+  in
+  Hashtbl.replace gensym_counters scope next;
+  next
 
 let is_unqualified_compile_time_primitive = function
   | "assert" | "str" | "subs" | "namespace" | "identity" | "num"
@@ -1216,8 +1235,8 @@ and eval_builtin context name arg_forms =
       | Ok _ -> Error.error ~code:Error_code.Arity "System/getProperty expects a string property name"
       | Error _ as error -> error)
   | "gensym" ->
-      incr gensym_counter;
-      Ok (Form (FSymbol ("G__" ^ string_of_int !gensym_counter)))
+      let next = fresh_gensym ~scope:context.gensym_scope in
+      Ok (Form (FSymbol ("G__" ^ string_of_int next)))
   | "clojure.test/expand-are" -> (
       match eval_args () with
       | Ok
@@ -1426,8 +1445,8 @@ and syntax_quote context form =
           match List.assoc_opt name !generated with
           | Some symbol -> symbol
           | None ->
-              incr gensym_counter;
-              let symbol = "G__" ^ string_of_int !gensym_counter in
+              let next = fresh_gensym ~scope:context.gensym_scope in
+              let symbol = "G__" ^ string_of_int next in
               generated := (name, symbol) :: !generated;
               symbol
         in
@@ -1550,6 +1569,7 @@ let expand ?call_site ~scope ~compiler_env (definition : Macro_definition.t) arg
         {
           compiler_env;
           namespace = definition.namespace;
+          gensym_scope = scope;
           locals = String_map.singleton "&env" macro_environment;
         }
       in
@@ -1613,8 +1633,8 @@ let rec expand_all ~scope ~compiler_env = function
         | _ -> false
       in
       let rec fresh_symbol () =
-        incr gensym_counter;
-        let name = "let_star_value__" ^ string_of_int !gensym_counter in
+        let next = fresh_gensym ~scope in
+        let name = "let_star_value__" ^ string_of_int next in
         if contains_symbol name form then fresh_symbol () else FSymbol name
       in
       let rec expand_bindings env = function
