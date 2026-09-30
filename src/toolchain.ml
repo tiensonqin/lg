@@ -57,6 +57,7 @@ type language_analysis = {
   compiler_env : Env.t;
   typecheck_state : Typecheck.state;
   diagnostics : diagnostic list;
+  info_tree : Info_tree.entry list;
 }
 
 type state = {
@@ -2283,6 +2284,7 @@ let required_ocaml_packages ?(target = Target.default) ?(filename = "<string>")
 let prepared_source_required_packages prepared = prepared.required_packages
 
 let analyze ?(target = Target.default) ?(filename = "<string>") source =
+  Info_tree.reset ();
   match Lg_frontend.implementation ~target ~filename source with
   | Error _ as err -> err
   | Ok parsed -> (
@@ -2309,6 +2311,7 @@ let analyze ?(target = Target.default) ?(filename = "<string>") source =
                       compiler_env = analysis.compiler_env;
                       typecheck_state = typed.typecheck_state;
                       diagnostics = analysis.diagnostics;
+                      info_tree = Info_tree.snapshot ();
                     })))
 
 let interface_of_analysis (analysis : language_analysis) =
@@ -2395,6 +2398,7 @@ let order_workspace_from_state ?(target = Target.default) ?reader_target
 
 let analyze_workspace_with_errors_from_state ?(target = Target.default)
     ?(check_incremental_ocaml = true) initial_state sources =
+  Info_tree.reset ();
   let sources = List.stable_sort (fun (left, _) (right, _) ->
       Bool.compare (not (Ocaml_interface.is_interface left))
         (not (Ocaml_interface.is_interface right))) sources in
@@ -2466,6 +2470,7 @@ let analyze_workspace_with_errors_from_state ?(target = Target.default)
                       typed_structure = analysis.typed_structure;
                       compiler_env = analysis.compiler_env;
                       typecheck_state = state.typecheck_state;
+                      info_tree = Info_tree.snapshot ();
                       diagnostics =
                         List.filter
                           (fun diagnostic ->

@@ -80,6 +80,25 @@ let rec compile_expr scope (env : Env.t) form =
       match Source_context.find_identity form with
       | None -> Ok expression
       | Some (node_id, location) ->
+          let name =
+            match form with
+            | FSymbol value -> Some value
+            | _ -> None
+          in
+          let resolved =
+            match Semantic_ir.unlocated expression.semantic_expr with
+            | Semantic_ir.Ident resolved -> Some resolved
+            | _ -> None
+          in
+          Info_tree.record
+            {
+              node_id;
+              location;
+              kind = Info_tree.Expression;
+              name;
+              ty = Some expression.ty;
+              resolved;
+            };
           Ok
             {
               expression with

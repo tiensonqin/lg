@@ -272,6 +272,17 @@ let source_node_id_of_pattern pattern =
              source_node_id_of_attributes attributes)
 
 let source_node_id_at analysis ~offset =
+  let filename = analysis.filename in
+  match
+    analysis.compiler.info_tree
+    |> List.filter (fun (entry : Info_tree.entry) ->
+           String.equal entry.location.Location.loc_start.Lexing.pos_fname
+             filename)
+    |> Info_tree.find ~offset
+  with
+  | Some (entry : Info_tree.entry) ->
+      Some (Source_node_id.to_string entry.node_id)
+  | None ->
   let expression =
     smallest_expression analysis.compiler.typed_structure offset (fun expression ->
         Option.is_some
