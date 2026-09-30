@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_direct_external_package_constructors_reject_bad_arity.cljc
+
+unix/ADDR_UNIX expects 1 arguments
+
+4| (def address (unix/ADDR_UNIX))
+                ^^^^^^^^^^^^^^^^

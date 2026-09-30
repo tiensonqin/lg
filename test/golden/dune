@@ -1,0 +1,22 @@
+(executable
+ (name golden_runner)
+ (modes byte)
+ (libraries lg lg.runtime lg.edn-backend.native unix))
+
+(executable
+ (name gen_dune)
+ (modes byte))
+
+(rule
+ (targets dune.inc.gen)
+ (deps (glob_files cases/*.cljc))
+ (action
+  (chdir %{workspace_root}
+   (with-stdout-to %{targets}
+    (run %{exe:gen_dune.exe} %{deps})))))
+
+(rule
+ (alias runtest)
+ (action (diff dune.inc dune.inc.gen)))
+
+(include dune.inc)

@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_module_functors_reject_bad_forms_2.cljc
+
+module-functor parameter vector must not be empty
+
+1| (module-functor Make [] (def answer 42))
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

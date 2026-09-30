@@ -1,0 +1,2 @@
+;; golden: bare
+(defonce value)

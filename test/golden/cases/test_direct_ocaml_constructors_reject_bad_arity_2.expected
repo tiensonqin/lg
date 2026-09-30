@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_direct_ocaml_constructors_reject_bad_arity_2.cljc
+
+None expects 0 arguments
+
+1| (def value (None 1))
+              ^^^^^^^^

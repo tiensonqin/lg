@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_ocaml_option_and_result_constructors_reject_bad_arity_3.cljc
+
+Ok expects 1 arguments
+
+1| (def value (Ok ))
+              ^^^^^

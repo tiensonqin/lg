@@ -1444,10 +1444,6 @@ let test_hash_map_duplicate_fields_use_last_value () =
   assert_ocaml_runs "hash_map_duplicate_fields_use_last_value" "Grace\n"
     ocaml_source
 
-let test_hash_map_rejects_odd_key_value_forms () =
-  Lg.Compiler.compile_string {|(def x (__lg_hash-map :name "Ada" :age))|}
-  |> expect_error "No value supplied for key: :age"
-
 let test_hash_map_empty_preserves_metadata () =
   let source =
     {|
@@ -2015,10 +2011,6 @@ let test_println_outputs_record_values () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "println_outputs_record_values"
     "{:name \"Ada\", :admin? true}\n" ocaml_source
-
-let test_println_rejects_unknown_symbols () =
-  compile_string_from_stdlib {|(println missing)|}
-  |> expect_error "unknown symbol missing"
 
 let test_print_and_println_match_clojure_output () =
   let source = {|
@@ -2660,10 +2652,6 @@ let test_when_bindings_return_nullable_body_values () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "when_bindings_return_nullable_body_values" "4:true\n"
     ocaml_source
-
-let test_nil_type_annotation_remains_explicitly_unsupported () =
-  Lg.Compiler.compile_string {|(defn bad [^:nil x] x)|}
-  |> expect_error "unknown parameter type ^:nil"
 
 let test_type_predicates () =
   let source =
@@ -9719,15 +9707,6 @@ let test_namespace_refer_clojure_exclude_allows_local_replacement () =
   assert_ocaml_runs "namespace_refer_clojure_exclude_allows_local_replacement"
     "42\n" ocaml_source
 
-let test_namespace_refer_clojure_exclude_hides_core_binding () =
-  Lg.Compiler.compile_string
-    {|
-(ns app.search
-  (:refer-clojure :exclude [find]))
-(def result (find (fn [value] true) [1]))
-|}
-  |> expect_error "unknown function find"
-
 let test_namespace_rejects_import_clause () =
   Lg.Compiler.compile_string
       {|
@@ -13325,14 +13304,6 @@ let test_int_coerces_float_and_preserves_int () =
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
   assert_ocaml_runs "int_coerces_float_and_preserves_int" "3:4\n" ocaml_source
 
-let test_namespace_rejects_malformed_and_repeated_forms () =
-  Lg.Compiler.compile_string {|(ns)|}
-  |> expect_error "ns expects a namespace symbol and optional clauses";
-  Lg.Compiler.compile_string {|(ns :app)|}
-  |> expect_error "ns expects a namespace symbol and optional clauses";
-  Lg.Compiler.compile_string {|(ns app.one) (ns app.two)|}
-  |> expect_error "ns may only appear once at the start of a file"
-
 let test_keyword_or_string_parameters_require_a_closed_sum () =
   let source =
     {|
@@ -14443,15 +14414,6 @@ let test_direct_external_package_constructors_are_inferred () =
 |}
   |> expect_ok |> ignore
 
-let test_direct_external_package_constructors_reject_bad_arity () =
-  Lg.Compiler.compile_string
-    {|
-(require [ocaml.package/unix]
-            [ocaml.Unix :as unix])
-(def address (unix/ADDR_UNIX))
-|}
-  |> expect_error "unix/ADDR_UNIX expects 1 arguments"
-
 let test_direct_external_package_constructor_payloads_are_checked_by_ocaml () =
   Lg.Compiler.compile_string
     {|
@@ -14879,16 +14841,6 @@ let test_ocaml_option_and_result_constructors_compile_through_source_backend ()
     "ocaml_option_and_result_constructors_compile_through_source_backend" ""
     ocaml_source
 
-let test_ocaml_option_and_result_constructors_reject_bad_arity () =
-  Lg.Compiler.compile_string {|(def value (Some ))|}
-  |> expect_error "Some expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (None 1))|}
-  |> expect_error "None expects 0 arguments";
-  Lg.Compiler.compile_string {|(def value (Ok ))|}
-  |> expect_error "Ok expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (Error ))|}
-  |> expect_error "Error expects 1 arguments"
-
 let test_direct_ocaml_option_and_result_constructors_compile () =
   let source =
     {|
@@ -14993,18 +14945,6 @@ let test_direct_declared_variant_constructors_compile () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "direct_declared_variant_constructors_compile"
     "active:Ada\n" ocaml_source
-
-let test_direct_ocaml_constructors_reject_bad_arity () =
-  Lg.Compiler.compile_string {|(def value (Some))|}
-  |> expect_error "Some expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (None 1))|}
-  |> expect_error "None expects 0 arguments";
-  Lg.Compiler.compile_string
-    {|
-(type-variant status Active (Named :string))
-(def value (Named))
-|}
-  |> expect_error "Named expects 1 arguments"
 
 let test_ocaml_option_and_result_patterns_compile_through_source_backend () =
   let source =
@@ -15162,12 +15102,6 @@ let test_ocaml_type_application_annotations_delegate_argument_mismatch_to_ocaml
 (def bad (option-score present))
 |}
   |> expect_error_contains "string"
-
-let test_ocaml_type_application_annotations_reject_bad_forms () =
-  Lg.Compiler.compile_string {|(defn bad [^:option<> value] value)|}
-  |> expect_error "invalid type annotation ^:option<>";
-  Lg.Compiler.compile_string {|(defn bad [^:result<int> value] value)|}
-  |> expect_error "invalid type annotation ^:result<int>"
 
 let test_collection_type_application_annotations_preserve_nested_elements () =
   let source =
@@ -18944,28 +18878,6 @@ let test_declared_empty_map_default_is_static () =
   if string_contains_substring melange "Runtime_dynamic" then
     failwith "Melange empty map defaults must remain fully static"
 
-let test_ocaml_variant_constructors_reject_bad_arity () =
-  Lg.Compiler.compile_string
-    {|
-(type-variant status Active (Named :string))
-(def value (Active 1))
-|}
-  |> expect_error "Active expects 0 arguments";
-  Lg.Compiler.compile_string
-    {|
-(type-variant status Active (Named :string))
-(def value (Named))
-|}
-  |> expect_error "Named expects 1 arguments"
-
-let test_ocaml_variants_reject_bad_declarations () =
-  Lg.Compiler.compile_string {|(type-variant status)|}
-  |> expect_error "type-variant expects at least one constructor";
-  Lg.Compiler.compile_string {|(type-variant status Active Active)|}
-  |> expect_error "duplicate variant constructor Active";
-  Lg.Compiler.compile_string {|(type-variant status :Active)|}
-  |> expect_error "type-variant constructors must be symbols"
-
 let test_recursive_variants_support_nested_data_values () =
   let source =
     {|
@@ -19218,14 +19130,6 @@ let test_defonce_supports_top_level_and_module_values () =
   assert_ocaml_runs "defonce_supports_top_level_and_module_values" "42:ready\n"
     ocaml_source
 
-let test_defonce_rejects_invalid_declarations () =
-  Lg.Compiler.compile_string {|(defonce)|}
-  |> expect_error "defonce expects a name and value";
-  Lg.Compiler.compile_string {|(defonce value)|}
-  |> expect_error "defonce expects a name and value";
-  Lg.Compiler.compile_string {|(defonce value 1 2)|}
-  |> expect_error "defonce expects a name and value"
-
 let test_typed_function_parameters_reject_bad_calls () =
   let source = {|
 (defn inc1 [^:int x] (+ x 1))
@@ -19446,13 +19350,6 @@ let test_generic_variadic_signature_preserves_rest_element_relation () =
     "0\ntrue\n" native_source;
   ignore
     (compile_string_with_stdlib ~target:Lg.Target.Melange source |> expect_ok)
-
-let test_variadic_signature_rejects_missing_rest_type () =
-  Lg.Compiler.compile_string
-    {|
-(signature invalid :variadic-fn<int>)
-|}
-  |> expect_error "variadic-fn expects a rest type and return type"
 
 let test_variadic_signature_lifts_generic_map_returns_to_option () =
   let source =
@@ -20609,22 +20506,6 @@ let test_modules_export_multi_arity_defn () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "modules_export_multi_arity_defn" "5:11\n" ocaml_source
 
-let test_multi_arity_defn_rejects_invalid_declarations () =
-  Lg.Compiler.compile_string
-    {|
-(defn bad
-  ([value] value)
-  ([other] other))
-|}
-  |> expect_error "defn bad has duplicate arity 1";
-  Lg.Compiler.compile_string
-    {|
-(defn bad
-  ([value & more] value)
-  ([value] value))
-|}
-  |> expect_error "defn bad variadic arity must be last"
-
 let test_multi_arity_defn_rejects_unsupported_calls () =
   Lg.Compiler.compile_string
     {|
@@ -20751,17 +20632,6 @@ let test_module_private_defn_is_internal_only () =
 (def leaked (Math/hidden 41))
 |}
   |> expect_error_contains "Unbound module Math"
-
-let test_private_defn_rejects_invalid_declarations () =
-  Lg.Compiler.compile_string
-    {|
-(defn- bad
-  ([value] value)
-  ([other] other))
-|}
-  |> expect_error "defn bad has duplicate arity 1";
-  Lg.Compiler.compile_string {|(defn- bad)|}
-  |> expect_error "defn expects a name, parameter vector, and body"
 
 let test_unannotated_function_parameters_infer_from_body () =
   let source =
@@ -24447,10 +24317,8 @@ let test_nominal_sequence_branches_lift_into_nullable_results () =
   (cond
     (= mode 0)
     (filter (fn [^Datom _] true) [(Datom. 1)])
-
     (= mode 1)
     (Some (filter (fn [^Datom _] true) [(Datom. 2)]))
-
     (= mode 2)
     nil
 
@@ -26013,15 +25881,6 @@ let test_protocols_inside_modules_export_methods_and_record_impls () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "protocols_inside_modules_export_methods_and_record_impls"
     "Ada\n" ocaml_source
-
-let test_protocols_reject_duplicate_method_declarations () =
-  {|
-(defprotocol Labelled
-  (label [x] :string)
-  (label [x] :string))
-|}
-  |> Lg.Compiler.compile_string
-  |> expect_error "protocol Labelled declares duplicate method label"
 
 let test_protocols_reject_duplicate_implementations () =
   {|
@@ -40913,14 +40772,6 @@ let test_declared_protocol_methods_reject_unsupported_arity () =
   |> expect_error
        "lookup-value called with unsupported protocol method arity 1"
 
-let test_declared_protocol_methods_reject_duplicate_arity () =
-  {|
-(defprotocol LookupProtocol
-  (lookup-value [receiver key] [receiver other]))
-|}
-  |> Lg.Compiler.compile_string
-  |> expect_error "protocol method lookup-value declares duplicate arity 2"
-
 let test_macros_preserve_nested_parameter_type_hints () =
   let source =
     {|
@@ -49972,16 +49823,6 @@ let test_random_sample_accepts_nil_probability_on_melange () =
        ~filename:"test/random_sample_nil_probability.cljc" state source
      |> expect_ok)
 
-let test_set_of_rejects_nil_element_annotation () =
-  Lg.Compiler.compile_string {|(def values (set-of :nil))|}
-  |> expect_error "unknown set element type :nil"
-
-let test_set_of_rejects_types_without_comparators () =
-  Lg.Compiler.compile_string {|(def xs (set-of :record))|}
-  |> expect_error "sets require a generated comparator for record";
-  Lg.Compiler.compile_string {|(def xs (set-of :opaque))|}
-  |> expect_error "sets require a generated comparator for opaque"
-
 let test_set_of_preserves_supported_host_comparator_aliases () =
   let source = {|(println (empty? (set-of :ordering)))|} in
   let ocaml_source = compile_string_with_stdlib source |> expect_ok in
@@ -53057,20 +52898,6 @@ let test_try_supports_finally_with_and_without_catch () =
     "body\nnormal-finally\ncaught-finally\npropagated-finally\n42:boom:again\n"
     ocaml_source
 
-let test_try_and_raise_reject_malformed_forms () =
-  Lg.Compiler.compile_string {|(def value (try 42))|}
-  |> expect_error "try requires at least one catch or finally clause";
-  Lg.Compiler.compile_string {|(def value (try 42 (finally)))|}
-  |> expect_error "finally requires a body";
-  Lg.Compiler.compile_string {|(def value (try 42 (catch)))|}
-  |> expect_error "catch requires a pattern and body";
-  Lg.Compiler.compile_string {|(def value (try (catch _ 42)))|}
-  |> expect_error "try requires a body";
-  Lg.Compiler.compile_string {|(def value (raise))|}
-  |> expect_error "raise expects 1 arguments";
-  Lg.Compiler.compile_string {|(def value (raise 1 2))|}
-  |> expect_error "raise expects 1 arguments"
-
 let test_match_collection_rest_patterns () =
   let source = {|
 (type-variant envelope (Payload :list<int>))
@@ -53261,16 +53088,6 @@ let test_module_alias_targets_nested_modules () =
   let ocaml_source = Lg.Compiler.compile_string source |> expect_ok in
   assert_ocaml_runs "module_alias_targets_nested_modules" "hi Grace\n"
     ocaml_source
-
-let test_module_alias_rejects_bad_forms () =
-  Lg.Compiler.compile_string {|(module-alias M)|}
-  |> expect_error "module-alias expects alias and target modules"
-
-let test_include_module_rejects_bad_forms () =
-  Lg.Compiler.compile_string {|(include)|}
-  |> expect_error "include expects one module";
-  Lg.Compiler.compile_string {|(module App (include))|}
-  |> expect_error "include expects one module"
 
 let test_module_signatures_constrain_modules () =
   let source =
@@ -54246,22 +54063,6 @@ let test_module_functor_application_is_checked_by_ocaml () =
 (module-apply App Make Bad)
 |}
   |> expect_error_contains "not compatible"
-
-let test_module_functors_reject_bad_forms () =
-  Lg.Compiler.compile_string {|(module-functor Make M MathSig)|}
-  |> expect_error
-       "module-functor expects a name, [parameter signature ...], and body";
-  Lg.Compiler.compile_string {|(module-functor Make [] (def answer 42))|}
-  |> expect_error "module-functor parameter vector must not be empty";
-  Lg.Compiler.compile_string
-    {|(module-functor Make [M MathSig N] (def answer 42))|}
-  |> expect_error "module-functor parameters must be name/signature pairs";
-  Lg.Compiler.compile_string
-    {|(module-functor Make [M :MathSig] (def answer 42))|}
-  |> expect_error "module-functor parameters must be symbols";
-  Lg.Compiler.compile_string {|(module-apply App Make)|}
-  |> expect_error
-       "module-apply expects result, functor, and one or more argument modules"
 
 let test_module_definitions_support_open () =
   let source =
@@ -55461,7 +55262,6 @@ let test_migration_callbacks_preserve_nominal_models () =
       (catch (Invalid_argument message)
         (MigrationRejected message)))))
 
-
 (type-record migrated-counter
   (counter-value :int)
   (counter-label :string))
@@ -55989,8 +55789,6 @@ let tests =
       test_hash_map_is_callable_as_lookup_function );
     ( "hash-map duplicate fields use the last value",
       test_hash_map_duplicate_fields_use_last_value );
-    ( "hash-map rejects odd key value forms",
-      test_hash_map_rejects_odd_key_value_forms );
     ("map literals accept computed keys", test_map_literals_accept_computed_keys);
     ( "homogeneous maps do not emit anonymous record types",
       test_homogeneous_maps_do_not_emit_anonymous_record_types );
@@ -56025,7 +55823,6 @@ let tests =
     ( "declared and anonymous record vectors require a sum type",
       test_declared_and_anonymous_record_vectors_require_sum_type );
     ("println outputs record values", test_println_outputs_record_values);
-    ("println rejects unknown symbols", test_println_rejects_unknown_symbols);
     ( "print and println match Clojure output",
       test_print_and_println_match_clojure_output );
     ( "with-out-str captures source print functions",
@@ -56082,8 +55879,6 @@ let tests =
       test_logical_forms_lift_nilable_operands );
     ( "when bindings return nullable body values",
       test_when_bindings_return_nullable_body_values );
-    ( "nil type annotation remains explicitly unsupported",
-      test_nil_type_annotation_remains_explicitly_unsupported );
     ("type predicates work", test_type_predicates);
     ( "type predicates reject wrong arity",
       test_type_predicates_reject_wrong_arity );
@@ -56535,8 +56330,6 @@ let tests =
       test_keyword_lookup_ignores_refer_clojure_get_exclusion );
     ( "namespace refer-clojure exclude allows local replacement",
       test_namespace_refer_clojure_exclude_allows_local_replacement );
-    ( "namespace refer-clojure exclude hides core binding",
-      test_namespace_refer_clojure_exclude_hides_core_binding );
     ( "namespace rejects import clauses",
       test_namespace_rejects_import_clause );
     ( "namespace imports LG closed sum constructors",
@@ -56855,8 +56648,6 @@ let tests =
       test_rand_int_uses_exclusive_positive_bound );
     ( "int coerces float and preserves int",
       test_int_coerces_float_and_preserves_int );
-    ( "namespace rejects malformed and repeated forms",
-      test_namespace_rejects_malformed_and_repeated_forms );
     ( "keyword or string parameters require a closed sum",
       test_keyword_or_string_parameters_require_a_closed_sum );
     ( "re-matches returns Clojure match values",
@@ -56982,8 +56773,6 @@ let tests =
       test_direct_ocaml_calls_use_external_packages );
     ( "direct external package constructors are inferred",
       test_direct_external_package_constructors_are_inferred );
-    ( "direct external package constructors reject bad arity",
-      test_direct_external_package_constructors_reject_bad_arity );
     ( "direct external package constructor payloads are checked by OCaml",
       test_direct_external_package_constructor_payloads_are_checked_by_ocaml );
     ( "external variant pattern payloads are inferred",
@@ -57040,8 +56829,6 @@ let tests =
     ( "OCaml option and result constructors compile through source backend",
       test_ocaml_option_and_result_constructors_compile_through_source_backend
     );
-    ( "OCaml option and result constructors reject bad arity",
-      test_ocaml_option_and_result_constructors_reject_bad_arity );
     ( "direct OCaml option and result constructors compile",
       test_direct_ocaml_option_and_result_constructors_compile );
     ( "OCaml option literal patterns infer open targets",
@@ -57050,8 +56837,6 @@ let tests =
       test_ocaml_result_vector_constructors_compile );
     ( "direct declared variant constructors compile",
       test_direct_declared_variant_constructors_compile );
-    ( "direct OCaml constructors reject bad arity",
-      test_direct_ocaml_constructors_reject_bad_arity );
     ( "OCaml option and result patterns compile through source backend",
       test_ocaml_option_and_result_patterns_compile_through_source_backend );
     ( "OCaml option patterns delegate payload typecheck to OCaml",
@@ -57061,8 +56846,6 @@ let tests =
     ( "OCaml type application annotations delegate argument mismatch to OCaml",
       test_ocaml_type_application_annotations_delegate_argument_mismatch_to_ocaml
     );
-    ( "OCaml type application annotations reject bad forms",
-      test_ocaml_type_application_annotations_reject_bad_forms );
     ( "syntax ergonomics: concise host type annotations compile",
       test_concise_host_type_annotations_compile );
     ( "source option annotations remain nullable until lowering",
@@ -57330,10 +57113,6 @@ let tests =
       test_declared_optional_map_host_adapter_is_static );
     ( "declared empty map default is static",
       test_declared_empty_map_default_is_static );
-    ( "OCaml variant constructors reject bad arity",
-      test_ocaml_variant_constructors_reject_bad_arity );
-    ( "OCaml variants reject bad declarations",
-      test_ocaml_variants_reject_bad_declarations );
     ( "recursive variants support nested data values",
       test_recursive_variants_support_nested_data_values );
     ( "recursive variants support callback results",
@@ -57352,8 +57131,6 @@ let tests =
       test_module_recursive_variants_export_constructors );
     ( "defonce supports top-level and module values",
       test_defonce_supports_top_level_and_module_values );
-    ( "defonce rejects invalid declarations",
-      test_defonce_rejects_invalid_declarations );
     ( "typed function parameters reject bad calls",
       test_typed_function_parameters_reject_bad_calls );
     ( "unit annotations reject non-unit arguments",
@@ -57377,8 +57154,6 @@ let tests =
       test_generic_overload_signature_resolves_nested_type_parameters );
     ( "generic variadic signature preserves rest element relation",
       test_generic_variadic_signature_preserves_rest_element_relation );
-    ( "variadic signature rejects missing rest type",
-      test_variadic_signature_rejects_missing_rest_type );
     ( "variadic signature lifts generic map returns to option",
       test_variadic_signature_lifts_generic_map_returns_to_option );
     ( "option map parameters adapt record shaped literals before lifting",
@@ -57459,8 +57234,6 @@ let tests =
     ( "multi-arity calls project structural row arguments",
       test_multi_arity_calls_project_structural_row_arguments );
     ("modules export multi-arity defn", test_modules_export_multi_arity_defn);
-    ( "multi-arity defn rejects invalid declarations",
-      test_multi_arity_defn_rejects_invalid_declarations );
     ( "multi-arity defn rejects unsupported calls",
       test_multi_arity_defn_rejects_unsupported_calls );
     ( "private defn supports single and typed recursive arities",
@@ -57473,8 +57246,6 @@ let tests =
       test_inferred_interface_hides_private_functions );
     ( "module private defn is internal only",
       test_module_private_defn_is_internal_only );
-    ( "private defn rejects invalid declarations",
-      test_private_defn_rejects_invalid_declarations );
     ( "unannotated function parameters infer from body",
       test_unannotated_function_parameters_infer_from_body );
     ( "unannotated compare parameters share one inferred type",
@@ -57868,8 +57639,6 @@ let tests =
       test_ambiguous_protocol_methods_require_explicit_identity );
     ( "protocols inside modules export methods and record implementations",
       test_protocols_inside_modules_export_methods_and_record_impls );
-    ( "protocols reject duplicate method declarations",
-      test_protocols_reject_duplicate_method_declarations );
     ( "protocols reject duplicate implementations",
       test_protocols_reject_duplicate_implementations );
     ( "protocol implementations reject emitted name collisions",
@@ -58875,8 +58644,6 @@ let tests =
       test_declared_protocol_methods_support_multiple_arities );
     ( "declared protocol methods reject unsupported arity",
       test_declared_protocol_methods_reject_unsupported_arity );
-    ( "declared protocol methods reject duplicate arity",
-      test_declared_protocol_methods_reject_duplicate_arity );
     ( "macros preserve nested parameter type hints",
       test_macros_preserve_nested_parameter_type_hints );
     ( "protocol calls recover structurally inferred named records",
@@ -59610,10 +59377,6 @@ let tests =
       test_random_sample_accepts_nil_collections_from_saved_state );
     ( "random-sample accepts nil probability on melange",
       test_random_sample_accepts_nil_probability_on_melange );
-    ( "set-of rejects nil element annotation",
-      test_set_of_rejects_nil_element_annotation );
-    ( "set-of rejects types without comparators",
-      test_set_of_rejects_types_without_comparators );
     ( "set-of preserves supported host comparator aliases",
       test_set_of_preserves_supported_host_comparator_aliases );
     ( "keyword type annotations for empty collections work",
@@ -59796,8 +59559,6 @@ let tests =
       test_try_supports_normal_results_multiple_body_forms_and_handlers );
     ( "try supports finally with and without catch",
       test_try_supports_finally_with_and_without_catch );
-    ( "try and raise reject malformed forms",
-      test_try_and_raise_reject_malformed_forms );
     ( "try requires closed sum for mixed branch types",
       test_try_requires_closed_sum_for_mixed_branch_types );
     ("raise payload is checked by OCaml", test_raise_payload_is_checked_by_ocaml);
@@ -59845,8 +59606,6 @@ let tests =
       test_lowercase_host_aliases_qualify_constructor_patterns );
     ( "module alias targets nested modules",
       test_module_alias_targets_nested_modules );
-    ("module alias rejects bad forms", test_module_alias_rejects_bad_forms);
-    ("include module rejects bad forms", test_include_module_rejects_bad_forms);
     ( "module signatures constrain modules",
       test_module_signatures_constrain_modules );
     ( "module signature ascription is checked by OCaml",
@@ -59918,7 +59677,6 @@ let tests =
       test_module_functor_application_is_checked_by_ocaml );
     ( "multi-parameter functor application is checked by OCaml",
       test_multi_parameter_functor_application_is_checked_by_ocaml );
-    ("module functors reject bad forms", test_module_functors_reject_bad_forms);
     ( "incremental compilation preserves protocols",
       test_incremental_compilation_preserves_protocols );
     ( "incremental compile_chunk runs OCaml typecheck gate",

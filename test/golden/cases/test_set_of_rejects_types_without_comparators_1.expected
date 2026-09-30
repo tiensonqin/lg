@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_set_of_rejects_types_without_comparators_1.cljc
+
+sets require a generated comparator for record
+
+1| (def xs (set-of :record))
+           ^^^^^^^^^^^^^^^^

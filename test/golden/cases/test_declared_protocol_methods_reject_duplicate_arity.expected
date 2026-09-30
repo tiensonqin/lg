@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_declared_protocol_methods_reject_duplicate_arity.cljc
+
+protocol method lookup-value declares duplicate arity 2
+
+2| (defprotocol LookupProtocol
+   ^

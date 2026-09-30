@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_include_module_rejects_bad_forms_1.cljc
+
+include expects one module
+
+1| (include)
+   ^^^^^^^^^

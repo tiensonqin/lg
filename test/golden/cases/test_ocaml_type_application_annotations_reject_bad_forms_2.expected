@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_ocaml_type_application_annotations_reject_bad_forms_2.cljc
+
+invalid type annotation ^:result<int>
+
+1| (defn bad [^:result<int> value] value)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

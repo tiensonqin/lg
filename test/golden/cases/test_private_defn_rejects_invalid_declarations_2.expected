@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_private_defn_rejects_invalid_declarations_2.cljc
+
+defn expects a name, parameter vector, and body
+
+1| (defn- bad)
+   ^^^^^^^^^^^

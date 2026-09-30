@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_direct_ocaml_constructors_reject_bad_arity_3.cljc
+
+Named expects 1 arguments
+
+3| (def value (Named))
+              ^^^^^^^

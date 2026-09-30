@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_ocaml_variant_constructors_reject_bad_arity_1.cljc
+
+Active expects 0 arguments
+
+3| (def value (Active 1))
+              ^^^^^^^^^^

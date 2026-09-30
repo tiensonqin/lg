@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_set_of_rejects_nil_element_annotation.cljc
+
+unknown set element type :nil
+
+1| (def values (set-of :nil))
+               ^^^^^^^^^^^^^

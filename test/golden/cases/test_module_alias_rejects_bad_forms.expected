@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_module_alias_rejects_bad_forms.cljc
+
+module-alias expects alias and target modules
+
+1| (module-alias M)
+   ^^^^^^^^^^^^^^^^

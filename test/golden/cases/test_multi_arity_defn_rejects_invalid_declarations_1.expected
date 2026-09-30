@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_multi_arity_defn_rejects_invalid_declarations_1.cljc
+
+defn bad has duplicate arity 1
+
+2| (defn bad
+   ^

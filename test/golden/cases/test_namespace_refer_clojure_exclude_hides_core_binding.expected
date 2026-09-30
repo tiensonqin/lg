@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_namespace_refer_clojure_exclude_hides_core_binding.cljc
+
+unknown function find
+
+4| (def result (find (fn [value] true) [1]))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

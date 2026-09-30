@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_hash_map_rejects_odd_key_value_forms.cljc
+
+No value supplied for key: :age
+
+1| (def x (__lg_hash-map :name "Ada" :age))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

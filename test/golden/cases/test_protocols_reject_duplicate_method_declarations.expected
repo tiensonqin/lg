@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_protocols_reject_duplicate_method_declarations.cljc
+
+protocol Labelled declares duplicate method label
+
+2| (defprotocol Labelled
+   ^

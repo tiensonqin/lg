@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_println_rejects_unknown_symbols.cljc
+
+unknown symbol missing
+
+1| (println missing)
+            ^^^^^^^

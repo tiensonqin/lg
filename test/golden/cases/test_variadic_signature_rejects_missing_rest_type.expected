@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_variadic_signature_rejects_missing_rest_type.cljc
+
+variadic-fn expects a rest type and return type
+
+2| (signature invalid :variadic-fn<int>)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

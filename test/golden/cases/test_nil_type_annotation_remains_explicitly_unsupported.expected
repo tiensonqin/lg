@@ -1,0 +1,6 @@
+-- COMPILATION ERROR [LG2000] -- test/golden/cases/test_nil_type_annotation_remains_explicitly_unsupported.cljc
+
+unknown parameter type ^:nil
+
+1| (defn bad [^:nil x] x)
+   ^^^^^^^^^^^^^^^^^^^^^^
