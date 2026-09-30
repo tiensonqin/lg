@@ -317,7 +317,7 @@ let query package =
   if not (valid_name package) then
     Error.error ~code:Error_code.Interop ("invalid OCaml package name " ^ package)
   else
-    let report_timings = Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" in
+    let report_timings = Trace.enabled "compile.timing" in
     let started_at = if report_timings then Unix.gettimeofday () else 0.0 in
     let finish result =
       if report_timings then

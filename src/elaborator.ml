@@ -953,7 +953,7 @@ let predeclare_adjacent_defrecords scope env pending =
         env names
 
 let compile_forms_incremental (state : Compiler_state.t) forms =
-  let report_timings = Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" in
+  let report_timings = Trace.enabled "compile.timing" in
   let finish scope env next_type items =
     let items =
       items
