@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_3.cljc
+
+module-functor parameters must be name/signature pairs
+
+1| (module-functor Make [M MathSig N] (def answer 42))
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

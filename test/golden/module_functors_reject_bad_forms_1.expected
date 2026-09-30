@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_1.cljc
+
+module-functor expects a name, [parameter signature ...], and body
+
+1| (module-functor Make M MathSig)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

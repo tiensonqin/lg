@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- try_and_raise_reject_malformed_forms_2.cljc
+
+finally requires a body
+
+1| (def value (try 42 (finally)))
+              ^^^^^^^^^^^^^^^^^^
+exit: 1

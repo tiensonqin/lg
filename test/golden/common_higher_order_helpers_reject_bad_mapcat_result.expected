@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- common_higher_order_helpers_reject_bad_mapcat_result.cljc
+
+mapcat argument 1: collection value is not seqable: int
+
+1| (def x (mapcat (fn [x] (+ x 1)) [1 2]))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

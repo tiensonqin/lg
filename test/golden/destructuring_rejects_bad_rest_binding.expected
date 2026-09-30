@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- destructuring_rejects_bad_rest_binding.cljc
+
+sequential destructuring & must be followed by a symbol
+
+1| (def x (let [[head &] [1 2]] head))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

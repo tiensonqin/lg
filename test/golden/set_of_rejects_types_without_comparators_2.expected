@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- set_of_rejects_types_without_comparators_2.cljc
+
+sets require a generated comparator for opaque
+
+1| (def xs (set-of :opaque))
+           ^^^^^^^^^^^^^^^^
+exit: 1

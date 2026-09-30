@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_5.cljc
+
+module-apply expects result, functor, and one or more argument modules
+
+1| (module-apply App Make)
+   ^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

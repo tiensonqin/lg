@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- let_rejects_odd_binding_forms.cljc
+
+let bindings require an even number of forms
+
+1| (def x (let [a 1 b] a))
+          ^^^^^^^^^^^^^^^
+exit: 1

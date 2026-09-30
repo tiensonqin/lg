@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- subvec_rejects_non_int_indexes.cljc
+
+subvec indexes must be int
+
+1| (def x (subvec [1 2] "0"))
+          ^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 801, column 13 to line 803, column 60
+exit: 1

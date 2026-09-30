@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- assoc_rejects_vector_value_type_mismatch.cljc
+
+assoc vector value must match element type
+
+1| (def x (assoc [1 2] 0 "one"))
+          ^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 751, column 5 to line 752, column 61
+exit: 1

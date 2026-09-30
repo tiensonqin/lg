@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- loop_and_recur_reject_invalid_calls_3.cljc
+
+recur argument 1 must be int, got string
+
+1| (loop [n 1] (recur "one"))
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- common_higher_order_helpers_reject_mixed_juxt_returns.cljc
+
+juxt functions must return the same type
+
+1| (def f (juxt (fn [x] (+ x 1)) (fn [x] (even? x))))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 4969, columns 29-56
+exit: 1

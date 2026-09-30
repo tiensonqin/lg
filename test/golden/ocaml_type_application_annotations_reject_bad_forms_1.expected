@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- ocaml_type_application_annotations_reject_bad_forms_1.cljc
+
+invalid type annotation ^:option<>
+
+1| (defn bad [^:option<> value] value)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- destructuring_rejects_bad_or_defaults.cljc
+
+map destructuring :or expects a map
+
+1| (def x (let [{:keys [age] :or [age 0]} {:name "Ada"}] age))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

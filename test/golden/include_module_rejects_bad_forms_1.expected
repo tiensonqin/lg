@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- include_module_rejects_bad_forms_1.cljc
+
+include expects one module
+
+1| (include)
+   ^^^^^^^^^
+exit: 1

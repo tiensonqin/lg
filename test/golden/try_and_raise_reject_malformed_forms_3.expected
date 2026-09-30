@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- try_and_raise_reject_malformed_forms_3.cljc
+
+catch requires a pattern and body
+
+1| (def value (try 42 (catch)))
+              ^^^^^^^^^^^^^^^^
+exit: 1

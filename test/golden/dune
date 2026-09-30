@@ -1,0 +1,24 @@
+; Golden compiler tests: each *.cljc is compiled against the prebuilt stdlib
+; state and the rendered diagnostics / run output is diffed against
+; <name>.expected. `dune promote` updates the expected files.
+
+(include dune.inc)
+
+; Stale check: dune.inc must cover the current *.cljc / *.run / *.expected set.
+; `dune promote` regenerates it from gen_dune_inc.py.
+(rule
+ (alias runtest)
+ (deps
+  dune.inc
+  gen_dune_inc.py
+  (source_tree .))
+ (target dune.inc.gen)
+ (action
+  (progn
+   (with-stdout-to
+    %{target}
+    (run
+     python3
+     %{dep:gen_dune_inc.py}
+     %{workspace_root}/test/golden))
+   (diff %{dep:dune.inc} %{target}))))

@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- ocaml_variants_reject_bad_declarations_3.cljc
+
+type-variant constructors must be symbols
+
+1| (type-variant status :Active)
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- arithmetic_rejects_non_int_arguments.cljc
+
+expected int arguments for +
+
+1| (def x (+ 1 "two"))
+          ^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 3531, columns 26-49
+exit: 1

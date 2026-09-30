@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- set_of_rejects_nil_element_annotation.cljc
+
+unknown set element type :nil
+
+1| (def values (set-of :nil))
+               ^^^^^^^^^^^^^
+exit: 1

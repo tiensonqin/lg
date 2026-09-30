@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- ocaml_option_and_result_constructors_reject_bad_arity_2.cljc
+
+None expects 0 arguments
+
+1| (def value (None 1))
+              ^^^^^^^^
+exit: 1

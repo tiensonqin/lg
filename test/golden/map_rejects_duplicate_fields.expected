@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- map_rejects_duplicate_fields.cljc
+
+duplicate field :name
+
+1| (def x {:name "Ada", :name "Grace"})
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

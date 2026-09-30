@@ -1,0 +1,7 @@
+-- COMPILATION ERROR [LG2000] -- loop_and_recur_reject_invalid_calls_2.cljc
+
+recur expects 1 arguments
+
+1| (loop [n 1] (recur n 0))
+   ^^^^^^^^^^^^^^^^^^^^^^^^
+exit: 1

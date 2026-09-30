@@ -1,0 +1,10 @@
+-- COMPILATION ERROR [LG2000] -- apply_rejects_bad_set_reducers.cljc
+
+apply argument type mismatch: expected int, got string
+
+1| (def x (apply + (__lg_hash-set "a" "b")))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+generated from this macro template
+File "clojure/core.cljc", line 1941, column 6 to line 1947, column 17
+exit: 1
