@@ -51,6 +51,12 @@ ocaml -I +compiler-libs ocamlcommon.cma \
   "$lg_root/script/extract_ocaml_string_dispatch.ml" "$call_elaborator" \
   >"$tmp/compiler-calls"
 
+# Call dispatch names may also live in Call_dispatch registrations rather than
+# match arms; both forms count toward the same dispatch surface.
+sed -n '/Call_dispatch\.register_all/,/];/p' "$call_elaborator" \
+  | sed -n 's/^[^(]*([[:space:]]*"\([^"]*\)".*/\1/p' \
+  >>"$tmp/compiler-calls"
+
 dispatch_count=$(wc -l <"$tmp/compiler-calls" | tr -d ' ')
 if test "$dispatch_count" -ne 263; then
   echo "compiler call dispatch changed: expected 263 names, found $dispatch_count" >&2
