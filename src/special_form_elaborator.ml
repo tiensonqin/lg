@@ -64,7 +64,9 @@ let compile_args_for compile_expr scope env arg_forms =
 let located_pattern identity pattern =
   match identity with
   | None -> pattern
-  | Some (node_id, location) -> Semantic_ir.PLocated (node_id, location, pattern)
+  | Some (node_id, location) ->
+      Info_tree.record_pattern node_id location;
+      Semantic_ir.PLocated (node_id, location, pattern)
 
 let located_form_pattern form pattern =
   located_pattern (Destructure.source_identity form) pattern

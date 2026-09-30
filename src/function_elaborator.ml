@@ -2202,6 +2202,7 @@ let fn_code ?(row_param_type_names = []) parts =
            match List.nth_opt parts.param_identities index |> Option.join with
            | None -> pattern
            | Some (node_id, location) ->
+               Info_tree.record_pattern node_id location;
                Semantic_ir.PLocated (node_id, location, pattern))
   in
   let body_expr =
@@ -2241,6 +2242,7 @@ let fn_code ?(row_param_type_names = []) parts =
                   match binding.identity with
                   | None -> pattern
                   | Some (node_id, location) ->
+                      Info_tree.record_pattern node_id location;
                       Semantic_ir.PLocated (node_id, location, pattern)
                 in
                 (pattern, binding.semantic_expr))
