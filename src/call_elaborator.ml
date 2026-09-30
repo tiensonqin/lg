@@ -8361,6 +8361,7 @@ let create ~compile_expr =
                               [ metadata ] ) ) ))))
     | _ -> Error.error ~code:Error_code.Arity "print-meta? expects options and value"
   in
+  let call_dispatch_table = ref (lazy (Call_dispatch.create ())) in
   let rec parse_ocaml_argument_forms forms =
     Ocaml_signature.parse_argument_forms forms
   and compile_ocaml_arguments ?expected_types scope env forms =
@@ -13543,7 +13544,6 @@ let create ~compile_expr =
                   | Ok _ ->
                       Error.error ~code:Error_code.Arity
                         "assert expects condition and optional message")
-    | "__lg_fnil" -> compile_static_fnil scope env arg_forms
     | "delay" -> (
         match arg_forms with
         | [] -> Error.error ~code:Error_code.Arity "delay expects at least one body form"
@@ -16204,44 +16204,10 @@ let create ~compile_expr =
               "print output line expects string, bool newline flag, and bool \
                flush-on-newline flag"
         | Ok _ -> Error.error ~code:Error_code.Arity "print output line expects 3 arguments")
-    | "__lg_list" -> compile_list scope env arg_forms
-    | "__lg_list-star" -> compile_list_star scope env arg_forms
-    | "list-of" -> compile_list_of arg_forms
-    | "__lg_cons" -> compile_cons scope env arg_forms
-    | "__lg_vector" -> compile_vector scope env arg_forms
-    | "vector-of" -> compile_vector_of arg_forms
-    | "__lg_count" -> compile_collection_call scope env name arg_forms
-    | "__lg_conj!" -> compile_conj_bang scope env arg_forms
-    | "__lg_assoc!" -> compile_assoc_bang scope env arg_forms
-    | "__lg_dissoc!" -> compile_dissoc_bang scope env arg_forms
-    | "__lg_transient" -> compile_transient scope env arg_forms
-    | "__lg_persistent!" -> compile_persistent_bang scope env arg_forms
-    | "__lg_conj" -> compile_conj scope env arg_forms
-    | "__lg_first" -> compile_collection_call scope env name arg_forms
-    | "__lg_subvec" -> compile_subvec scope env arg_forms
-    | "__lg_nth" -> compile_nth scope env arg_forms
-    | "__lg_get" -> compile_get scope env arg_forms
-    | "__lg_find" -> compile_find scope env arg_forms
-    | "__lg_get-in-step" -> compile_get_in_step scope env arg_forms
-    | "__lg_get-in" -> compile_get_in scope env arg_forms
-    | "__lg_assoc" -> compile_assoc scope env arg_forms
-    | "__lg_assoc-in" -> compile_assoc_in scope env arg_forms
-    | "__lg_dissoc" -> compile_dissoc scope env arg_forms
-    | "__lg_merge" -> compile_merge scope env arg_forms
-    | "__lg_update" -> compile_update scope env arg_forms
-    | "__lg_update-in" -> compile_update_in scope env arg_forms
-    | "__lg_select-keys" -> compile_select_keys scope env arg_forms
-    | "__lg_contains" -> compile_contains scope env arg_forms
-    | "__lg_keys" -> compile_keys scope env arg_forms
-    | "__lg_vals" -> compile_vals scope env arg_forms
-    | "__lg_hash-map" | "__lg_array-map" ->
-        compile_hash_map scope env arg_forms
     | name
       when String.equal name "__lg_empty-predicate"
            || String.ends_with ~suffix:"/__lg_empty-predicate" name ->
         compile_collection_call scope env "__lg_empty-predicate" arg_forms
-    | "__lg_rest" | "__lg_seq" ->
-        compile_collection_call scope env name arg_forms
     | name
       when (String.equal name "seq" || String.ends_with ~suffix:"/seq" name)
            && List.length arg_forms = 1 ->
@@ -16263,9 +16229,6 @@ let create ~compile_expr =
         match compile_args () with
         | Error _ as err -> err
         | Ok args -> Core_sequence.compile env name args)
-    | "__lg_some" -> compile_some scope env arg_forms
-    | "__lg_complement" -> compile_static_complement scope env arg_forms
-    | "__lg_bound-fn" -> compile_bound_function scope env arg_forms
     | "__lg_constantly" -> (
         match compile_args () with
         | Ok [ result ] -> (
@@ -16302,17 +16265,6 @@ let create ~compile_expr =
                      result.semantic_expr))
         | Ok _ -> Error.error ~code:Error_code.Arity "constantly expects 1 argument"
         | Error _ as error -> error)
-    | "__lg_sort" ->
-        compile_sequence_transform_call scope env name arg_forms
-    | "__lg_sort-by" -> compile_sort_by scope env arg_forms
-    | "__lg_concat" -> compile_concat scope env arg_forms
-    | "__lg_set" -> compile_set scope env arg_forms
-    | "__lg_interleave" ->
-        compile_sequence_transform_call scope env name arg_forms
-    | "__lg_reductions" -> compile_reductions scope env arg_forms
-    | "__lg_map" -> compile_map scope env arg_forms
-    | "__lg_mapv" -> compile_mapv scope env arg_forms
-    | "__lg_reduce-kv" -> compile_reduce_kv scope env arg_forms
     | "__lg_transformer_sequence" -> (
         match arg_forms with
         | [ xform_form; collection_form ] -> (
@@ -16734,7 +16686,6 @@ let create ~compile_expr =
                               "run! called with incompatible arguments: callback argument type does not match collection"
                         | _ -> Error.error ~code:Error_code.Arity "run! expects a unary function")))
         | _ -> Error.error ~code:Error_code.Arity "run! expects a function and collection")
-    | "__lg_reduce" -> compile_reduce scope env arg_forms
     | "__lg_apply" -> (
         match arg_forms with
         | FSymbol "__lg_mapv" :: constructor_form :: fixed_and_rest
@@ -16745,9 +16696,6 @@ let create ~compile_expr =
             compile_apply_zip_vectors scope env constructor_form fixed_forms
               rest_form
         | _ -> compile_apply scope env arg_forms)
-    | "__lg_comp" -> compile_static_comp scope env arg_forms
-    | "__lg_partial" -> compile_static_partial scope env arg_forms
-    | "__lg_juxt" -> compile_static_juxt scope env arg_forms
     | "__lg_compare" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -16850,8 +16798,11 @@ let create ~compile_expr =
         | Error _ as error -> error
         | Ok compared ->
             Ok (typed_ir (TOcaml "int") compared.semantic_expr))
-              | "__lg_hash-set" -> compile_hash_set scope env arg_forms
-    | "set-of" -> compile_set_of env arg_forms
+    | name
+      when Option.is_some
+             (Call_dispatch.find (Lazy.force !call_dispatch_table) name) ->
+        Call_dispatch.dispatch (Lazy.force !call_dispatch_table) name
+          scope env arg_forms
     | _ when is_constructor_name name -> (
         match lookup_binding scope env name with
         | Ok { ty = TFn (payload_tys, return_ty); ocaml_name; _ } ->
@@ -23832,4 +23783,157 @@ let create ~compile_expr =
     in
     loop [] arg_forms
   in
+  call_dispatch_table :=
+    lazy
+      (let table = Call_dispatch.create () in
+       Call_dispatch.register_all table
+         [
+           ( "__lg_fnil",
+             fun scope env _name arg_forms ->
+               compile_static_fnil scope env arg_forms );
+           ( "__lg_list",
+             fun scope env _name arg_forms ->
+               compile_list scope env arg_forms );
+           ( "__lg_list-star",
+             fun scope env _name arg_forms ->
+               compile_list_star scope env arg_forms );
+           ( "list-of",
+             fun _scope _env _name arg_forms -> compile_list_of arg_forms );
+           ( "__lg_cons",
+             fun scope env _name arg_forms ->
+               compile_cons scope env arg_forms );
+           ( "__lg_vector",
+             fun scope env _name arg_forms ->
+               compile_vector scope env arg_forms );
+           ( "vector-of",
+             fun _scope _env _name arg_forms ->
+               compile_vector_of arg_forms );
+           ("__lg_count", compile_collection_call);
+           ( "__lg_conj!",
+             fun scope env _name arg_forms ->
+               compile_conj_bang scope env arg_forms );
+           ( "__lg_assoc!",
+             fun scope env _name arg_forms ->
+               compile_assoc_bang scope env arg_forms );
+           ( "__lg_dissoc!",
+             fun scope env _name arg_forms ->
+               compile_dissoc_bang scope env arg_forms );
+           ( "__lg_transient",
+             fun scope env _name arg_forms ->
+               compile_transient scope env arg_forms );
+           ( "__lg_persistent!",
+             fun scope env _name arg_forms ->
+               compile_persistent_bang scope env arg_forms );
+           ( "__lg_conj",
+             fun scope env _name arg_forms ->
+               compile_conj scope env arg_forms );
+           ("__lg_first", compile_collection_call);
+           ( "__lg_subvec",
+             fun scope env _name arg_forms ->
+               compile_subvec scope env arg_forms );
+           ( "__lg_nth",
+             fun scope env _name arg_forms ->
+               compile_nth scope env arg_forms );
+           ( "__lg_get",
+             fun scope env _name arg_forms ->
+               compile_get scope env arg_forms );
+           ( "__lg_find",
+             fun scope env _name arg_forms ->
+               compile_find scope env arg_forms );
+           ( "__lg_get-in-step",
+             fun scope env _name arg_forms ->
+               compile_get_in_step scope env arg_forms );
+           ( "__lg_get-in",
+             fun scope env _name arg_forms ->
+               compile_get_in scope env arg_forms );
+           ( "__lg_assoc",
+             fun scope env _name arg_forms ->
+               compile_assoc scope env arg_forms );
+           ( "__lg_assoc-in",
+             fun scope env _name arg_forms ->
+               compile_assoc_in scope env arg_forms );
+           ( "__lg_dissoc",
+             fun scope env _name arg_forms ->
+               compile_dissoc scope env arg_forms );
+           ( "__lg_merge",
+             fun scope env _name arg_forms ->
+               compile_merge scope env arg_forms );
+           ( "__lg_update",
+             fun scope env _name arg_forms ->
+               compile_update scope env arg_forms );
+           ( "__lg_update-in",
+             fun scope env _name arg_forms ->
+               compile_update_in scope env arg_forms );
+           ( "__lg_select-keys",
+             fun scope env _name arg_forms ->
+               compile_select_keys scope env arg_forms );
+           ( "__lg_contains",
+             fun scope env _name arg_forms ->
+               compile_contains scope env arg_forms );
+           ( "__lg_keys",
+             fun scope env _name arg_forms ->
+               compile_keys scope env arg_forms );
+           ( "__lg_vals",
+             fun scope env _name arg_forms ->
+               compile_vals scope env arg_forms );
+           ( "__lg_hash-map",
+             fun scope env _name arg_forms ->
+               compile_hash_map scope env arg_forms );
+           ( "__lg_array-map",
+             fun scope env _name arg_forms ->
+               compile_hash_map scope env arg_forms );
+           ("__lg_rest", compile_collection_call);
+           ("__lg_seq", compile_collection_call);
+           ( "__lg_some",
+             fun scope env _name arg_forms ->
+               compile_some scope env arg_forms );
+           ( "__lg_complement",
+             fun scope env _name arg_forms ->
+               compile_static_complement scope env arg_forms );
+           ( "__lg_bound-fn",
+             fun scope env _name arg_forms ->
+               compile_bound_function scope env arg_forms );
+           ("__lg_sort", compile_sequence_transform_call);
+           ( "__lg_sort-by",
+             fun scope env _name arg_forms ->
+               compile_sort_by scope env arg_forms );
+           ( "__lg_concat",
+             fun scope env _name arg_forms ->
+               compile_concat scope env arg_forms );
+           ( "__lg_set",
+             fun scope env _name arg_forms ->
+               compile_set scope env arg_forms );
+           ("__lg_interleave", compile_sequence_transform_call);
+           ( "__lg_reductions",
+             fun scope env _name arg_forms ->
+               compile_reductions scope env arg_forms );
+           ( "__lg_map",
+             fun scope env _name arg_forms ->
+               compile_map scope env arg_forms );
+           ( "__lg_mapv",
+             fun scope env _name arg_forms ->
+               compile_mapv scope env arg_forms );
+           ( "__lg_reduce-kv",
+             fun scope env _name arg_forms ->
+               compile_reduce_kv scope env arg_forms );
+           ( "__lg_reduce",
+             fun scope env _name arg_forms ->
+               compile_reduce scope env arg_forms );
+           ( "__lg_comp",
+             fun scope env _name arg_forms ->
+               compile_static_comp scope env arg_forms );
+           ( "__lg_partial",
+             fun scope env _name arg_forms ->
+               compile_static_partial scope env arg_forms );
+           ( "__lg_juxt",
+             fun scope env _name arg_forms ->
+               compile_static_juxt scope env arg_forms );
+           ( "__lg_hash-set",
+             fun scope env _name arg_forms ->
+               compile_hash_set scope env arg_forms );
+           ( "set-of",
+             fun _scope env _name arg_forms ->
+               compile_set_of env arg_forms );
+         ];
+       table);
   { compile_call; compile_args_for }
