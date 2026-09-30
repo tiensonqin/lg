@@ -23,8 +23,10 @@ let rec collection_to_list_expr collection =
   | TVector inner -> Ok (inner, apply "Rrbvec.to_list" [ collection.semantic_expr ])
   | TArray inner -> Ok (inner, apply "Array.to_list" [ collection.semantic_expr ])
   | TSeq inner -> Ok (inner, apply "List.of_seq" [ collection.semantic_expr ])
-  | TOcaml_app (name, [ inner ]) when Types.is_next_seq_type_name name ->
-      Ok (inner, apply "List.of_seq" [ collection.semantic_expr ])
+  | ty when Option.is_some (Types.next_seq_element ty) ->
+      Ok
+        ( Option.get (Types.next_seq_element ty),
+          apply "List.of_seq" [ collection.semantic_expr ] )
   | TSet inner ->
       Types.set_module_name inner
       |> Result.map (fun set_module ->
@@ -36,8 +38,8 @@ let rec collection_to_list_expr collection =
 let collection_to_seq_expr collection =
   match collection.ty with
   | TSeq inner -> Ok (inner, collection.semantic_expr)
-  | TOcaml_app (name, [ inner ]) when Types.is_next_seq_type_name name ->
-      Ok (inner, collection.semantic_expr)
+  | ty when Option.is_some (Types.next_seq_element ty) ->
+      Ok (Option.get (Types.next_seq_element ty), collection.semantic_expr)
   | TList inner ->
       Ok
         (inner, apply "Lg_runtime.Runtime_seq.of_list" [ collection.semantic_expr ])

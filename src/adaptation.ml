@@ -320,6 +320,8 @@ let sequence_element_type = function
   | TList element | TVector element | TSet element | TSeq element
   | TArray element ->
       Some element
+  | TCompiler (Next_seq element | Reversible_next_seq element) ->
+      Some element
   | TOcaml_app (name, [ element ])
     when sequence_representation_type_name name ->
       Some element
@@ -825,6 +827,19 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                       })
                   (plan ~row_type_name_for ~protocol_satisfies
                      ~sequence_satisfies expected_element actual_element)
+            | TVector expected_element,
+              TCompiler (Next_seq actual_element | Reversible_next_seq actual_element) ->
+                Result.map
+                  (fun element_adaptation ->
+                    Vector_from_sequence
+                      {
+                        source = Sequence_source;
+                        expected_element;
+                        actual_element;
+                        element_adaptation;
+                      })
+                  (plan ~row_type_name_for ~protocol_satisfies
+                     ~sequence_satisfies expected_element actual_element)
             | TVector expected_element, TOcaml_app (name, [ actual_element ])
               when sequence_representation_type_name name ->
                 Result.map
@@ -866,9 +881,36 @@ let rec plan ?row_type_name ~row_type_name_for ~protocol_satisfies
                       })
                   (plan ~row_type_name_for ~protocol_satisfies
                      ~sequence_satisfies expected_element actual_element)
+            | ( TSeq expected_element,
+                TCompiler (Next_seq actual_element | Reversible_next_seq actual_element)
+              )
+            | ( TCompiler (Next_seq expected_element | Reversible_next_seq expected_element),
+                TSeq actual_element )
+              ->
+                plan_collection ~row_type_name_for ~protocol_satisfies
+                  ~sequence_satisfies Sequence_collection expected_element
+                  actual_element
             | TSeq expected_element, TOcaml_app (name, [ actual_element ])
             | TOcaml_app (name, [ expected_element ]), TSeq actual_element
               when sequence_representation_type_name name ->
+                plan_collection ~row_type_name_for ~protocol_satisfies
+                  ~sequence_satisfies Sequence_collection expected_element
+                  actual_element
+            | ( TCompiler (Next_seq expected_element | Reversible_next_seq expected_element),
+                TCompiler (Next_seq actual_element | Reversible_next_seq actual_element) )
+              ->
+                plan_collection ~row_type_name_for ~protocol_satisfies
+                  ~sequence_satisfies Sequence_collection expected_element
+                  actual_element
+            | TCompiler (Next_seq expected_element | Reversible_next_seq expected_element),
+              TOcaml_app (actual_name, [ actual_element ])
+              when sequence_representation_type_name actual_name ->
+                plan_collection ~row_type_name_for ~protocol_satisfies
+                  ~sequence_satisfies Sequence_collection expected_element
+                  actual_element
+            | TOcaml_app (expected_name, [ expected_element ]),
+              TCompiler (Next_seq actual_element | Reversible_next_seq actual_element)
+              when sequence_representation_type_name expected_name ->
                 plan_collection ~row_type_name_for ~protocol_satisfies
                   ~sequence_satisfies Sequence_collection expected_element
                   actual_element

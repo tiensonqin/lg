@@ -134,17 +134,18 @@ let rec parse_ocaml_type source =
                   |> Names.sanitize_name
                 in
                 Ok (transparent_ocaml_alias (TOcaml (module_path ^ "." ^ type_name)))
-              else Ok (TOcaml ("__lg_record:" ^ source))
+              else Ok (Types.named_record_marker source)
           | _ ->
-                let name =
-                  if String.contains source '.' then source
-                  else if
-                    String.length source > 0
-                    && Char.uppercase_ascii source.[0] = source.[0]
-                  then "__lg_record:" ^ source
-                  else Names.sanitize_name source
-                in
-                Ok (transparent_ocaml_alias (TOcaml name)))
+              if String.contains source '.' then
+                Ok (transparent_ocaml_alias (TOcaml source))
+              else if
+                String.length source > 0
+                && Char.uppercase_ascii source.[0] = source.[0]
+              then Ok (Types.named_record_marker source)
+              else
+                Ok
+                  (transparent_ocaml_alias
+                     (TOcaml (Names.sanitize_name source))))
     | Some open_index ->
         let name = String.sub source 0 open_index |> String.trim in
         let inner =
@@ -363,12 +364,24 @@ let rec parse_ocaml_type source =
                                        methods_ty TUnit;
                                    ] ))
                       | _ -> assert false
+                    else if name = Types.next_seq_type_name then
+                      match args with
+                      | [ inner ] -> Ok (Types.next_seq inner)
+                      | _ ->
+                          Error.error ~code:Error_code.Arity
+                            "next-seq expects one type argument"
+                    else if name = Types.reversible_next_seq_type_name then
+                      match args with
+                      | [ inner ] -> Ok (Types.reversible_next_seq inner)
+                      | _ ->
+                          Error.error ~code:Error_code.Arity
+                            "reversible-next-seq expects one type argument"
+                    else if String.contains name '/' then
+                      Ok (Types.named_record_app_marker name args)
                     else
                       Ok
                         (TOcaml_app
-                           ( (if String.contains name '/' then
-                                "__lg_record_app:" ^ name
-                              else if String.contains name '.' then name
+                           ( (if String.contains name '.' then name
                               else Names.sanitize_name name),
                              args )))
 
@@ -432,6 +445,19 @@ let rec resolve_type_parameters parameters = function
             | Ok arg -> resolve_args (arg :: acc) rest)
       in
       resolve_args [] args
+  | TCompiler marker ->
+      let rec resolve_children acc = function
+        | [] -> Ok (List.rev acc)
+        | value :: rest -> (
+            match resolve_type_parameters parameters value with
+            | Error _ as err -> err
+            | Ok value -> resolve_children (value :: acc) rest)
+      in
+      Result.map
+        (fun children ->
+          TCompiler
+            (Semantic_type.replace_compiler_marker_children marker children))
+        (resolve_children [] (Semantic_type.compiler_marker_children marker))
   | TConstraint constraint_ ->
       let resolve value = resolve_type_parameters parameters value in
       let resolve_one build value =
@@ -601,7 +627,7 @@ let of_param_annotation annotation =
         match Host_interop.type_annotation type_name with
         | Some host_type -> Ok (TOcaml host_type)
         | None when String.contains type_name '.' -> Ok (TOcaml type_name)
-        | None -> Ok (TOcaml ("__lg_record:" ^ type_name))))
+        | None -> Ok (Types.named_record_marker type_name)))
   else Error.error ~code:Error_code.Semantic "function parameters must be symbols"
 
 let parse_params = function

@@ -68,11 +68,7 @@ let is_identity_expr name expression =
   | _ -> false
 
 let resolve_forward_record env = function
-  | TOcaml name as ty when String.starts_with ~prefix:"__lg_record:" name ->
-      let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
-      in
+  | TCompiler (Named_record_marker source_name) as ty ->
       (match Resolver.lookup_record_type "" env source_name with
       | Ok record -> TNamed_record record
       | Error _ -> ty)
@@ -488,8 +484,9 @@ let rec truthiness_expression ?(constrained_identifier = true) ?env ty
       let truthy_payload =
         let payload = Semantic_ir.Ident "truthy_value" in
         match payload_ty with
-        | TSeq _ -> Semantic_ir.Bool true
-        | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+        | TSeq _ | TCompiler (Next_seq _ | Reversible_next_seq _) ->
+            Semantic_ir.Bool true
+        | _ when Option.is_some (Types.next_seq_element payload_ty) ->
             Semantic_ir.Bool true
         | _ -> (
         match Types.truthy_constraint_info payload_ty with
@@ -516,7 +513,7 @@ let rec truthiness_expression ?(constrained_identifier = true) ?env ty
             ( Semantic_ir.PConstructor ("Some", Some Semantic_ir.PAny),
               Semantic_ir.Bool true );
           ] )
-  | TSeq _ ->
+  | TSeq _ | TCompiler (Next_seq _ | Reversible_next_seq _) ->
       Semantic_ir.Apply
         ( Semantic_ir.Ident "not",
           [
@@ -524,7 +521,7 @@ let rec truthiness_expression ?(constrained_identifier = true) ?env ty
               ( Semantic_ir.Ident "Lg_runtime.Runtime_seq.is_empty",
                 [ expression ] );
           ] )
-  | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+  | ty when Option.is_some (Types.next_seq_element ty) ->
       Semantic_ir.Apply
         ( Semantic_ir.Ident "not",
           [
@@ -544,9 +541,9 @@ let truthiness_needs_value ?env ty =
   ||
   match ty with
   | TBool | TNullable _ | TOcaml_app ("option", [ _ ]) | TOcaml "option"
-  | TSeq _ ->
+  | TSeq _ | TCompiler (Next_seq _ | Reversible_next_seq _) ->
       true
-  | TOcaml_app (name, [ _ ]) -> Types.is_next_seq_type_name name
+  | ty when Option.is_some (Types.next_seq_element ty) -> true
   | _ -> false
 
 let nil_predicate_needs_value ty =
@@ -561,7 +558,8 @@ let nil_predicate_needs_value ty =
       | TNullable _ | TOcaml_app ("option", [ _ ])
       | TOcaml "Lg_edn_backend.t" ->
           true
-      | TOcaml_app (name, [ _ ]) -> Types.is_next_seq_type_name name
+      | TCompiler (Next_seq _ | Reversible_next_seq _) -> true
+      | ty when Option.is_some (Types.next_seq_element ty) -> true
       | _ -> false)
 
 let rec nil_predicate_expression ty expression =
@@ -626,7 +624,11 @@ let rec nil_predicate_expression ty expression =
       | TOcaml "Lg_edn_backend.t" ->
           Semantic_ir.Apply
             (Semantic_ir.Ident "Lg_runtime.Runtime_edn.is_nil", [ expression ])
-      | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+      | TCompiler (Next_seq _ | Reversible_next_seq _) ->
+          Semantic_ir.Apply
+            ( Semantic_ir.Ident "Lg_runtime.Runtime_seq.is_empty",
+              [ expression ] )
+      | ty when Option.is_some (Types.next_seq_element ty) ->
           Semantic_ir.Apply
             ( Semantic_ir.Ident "Lg_runtime.Runtime_seq.is_empty",
               [ expression ] )
@@ -646,7 +648,8 @@ let option_for_all predicate = function
   | Some value -> predicate value
 
 let is_ocaml_owned_type = function
-  | TFloat | TChar | TArray _ | TRef _ | TOcaml _ | TOcaml_app _ | TTuple _ ->
+  | TFloat | TChar | TArray _ | TRef _ | TOcaml _ | TOcaml_app _ | TTuple _
+  | TCompiler _ ->
       true
   | _ -> false
 
@@ -874,6 +877,32 @@ let rec merge_branch_types left right =
           | _ -> None
         in
         merge_arguments [] left_args right_args
+    | TCompiler left_marker, TCompiler right_marker
+      when Semantic_type.compiler_marker_same_name left_marker right_marker
+           && List.length (compiler_marker_children left_marker)
+              = List.length (compiler_marker_children right_marker) ->
+        let merge_host_arg left right =
+          match (left, right) with
+          | TUnknown, ty | ty, TUnknown -> Some ty
+          | (TMeta _ | TVar _), ty
+          | ty, (TMeta _ | TVar _) ->
+              Some ty
+          | _ -> merge_branch_types left right
+        in
+        let rec merge_arguments merged left right =
+          match (left, right) with
+          | [], [] ->
+              Some
+                (TCompiler
+                   (Semantic_type.replace_compiler_marker_children
+                      left_marker (List.rev merged)))
+          | left :: left_rest, right :: right_rest ->
+              Option.bind (merge_host_arg left right) (fun ty ->
+                  merge_arguments (ty :: merged) left_rest right_rest)
+          | _ -> None
+        in
+        merge_arguments [] (compiler_marker_children left_marker)
+          (compiler_marker_children right_marker)
     | TRecord _, (TNamed_record _ as named)
       when Types.row_compatible ~expected:left ~actual:named ->
         Some named
@@ -1315,8 +1344,8 @@ let coerce_expression_to_type ?(stored = false) target_ty source_ty expression =
               ~actual:source_ty ->
       Semantic_ir.Apply (Semantic_ir.Ident "Option.get", [ expression ])
   | ( (TNullable target | TOcaml_app ("option", [ target ])),
-      TOcaml_app (name, [ _ ]) )
-    when Types.is_next_seq_type_name name ->
+      source )
+    when Option.is_some (Types.next_seq_element source) ->
       let sequence_name = "__lg_nullable_next_sequence" in
       let sequence = Semantic_ir.Ident sequence_name in
       let _ = target in
@@ -1332,8 +1361,8 @@ let coerce_expression_to_type ?(stored = false) target_ty source_ty expression =
   | target_ty,
     TConstraint (Seqable_constraint { requirement; _ })
     when (match target_ty with
-         | TSeq _ -> true
-         | TOcaml_app (name, [ _ ]) -> Types.is_next_seq_type_name name
+         | TSeq _ | TCompiler (Next_seq _ | Reversible_next_seq _) -> true
+         | ty when Option.is_some (Types.next_seq_element ty) -> true
          | _ -> false) ->
       let adapter_name = "__lg_coerce_seq_adapter" in
       let value_name = "__lg_coerce_seq_value" in
@@ -1618,6 +1647,7 @@ let anonymous_record_type_parameters fields =
     | TSeq ty ->
         visit ty
     | TOcaml_app (_, arguments) | TTuple arguments -> List.iter visit arguments
+    | TCompiler marker -> List.iter visit (compiler_marker_children marker)
     | TConstraint constraint_ -> List.iter visit (constraint_children constraint_)
     | TFn (parameters, return_ty) -> List.iter visit (return_ty :: parameters)
     | TOverloaded_fn arities ->
@@ -1717,6 +1747,17 @@ let allocate_nested_anonymous_records ~owner env next_type fields =
           allocate_types env next_type items arguments
         in
         (TOcaml_app (name, arguments), env, next_type, items)
+    | TCompiler marker ->
+        let (env, next_type, items), marker =
+          Semantic_type.fold_map_compiler_marker
+            (fun (env, next_type, items) ty ->
+              let ty, env, next_type, items =
+                allocate_type env next_type items ty
+              in
+              ((env, next_type, items), ty))
+            (env, next_type, items) marker
+        in
+        (TCompiler marker, env, next_type, items)
     | TConstraint constraint_ ->
         allocate_constraint env next_type items constraint_
     | TTuple arguments ->
@@ -2324,6 +2365,8 @@ let parameterize_row_fields fields =
     | TNullable ty -> TNullable (parameterize ty)
     | TOcaml_app (name, arguments) ->
         TOcaml_app (name, List.map parameterize arguments)
+    | TCompiler marker ->
+        TCompiler (Semantic_type.map_compiler_marker parameterize marker)
     | TConstraint constraint_ ->
         TConstraint (map_constraint parameterize constraint_)
     | TTuple items -> TTuple (List.map parameterize items)
@@ -2664,6 +2707,8 @@ let rec concrete_constraint_type = function
       concrete_constraint_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.for_all concrete_constraint_type arguments
+  | TCompiler marker ->
+      List.for_all concrete_constraint_type (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.for_all concrete_constraint_type (constraint_children constraint_)
   | TFn (parameters, return_type) ->
@@ -2687,6 +2732,6 @@ let param_constraint_name = function
       Some (Types.ocaml_name ty)
   | (TInt | TFloat | TChar | TString | TSymbol | TKeyword | TBool | TUnit
     | TArray _ | TRef _ | TOcaml _ | TOcaml_app _ | TTuple _ | TNamed_record _
-    | TConstraint _) as ty ->
+    | TCompiler _ | TConstraint _) as ty ->
       Some (Types.ocaml_name ty)
   | _ -> None

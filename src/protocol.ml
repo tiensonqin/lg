@@ -34,7 +34,7 @@ let canonical_protocol_name protocol_name =
   | "IEmptyableCollection" -> "Emptyable"
   | _ -> protocol_name
 
-let protocol_marker_type = TOcaml "__lg_protocol_marker"
+let protocol_marker_type = TCompiler Protocol_marker
 
 let protocol_binding protocol_id =
   Types.binding ~protocol_id (Protocol_id.to_string protocol_id)
@@ -166,7 +166,7 @@ let registry_receiver_id = Receiver_id.of_type
 
 let protocol_receiver_id protocol_id receiver_ty =
   match (Protocol_id.owner protocol_id, receiver_ty) with
-  | _ :: _, TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+  | _ :: _, ty when Option.is_some (Types.next_seq_element ty) ->
       Some Receiver_id.Seq_receiver
   | _ -> registry_receiver_id receiver_ty
 
@@ -780,7 +780,9 @@ let lookup_impl env protocol_id method_name receiver_ty =
   | Some receiver_id ->
       let receiver_id =
         match receiver_ty with
-        | TOcaml_app (name, [ _ ]) when Types.is_next_seq_type_name name ->
+        | TCompiler (Next_seq _ | Reversible_next_seq _) ->
+            Receiver_id.Seq_receiver
+        | ty when Option.is_some (Types.next_seq_element ty) ->
             Receiver_id.Seq_receiver
         | _ -> receiver_id
       in

@@ -13,6 +13,9 @@ let rec contains_inferred_type = function
       contains_inferred_type ty
   | Types.TOcaml_app (_, arguments) | Types.TTuple arguments ->
       List.exists contains_inferred_type arguments
+  | Types.TCompiler marker ->
+      List.exists contains_inferred_type
+        (Types.compiler_marker_children marker)
   | Types.TConstraint constraint_ ->
       List.exists contains_inferred_type
         (Types.constraint_children constraint_)
@@ -46,6 +49,9 @@ let deferred_type_variables ty =
         collect variables ty
     | Types.TOcaml_app (_, arguments) | Types.TTuple arguments ->
         List.fold_left collect variables arguments
+    | Types.TCompiler marker ->
+        List.fold_left collect variables
+          (Types.compiler_marker_children marker)
     | Types.TConstraint constraint_ ->
         List.fold_left collect variables (Types.constraint_children constraint_)
     | Types.TFn (parameters, return_ty) ->
@@ -117,6 +123,9 @@ let freshen_deferred_type ?return_param_index ty =
         Types.TConstraint (Types.map_constraint freshen constraint_)
     | Types.TOcaml_app (name, arguments) ->
         Types.TOcaml_app (name, List.map freshen arguments)
+    | Types.TCompiler marker ->
+        Types.TCompiler
+          (Semantic_type.map_compiler_marker freshen marker)
     | Types.TTuple items -> Types.TTuple (List.map freshen items)
     | Types.TFn (parameters, return_ty) ->
         Types.TFn (List.map freshen parameters, freshen return_ty)
@@ -162,6 +171,9 @@ let freshen_deferred_type ?return_param_index ty =
       | Types.TSeq ty -> Types.TSeq (dynamic_unknowns ty)
       | Types.TOcaml_app (name, arguments) ->
           Types.TOcaml_app (name, List.map dynamic_unknowns arguments)
+      | Types.TCompiler marker ->
+          Types.TCompiler
+            (Semantic_type.map_compiler_marker dynamic_unknowns marker)
       | Types.TConstraint constraint_ ->
           Types.TConstraint
             (Types.map_constraint dynamic_unknowns constraint_)

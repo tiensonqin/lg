@@ -98,22 +98,26 @@ let instantiate_binding (binding : binding) =
   | Some scheme -> { binding with ty = Type_solver.instantiate scheme }
 
 let module_package_name = "__lg_module_package"
-let module_package_type signature = TOcaml_app (module_package_name, [TOcaml signature])
+let module_package_type signature = TCompiler (Module_package signature)
 let module_package_signature = function
-  | TOcaml_app (name, [TOcaml signature]) when name = module_package_name -> Some signature
+  | TCompiler (Module_package signature) -> Some signature
+  | TOcaml_app (name, [ TOcaml signature ]) when name = module_package_name ->
+      Some signature
   | _ -> None
 
 let constant_function_name = "__lg_constant_function"
-let constant_function result_ty = TOcaml_app (constant_function_name, [ result_ty ])
+let constant_function result_ty = TCompiler (Constant_function result_ty)
 let constant_function_result = function
+  | TCompiler (Constant_function result_ty) -> Some result_ty
   | TOcaml_app (name, [ result_ty ]) when name = constant_function_name ->
       Some result_ty
   | _ -> None
 
 let reify_self_method_name = "__lg_self_returning_method"
-let reify_self_method method_ty = TOcaml_app (reify_self_method_name, [ method_ty ])
+let reify_self_method method_ty = TCompiler (Reify_self_method method_ty)
 
 let reify_self_method_type = function
+  | TCompiler (Reify_self_method method_ty) -> Some method_ty
   | TOcaml_app (name, [ method_ty ]) when name = reify_self_method_name ->
       Some method_ty
   | _ -> None
@@ -225,6 +229,8 @@ let rec contains_dynamic = function
       contains_dynamic ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_dynamic arguments
+  | TCompiler marker ->
+      List.exists contains_dynamic (compiler_marker_children marker)
   | TConstraint constraint_ -> (
       match constraint_ with
       | Seqable_constraint { element; storage; _ } ->
@@ -568,15 +574,17 @@ let protocol_constraint_with_value constraint_ty value_ty =
 let reify_protocol_payload_prefix = "__lg_reify_protocol:"
 
 let reify_protocol_payload protocol_id methods rest =
-  TOcaml_app
-    ( reify_protocol_payload_prefix ^ Protocol_id.to_string protocol_id,
-      [ methods; rest ] )
+  TCompiler
+    (Reify_protocol_payload (Protocol_id.to_string protocol_id, methods, rest))
 
 let reify_protocol_payload_info = function
+  | TCompiler (Reify_protocol_payload (id, methods, rest)) ->
+      Some (id, methods, rest)
   | TOcaml_app (name, [ methods; rest ])
     when String.starts_with ~prefix:reify_protocol_payload_prefix name ->
       Some
-        ( String.sub name (String.length reify_protocol_payload_prefix)
+        ( String.sub name
+            (String.length reify_protocol_payload_prefix)
             (String.length name - String.length reify_protocol_payload_prefix),
           methods,
           rest )
@@ -593,16 +601,17 @@ let reversible_next_seq_type_name = "__lg_reversible_next_seq"
 let is_next_seq_type_name name =
   name = next_seq_type_name || name = reversible_next_seq_type_name
 
-let next_seq inner = TOcaml_app (next_seq_type_name, [ inner ])
+let next_seq inner = TCompiler (Next_seq inner)
 
-let reversible_next_seq inner =
-  TOcaml_app (reversible_next_seq_type_name, [ inner ])
+let reversible_next_seq inner = TCompiler (Reversible_next_seq inner)
 
 let next_seq_element = function
+  | TCompiler (Next_seq inner | Reversible_next_seq inner) -> Some inner
   | TOcaml_app (name, [ inner ]) when is_next_seq_type_name name -> Some inner
   | _ -> None
 
 let reversible_next_seq_element = function
+  | TCompiler (Reversible_next_seq inner) -> Some inner
   | TOcaml_app (name, [ inner ]) when name = reversible_next_seq_type_name ->
       Some inner
   | _ -> None
@@ -613,7 +622,59 @@ let reduced inner = TOcaml_app (reduced_type_name, [ inner ])
 let maybe_reduced_callback_type_name = "__lg_maybe_reduced_callback_result"
 
 let maybe_reduced_callback_result inner =
-  TOcaml_app (maybe_reduced_callback_type_name, [ inner ])
+  TCompiler (Maybe_reduced_callback inner)
+
+let optional_map_adapter_type_name = "__lg_optional_map_adapter"
+
+let optional_map_adapter key_ty value_ty =
+  TCompiler (Optional_map_adapter (key_ty, value_ty))
+
+let optional_map_adapter_info = function
+  | TCompiler (Optional_map_adapter (key_ty, value_ty)) ->
+      Some (key_ty, value_ty)
+  | _ -> None
+
+let record_marker_prefix = "__lg_record:"
+let record_app_marker_prefix = "__lg_record_app:"
+
+let named_record_marker name = TCompiler (Named_record_marker name)
+
+let named_record_marker_name = function
+  | TCompiler (Named_record_marker name) -> Some name
+  | TOcaml name when String.starts_with ~prefix:record_marker_prefix name ->
+      Some
+        (String.sub name
+           (String.length record_marker_prefix)
+           (String.length name - String.length record_marker_prefix))
+  | _ -> None
+
+let named_record_app_marker name args =
+  TCompiler (Named_record_app_marker (name, args))
+
+let named_record_app_marker_info = function
+  | TCompiler (Named_record_app_marker (name, args)) -> Some (name, args)
+  | TOcaml_app (name, args)
+    when String.starts_with ~prefix:record_app_marker_prefix name ->
+      Some
+        ( String.sub name
+            (String.length record_app_marker_prefix)
+            (String.length name - String.length record_app_marker_prefix),
+          args )
+  | _ -> None
+
+let compiler_marker_type_name = function
+  | Module_package _ -> module_package_name
+  | Constant_function _ -> constant_function_name
+  | Reify_self_method _ -> reify_self_method_name
+  | Reify_protocol_payload (id, _, _) -> reify_protocol_payload_prefix ^ id
+  | Next_seq _ -> next_seq_type_name
+  | Reversible_next_seq _ -> reversible_next_seq_type_name
+  | Maybe_reduced_callback _ -> maybe_reduced_callback_type_name
+  | Optional_map_adapter _ -> optional_map_adapter_type_name
+  | Named_record_marker name -> record_marker_prefix ^ name
+  | Named_record_app_marker (name, _) -> record_app_marker_prefix ^ name
+  | Protocol_marker -> "__lg_protocol_marker"
+  | Date_millis -> "__lg_date_millis"
 
 let dynamic_map key value =
   TOcaml_app ("Lg_runtime.Runtime_map.t", [ key; value ])
@@ -655,6 +716,7 @@ let reduced_element = function
   | _ -> None
 
 let maybe_reduced_callback_element = function
+  | TCompiler (Maybe_reduced_callback inner) -> Some inner
   | TOcaml_app (name, [ inner ])
     when name = maybe_reduced_callback_type_name ->
       Some inner
@@ -687,6 +749,7 @@ let rec equal left right =
       left_name = right_name
       && List.length left_args = List.length right_args
       && List.for_all2 equal left_args right_args
+  | TCompiler left, TCompiler right -> equal_compiler_marker left right
   | TConstraint left, TConstraint right -> equal_constraint left right
   | TTuple left, TTuple right ->
       List.length left = List.length right && List.for_all2 equal left right
@@ -783,6 +846,32 @@ and equal_fn_arity left right =
   && List.for_all2 equal left.fixed_params right.fixed_params
   && Option.equal equal left.rest_param right.rest_param
   && equal left.return_ty right.return_ty
+
+and equal_compiler_marker left right =
+  match (left, right) with
+  | Module_package left, Module_package right -> left = right
+  | Constant_function left, Constant_function right
+  | Reify_self_method left, Reify_self_method right
+  | Next_seq left, Next_seq right
+  | Reversible_next_seq left, Reversible_next_seq right
+  | Maybe_reduced_callback left, Maybe_reduced_callback right ->
+      equal left right
+  | ( Reify_protocol_payload (left_id, left_methods, left_rest),
+      Reify_protocol_payload (right_id, right_methods, right_rest) ) ->
+      left_id = right_id
+      && equal left_methods right_methods
+      && equal left_rest right_rest
+  | ( Optional_map_adapter (left_key, left_value),
+      Optional_map_adapter (right_key, right_value) ) ->
+      equal left_key right_key && equal left_value right_value
+  | Named_record_marker left, Named_record_marker right -> left = right
+  | ( Named_record_app_marker (left_name, left_args),
+      Named_record_app_marker (right_name, right_args) ) ->
+      left_name = right_name
+      && List.length left_args = List.length right_args
+      && List.for_all2 equal left_args right_args
+  | Protocol_marker, Protocol_marker | Date_millis, Date_millis -> true
+  | _ -> false
 
 let homogeneous_record_value_type fields =
   let concrete_storage_type = function
@@ -926,12 +1015,22 @@ let rec same_shape left right =
   | TNamed_record record, TOcaml_app (name, arguments)
   | TOcaml_app (name, arguments), TNamed_record record ->
       named_host_shape record name arguments
+  | TNamed_record record, TCompiler (Named_record_marker name)
+  | TCompiler (Named_record_marker name), TNamed_record record ->
+      named_host_shape record name []
+  | ( TNamed_record record,
+      TCompiler (Named_record_app_marker (name, arguments)) )
+  | ( TCompiler (Named_record_app_marker (name, arguments)),
+      TNamed_record record ) ->
+      named_host_shape record name arguments
+  | TCompiler _, TNamed_record _ | TNamed_record _, TCompiler _ -> false
   | _ ->
       row_compatible ~expected:left ~actual:right
       && row_compatible ~expected:right ~actual:left
 
 let host_owned = function
-  | TOcaml _ | TOcaml_app _ | TTuple _ | TArray _ | TRef _ -> true
+  | TOcaml _ | TOcaml_app _ | TTuple _ | TArray _ | TRef _ | TCompiler _ ->
+      true
   | _ -> false
 
 let defer_to_ocaml ~expected ~actual = host_owned expected || host_owned actual
@@ -983,9 +1082,9 @@ let rec assignable ~policy ~expected ~actual =
   | TSet expected, TSet actual
   | TSeq expected, TSeq actual ->
       assignable ~policy ~expected ~actual
-  | TSeq expected, TOcaml_app (name, [ actual ])
-  | TOcaml_app (name, [ expected ]), TSeq actual
-    when is_next_seq_type_name name ->
+  | TSeq expected, TCompiler (Next_seq actual | Reversible_next_seq actual)
+  | TCompiler (Next_seq expected | Reversible_next_seq expected), TSeq actual
+    ->
       assignable ~policy ~expected ~actual
   | TNamed_record expected, TNamed_record actual
     when expected.type_name = actual.type_name ->
@@ -1041,8 +1140,7 @@ let rec source_name = function
       (match row.bound with Exact_row -> "variant" | Lower_row -> "variant-open" | Upper_row -> "variant-upper" | Bounded_row tags -> "variant-required(" ^ String.concat "," tags ^ ")")
       ^ "<" ^ String.concat ";" (List.map (fun (tag, payload) ->
         tag ^ Option.fold ~none:"" ~some:(fun ty -> ":" ^ source_name ty) payload) row.tags) ^ ">"
-  | TOcaml_app (name, [TOcaml signature]) when name = module_package_name ->
-      "module<" ^ signature ^ ">"
+  | TCompiler (Module_package signature) -> "module<" ^ signature ^ ">"
   | TInt -> "int"
   | TFloat -> "float"
   | TChar -> "char"
@@ -1093,13 +1191,13 @@ let rec source_name = function
       prefix ^ "<" ^ protocol_name ^ ";" ^ source_name value_ty ^ ">"
   | TOcaml_app (name, [ inner ]) when name = weak_type_name ->
       "weak<" ^ source_name inner ^ ">"
+  | TCompiler (Next_seq inner | Reversible_next_seq inner) ->
+      "seq<" ^ source_name inner ^ ">"
+  | TCompiler marker -> source_name_compiler_marker marker
   | TOcaml_app (name, [ inner ]) when is_next_seq_type_name name ->
       "seq<" ^ source_name inner ^ ">"
   | TOcaml_app (name, [ inner ]) when name = reduced_type_name ->
       "reduced<" ^ source_name inner ^ ">"
-  | TOcaml_app (name, [ inner ])
-    when name = maybe_reduced_callback_type_name ->
-      "maybe-reduced<" ^ source_name inner ^ ">"
   | TOcaml_app (name, args) ->
       name ^ "<"
       ^ (args |> List.map source_name |> String.concat ",")
@@ -1144,6 +1242,30 @@ let rec source_name = function
       | arguments ->
           "<" ^ String.concat "," (List.map source_name arguments) ^ ">"
 
+and source_name_compiler_marker = function
+  | Module_package signature -> "module<" ^ signature ^ ">"
+  | Constant_function inner ->
+      constant_function_name ^ "<" ^ source_name inner ^ ">"
+  | Reify_self_method inner ->
+      reify_self_method_name ^ "<" ^ source_name inner ^ ">"
+  | Reify_protocol_payload (id, methods, rest) ->
+      reify_protocol_payload_prefix ^ id ^ "<" ^ source_name methods ^ ","
+      ^ source_name rest ^ ">"
+  | Next_seq inner | Reversible_next_seq inner ->
+      "seq<" ^ source_name inner ^ ">"
+  | Maybe_reduced_callback inner ->
+      "maybe-reduced<" ^ source_name inner ^ ">"
+  | Optional_map_adapter (key_ty, value_ty) ->
+      optional_map_adapter_type_name ^ "<" ^ source_name key_ty ^ ","
+      ^ source_name value_ty ^ ">"
+  | Named_record_marker name -> record_marker_prefix ^ name
+  | Named_record_app_marker (name, args) ->
+      record_app_marker_prefix ^ name ^ "<"
+      ^ (args |> List.map source_name |> String.concat ",")
+      ^ ">"
+  | Protocol_marker -> "__lg_protocol_marker"
+  | Date_millis -> "__lg_date_millis"
+
 let rec diagnostic_type_term = function
   | TInt -> Error.Type_atom "int"
   | TFloat -> Error.Type_atom "float"
@@ -1162,6 +1284,7 @@ let rec diagnostic_type_term = function
   | TOcaml name -> Error.Type_atom name
   | TNullable inner ->
       Error.Type_application ("option", [ diagnostic_type_term inner ])
+  | TCompiler marker -> diagnostic_compiler_marker_term marker
   | TOcaml_app (name, arguments) ->
       Error.Type_application (name, List.map diagnostic_type_term arguments)
   | TTuple items -> Error.Type_tuple (List.map diagnostic_type_term items)
@@ -1188,6 +1311,40 @@ let rec diagnostic_type_term = function
         (record.type_name, List.map diagnostic_type_term record.type_arguments)
   | (TPoly_variant _ | TConstraint _ | TOverloaded_fn _) as ty -> Error.Type_atom (source_name ty)
 
+and diagnostic_compiler_marker_term = function
+  | Module_package signature ->
+      Error.Type_application (module_package_name, [ Error.Type_atom signature ])
+  | Constant_function inner ->
+      Error.Type_application
+        (constant_function_name, [ diagnostic_type_term inner ])
+  | Reify_self_method inner ->
+      Error.Type_application
+        (reify_self_method_name, [ diagnostic_type_term inner ])
+  | Reify_protocol_payload (id, methods, rest) ->
+      Error.Type_application
+        ( reify_protocol_payload_prefix ^ id,
+          [ diagnostic_type_term methods; diagnostic_type_term rest ] )
+  | Next_seq inner ->
+      Error.Type_application
+        (next_seq_type_name, [ diagnostic_type_term inner ])
+  | Reversible_next_seq inner ->
+      Error.Type_application
+        (reversible_next_seq_type_name, [ diagnostic_type_term inner ])
+  | Maybe_reduced_callback inner ->
+      Error.Type_application
+        (maybe_reduced_callback_type_name, [ diagnostic_type_term inner ])
+  | Optional_map_adapter (key_ty, value_ty) ->
+      Error.Type_application
+        ( optional_map_adapter_type_name,
+          [ diagnostic_type_term key_ty; diagnostic_type_term value_ty ] )
+  | Named_record_marker name -> Error.Type_atom (record_marker_prefix ^ name)
+  | Named_record_app_marker (name, args) ->
+      Error.Type_application
+        ( record_app_marker_prefix ^ name,
+          List.map diagnostic_type_term args )
+  | Protocol_marker -> Error.Type_atom "__lg_protocol_marker"
+  | Date_millis -> Error.Type_atom "__lg_date_millis"
+
 let ocaml_record_type_name name =
   let local_name separator name =
     match String.rindex_opt name separator with
@@ -1204,6 +1361,7 @@ let rec ocaml_name = function
       (match row.bound with Exact_row -> "[ " | Lower_row -> "[> " | Upper_row | Bounded_row _ -> "[< ")
       ^ String.concat " | " (List.map (fun (tag, payload) ->
         "`" ^ tag ^ Option.fold ~none:"" ~some:(fun ty -> " of " ^ ocaml_name ty) payload) row.tags) ^ (match row.bound with Bounded_row tags -> " > " ^ String.concat " " (List.map (fun tag -> "`" ^ tag) tags) | _ -> "") ^ " ]"
+  | TCompiler (Module_package signature) -> "(module " ^ signature ^ ")"
   | TOcaml_app (name, [TOcaml signature]) when name = module_package_name ->
       "(module " ^ signature ^ ")"
   | TInt -> "int"
@@ -1221,10 +1379,20 @@ let rec ocaml_name = function
   | TUnknown -> "'a"
   | TMeta _ -> "_"
   | TVar name -> "'" ^ name
-  | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->
+  | TCompiler (Named_record_marker name) -> (
+      match String.rindex_opt name '/' with
+      | Some index ->
+          let owner = String.sub name 0 index in
+          let local_name =
+            String.sub name (index + 1) (String.length name - index - 1)
+          in
+          Names.ocaml_binding_name owner local_name
+      | None -> Names.sanitize_name name)
+  | TOcaml name when String.starts_with ~prefix:record_marker_prefix name ->
       let source_name =
-        String.sub name (String.length "__lg_record:")
-          (String.length name - String.length "__lg_record:")
+        String.sub name
+          (String.length record_marker_prefix)
+          (String.length name - String.length record_marker_prefix)
       in
       (match String.rindex_opt source_name '/' with
       | Some index ->
@@ -1272,16 +1440,16 @@ let rec ocaml_name = function
       ^ ocaml_name element ^ " Seq.t) option * " ^ ocaml_name storage ^ ")"
   | TConstraint (Protocol_constraint { witness; value; _ }) ->
       "(" ^ ocaml_name witness ^ " option * " ^ ocaml_name value ^ ")"
-  | TOcaml_app (name, [ method_ty ]) when name = reify_self_method_name ->
-      ocaml_name method_ty
-  | TOcaml_app (name, [ methods; rest ])
-    when String.starts_with ~prefix:reify_protocol_payload_prefix name ->
+  | TCompiler (Reify_self_method method_ty) -> ocaml_name method_ty
+  | TCompiler (Reify_protocol_payload (_, methods, rest)) ->
       ocaml_name (TTuple [ methods; rest ])
+  | TCompiler (Next_seq inner | Reversible_next_seq inner) ->
+      ocaml_name inner ^ " Seq.t"
+  | TCompiler (Maybe_reduced_callback inner) ->
+      ocaml_name (reduced inner)
+  | TCompiler marker -> ocaml_compiler_marker_name marker
   | TOcaml_app (name, [ inner ]) when is_next_seq_type_name name ->
       ocaml_name inner ^ " Seq.t"
-  | TOcaml_app (name, [ inner ])
-    when name = maybe_reduced_callback_type_name ->
-      ocaml_name (reduced inner)
   | TOcaml_app (name, [ arg ]) ->
       let arg_name =
         match arg with
@@ -1348,6 +1516,40 @@ and ocaml_type_argument_name = function
   | TFn _ as ty -> "(" ^ ocaml_name ty ^ ")"
   | ty -> ocaml_name ty
 
+and ocaml_compiler_marker_name = function
+  | Module_package signature -> "(module " ^ signature ^ ")"
+  | Constant_function inner ->
+      ocaml_type_argument_name inner ^ " " ^ constant_function_name
+  | Reify_self_method inner -> ocaml_name inner
+  | Reify_protocol_payload (_, methods, rest) ->
+      ocaml_name (TTuple [ methods; rest ])
+  | Next_seq inner | Reversible_next_seq inner -> ocaml_name inner ^ " Seq.t"
+  | Maybe_reduced_callback inner -> ocaml_name (reduced inner)
+  | Optional_map_adapter (key_ty, value_ty) ->
+      "(" ^ ocaml_name key_ty ^ ", " ^ ocaml_name value_ty ^ ") "
+      ^ optional_map_adapter_type_name
+  | Named_record_app_marker (name, args) -> (
+      let rendered_name = ocaml_name (TOcaml name) in
+      match args with
+      | [] -> rendered_name
+      | [ argument ] ->
+          ocaml_type_argument_name argument ^ " " ^ rendered_name
+      | arguments ->
+          "("
+          ^ String.concat ", " (List.map ocaml_name arguments)
+          ^ ") " ^ rendered_name)
+  | Named_record_marker name -> (
+      match String.rindex_opt name '/' with
+      | Some index ->
+          let owner = String.sub name 0 index in
+          let local_name =
+            String.sub name (index + 1) (String.length name - index - 1)
+          in
+          Names.ocaml_binding_name owner local_name
+      | None -> Names.sanitize_name name)
+  | Protocol_marker -> "__lg_protocol_marker"
+  | Date_millis -> "__lg_date_millis"
+
 and overloaded_storage_type = function
   | [] -> TUnit
   | arity :: rest ->
@@ -1397,6 +1599,8 @@ and set_module_name = function
   | TVector (TUnknown | TMeta _ | TVar _) -> Ok "Lg_runtime.Runtime_poly_set"
   | TVector (TOcaml "Lg_edn_backend.t") -> Ok "Lg_runtime.Runtime_poly_set"
   | TSeq _ -> Ok "Lg_runtime.Runtime_seq_set"
+  | TCompiler (Next_seq _ | Reversible_next_seq _) ->
+      Ok "Lg_runtime.Runtime_seq_set"
   | TOcaml_app (name, [ _ ]) when is_next_seq_type_name name ->
       Ok "Lg_runtime.Runtime_seq_set"
   | ty when Option.is_some (seqable_constraint_info ty) ->
@@ -1420,8 +1624,7 @@ and set_module_name = function
   | TOcaml_app ("Lg_runtime.Runtime_map.t", [ _key; _value ]) ->
       Ok "Lg_runtime.Runtime_map_set"
   | TOcaml "int" -> Ok "Lg_runtime.Core_set.Int_set"
-  | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->
-      Ok "Lg_runtime.Runtime_poly_set"
+  | TCompiler _ -> Ok "Lg_runtime.Runtime_poly_set"
   | TOcaml _ -> Ok "Lg_runtime.Runtime_poly_set"
   | TNamed_record { nominal = false; _ } -> Ok "Lg_runtime.Runtime_poly_set"
   | TNullable (TNamed_record record)
@@ -1506,6 +1709,10 @@ let rec qualify_module_type module_path ty =
   | TBool | TUnit | TNil | TUnknown | TMeta _ | TVar _ | TOcaml _ ->
       ty
   | TNullable inner -> TNullable (qualify_module_type module_path inner)
+  | TCompiler marker ->
+      TCompiler
+        (Semantic_type.map_compiler_marker
+           (qualify_module_type module_path) marker)
   | TOcaml_app (name, args) ->
       TOcaml_app (name, List.map (qualify_module_type module_path) args)
   | TConstraint constraint_ ->
@@ -1577,6 +1784,10 @@ let rec remap_module_type ~from_path ~to_path ty =
   | TOcaml name -> TOcaml (remap_name name)
   | TNullable inner ->
       TNullable (remap_module_type ~from_path ~to_path inner)
+  | TCompiler marker ->
+      TCompiler
+        (Semantic_type.map_compiler_marker
+           (remap_module_type ~from_path ~to_path) marker)
   | TOcaml_app (name, args) ->
       TOcaml_app (remap_name name, List.map (remap_module_type ~from_path ~to_path) args)
   | TConstraint constraint_ ->

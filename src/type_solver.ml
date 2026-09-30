@@ -96,6 +96,7 @@ let rec variables ty =
   | TSeq inner ->
       variables inner
   | TOcaml_app (_, arguments) | TTuple arguments -> variables_all arguments
+  | TCompiler marker -> variables_all (compiler_marker_children marker)
   | TConstraint constraint_ -> variables_all (constraint_children constraint_)
   | TFn (parameters, return_ty) -> variables_all (return_ty :: parameters)
   | TOverloaded_fn arities ->
@@ -141,6 +142,7 @@ let may_contain_variable ?visited predicate ty =
       | TNullable inner | TArray inner | TRef inner | TList inner
       | TVector inner | TSet inner | TSeq inner -> affects inner
       | TOcaml_app (_, items) | TTuple items -> List.exists affects items
+      | TCompiler marker -> List.exists affects (compiler_marker_children marker)
       | TConstraint constraint_ ->
           List.exists affects (constraint_children constraint_)
       | TFn (parameters, result) ->
@@ -202,7 +204,7 @@ and apply_with_substitutions substitutions ty =
     let memoized_node = function
       | TNullable _ | TOcaml_app _ | TTuple _ | TArray _ | TRef _ | TList _
       | TVector _ | TSet _ | TSeq _ | TFn _ | TOverloaded_fn _ | TRecord _
-      | TPoly_variant _ | TNamed_record _ | TConstraint _ ->
+      | TPoly_variant _ | TNamed_record _ | TConstraint _ | TCompiler _ ->
           true
       | TInt | TFloat | TChar | TString | TRegex | TMap_keys | TSymbol
       | TKeyword | TBool | TUnit | TNil | TUnknown | TMeta _ | TVar _ | TOcaml _
@@ -308,6 +310,9 @@ and apply_with_substitutions substitutions ty =
           | Some replacement -> apply_replacement (Declared name) ty replacement
           )
       | TNullable inner -> apply_inner ty (fun inner -> TNullable inner) inner
+      | TCompiler marker ->
+          let mapped = Semantic_type.map_compiler_marker apply_ty marker in
+          if mapped == marker then ty else TCompiler mapped
       | TOcaml_app (name, arguments) ->
           let mapped = map_preserving_identity apply_ty arguments in
           if mapped == arguments then ty else TOcaml_app (name, mapped)
@@ -383,6 +388,8 @@ let rec occurs variable ty =
       occurs variable inner
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists (occurs variable) arguments
+  | TCompiler marker ->
+      List.exists (occurs variable) (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists (occurs variable) (constraint_children constraint_)
   | TFn (parameters, return_ty) ->
@@ -461,6 +468,7 @@ let rec is_open = function
       is_open inner
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists is_open arguments
+  | TCompiler marker -> List.exists is_open (compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists is_open (constraint_children constraint_)
   | TFn (parameters, return_ty) -> List.exists is_open (return_ty :: parameters)
@@ -607,6 +615,9 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
     | TSet left, TSet right
     | TSeq left, TSeq right ->
         unify substitutions left right
+    | TSeq left, TCompiler (Next_seq right | Reversible_next_seq right)
+    | TCompiler (Next_seq left | Reversible_next_seq left), TSeq right ->
+        unify substitutions left right
     | TSeq left, TOcaml_app (name, [ right ])
     | TOcaml_app (name, [ left ]), TSeq right
       when name = "Seq.t" || name = "__lg_next_seq"
@@ -652,13 +663,18 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
           (fun substitutions -> unify substitutions storage map_ty)
     | ( TConstraint
           (Seqable_constraint { element = element_ty; storage = storage_ty; _ }),
-        (TOcaml_app (("__lg_next_seq" | "__lg_reversible_next_seq"), [ actual ])
-         as collection_ty) )
-    | ( (TOcaml_app (("__lg_next_seq" | "__lg_reversible_next_seq"), [ actual ])
-         as collection_ty),
+        ( ( TCompiler (Next_seq actual | Reversible_next_seq actual)
+          | TOcaml_app (_, [ actual ]) ) as collection_ty) )
+    | ( ( ( TCompiler (Next_seq actual | Reversible_next_seq actual)
+        | TOcaml_app (_, [ actual ]) ) as collection_ty),
         TConstraint
           (Seqable_constraint { element = element_ty; storage = storage_ty; _ })
-      ) ->
+      )
+      when (match collection_ty with
+           | TOcaml_app (seq_name, _) ->
+               seq_name = "__lg_next_seq"
+               || seq_name = "__lg_reversible_next_seq"
+           | _ -> true) ->
         Result.bind (unify substitutions element_ty actual)
           (fun substitutions -> unify substitutions storage_ty collection_ty)
     | ( TConstraint
@@ -729,6 +745,11 @@ let unify ?(resolve_alias = fun _ -> None) substitutions left right =
       when left_name = right_name
            && List.length left_args = List.length right_args ->
         unify_lists substitutions left_args right_args
+    | TCompiler left_marker, TCompiler right_marker
+      when Semantic_type.compiler_marker_same_name left_marker right_marker ->
+        unify_lists substitutions
+          (compiler_marker_children left_marker)
+          (compiler_marker_children right_marker)
     | TTuple left_items, TTuple right_items
       when List.length left_items = List.length right_items ->
         unify_lists substitutions left_items right_items
@@ -858,6 +879,8 @@ let rec freshen_unknowns = function
   | TSeq ty -> TSeq (freshen_unknowns ty)
   | TOcaml_app (name, arguments) ->
       TOcaml_app (name, List.map freshen_unknowns arguments)
+  | TCompiler marker ->
+      TCompiler (Semantic_type.map_compiler_marker freshen_unknowns marker)
   | TConstraint constraint_ ->
       TConstraint (map_constraint freshen_unknowns constraint_)
   | TTuple arguments -> TTuple (List.map freshen_unknowns arguments)

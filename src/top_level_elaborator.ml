@@ -296,6 +296,9 @@ let allocate_function_local_records env next_type
     | TSeq ty -> TSeq (materialize_type ty)
     | TOcaml_app (name, arguments) ->
         TOcaml_app (name, List.map materialize_type arguments)
+    | TCompiler marker ->
+        TCompiler
+          (Semantic_type.map_compiler_marker materialize_type marker)
     | TConstraint constraint_ ->
         TConstraint (Types.map_constraint materialize_type constraint_)
     | TTuple arguments -> TTuple (List.map materialize_type arguments)
@@ -580,15 +583,15 @@ let record_type_key = Resolver.record_type_key
 
 let rec unresolved_record_hint = function
   | TPoly_variant row -> List.find_map unresolved_record_hint (List.filter_map snd row.tags)
-  | TOcaml name when String.starts_with ~prefix:"__lg_record:" name ->
-      Some
-        (String.sub name (String.length "__lg_record:")
-           (String.length name - String.length "__lg_record:"))
+  | TCompiler (Named_record_marker name) -> Some name
   | TNullable ty | TArray ty | TRef ty | TList ty | TVector ty | TSet ty
   | TSeq ty ->
       unresolved_record_hint ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.find_map unresolved_record_hint arguments
+  | TCompiler marker ->
+      List.find_map unresolved_record_hint
+        (Semantic_type.compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.find_map unresolved_record_hint
         (Types.constraint_children constraint_)
@@ -753,6 +756,9 @@ let rec contains_unresolved_type = function
       contains_unresolved_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.exists contains_unresolved_type arguments
+  | TCompiler marker ->
+      List.exists contains_unresolved_type
+        (Types.compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.exists contains_unresolved_type
         (Types.constraint_children constraint_)
@@ -1063,6 +1069,20 @@ let rec concrete_defrecord_field_type = function
       Option.map
         (fun arguments -> TOcaml_app (name, arguments))
         (concrete arguments)
+  | TCompiler marker ->
+      let rec concrete arguments =
+        match arguments with
+        | [] -> Some []
+        | argument :: rest ->
+            Option.bind (concrete_defrecord_field_type argument)
+              (fun argument ->
+                Option.map (fun rest -> argument :: rest) (concrete rest))
+      in
+      Option.map
+        (fun children ->
+          TCompiler
+            (Semantic_type.replace_compiler_marker_children marker children))
+        (concrete (Types.compiler_marker_children marker))
   | TTuple items ->
       let rec concrete items =
         match items with
@@ -1158,6 +1178,9 @@ let rec type_parameters_of_type = function
       type_parameters_of_type ty
   | TOcaml_app (_, arguments) | TTuple arguments ->
       List.concat_map type_parameters_of_type arguments
+  | TCompiler marker ->
+      List.concat_map type_parameters_of_type
+        (Types.compiler_marker_children marker)
   | TConstraint constraint_ ->
       List.concat_map type_parameters_of_type
         (Types.constraint_children constraint_)
