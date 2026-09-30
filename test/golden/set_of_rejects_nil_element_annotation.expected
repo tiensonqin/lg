@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- set_of_rejects_nil_element_annotation.cljc
+-- COMPILATION ERROR [LG2003] -- set_of_rejects_nil_element_annotation.cljc
 
 unknown set element type :nil
 

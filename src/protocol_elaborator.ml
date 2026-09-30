@@ -58,7 +58,7 @@ let validate_core_protocol_surface protocol_id source_signatures declaration =
   let source_names = List.map fst source_methods in
   let builtin_names = List.map fst builtin_methods in
   if source_names <> builtin_names then
-    Error.error
+    Error.error ~code:Error_code.Protocol
       ("clojure.core protocol " ^ Protocol_id.name protocol_id
      ^ " must declare the compiler-backed method surface exactly")
   else
@@ -70,7 +70,7 @@ let validate_core_protocol_surface protocol_id source_signatures declaration =
             when source_arities = builtin_arities ->
               validate (source_rest, builtin_rest)
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Protocol
                 ("clojure.core protocol method " ^ name
                ^ " must preserve the compiler-backed arities"))
       | _ -> assert false
@@ -161,7 +161,7 @@ let marker scope env protocol_name method_name =
       method_name
   with
   | None ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         ("protocol " ^ protocol_name ^ " does not define method " ^ method_name)
   | Some marker
     when not
@@ -169,7 +169,7 @@ let marker scope env protocol_name method_name =
            | Some protocol_id ->
                Protocol.marker_has_protocol_id marker protocol_id
            | None -> false) ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         ("protocol " ^ protocol_name ^ " does not define method " ^ method_name)
   | Some marker -> Ok marker
 
@@ -178,7 +178,7 @@ let add_implementation ?location env method_name receiver_ty marker binding =
     (marker.protocol_id, Protocol.registry_receiver_id receiver_ty)
   with
   | None, _ | _, None ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         ("protocol implementations do not support receiver type "
        ^ source_name receiver_ty)
   | Some protocol_id, Some receiver_id ->
@@ -196,7 +196,7 @@ let add_implementation ?location env method_name receiver_ty marker binding =
               (Protocol_registry.replace_implementation protocol_id method_id
                  receiver_id binding (Env.protocols env))
         | Some _ ->
-            Error.error
+            Error.error ~code:Error_code.Duplicate
               ("duplicate implementation of " ^ Protocol_id.name protocol_id
              ^ "/" ^ method_name ^ " for " ^ source_name receiver_ty)
         | None ->
@@ -218,7 +218,7 @@ let add_implementation ?location env method_name receiver_ty marker binding =
 let add_marker_implementation env protocol_id receiver_ty =
   match Protocol.registry_receiver_id receiver_ty with
   | None ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         ("marker protocol implementations do not support receiver type "
        ^ source_name receiver_ty)
   | Some receiver_id ->
@@ -279,7 +279,7 @@ let update_overloaded_implementation env method_name receiver_ty
            (Option.map update (Env.protocol_evidence env))
            env)
   | _ ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         ("multi-arity protocol implementation " ^ method_name
        ^ " must compile to a fixed-arity function")
 
@@ -340,9 +340,9 @@ let protocol_receiver_type scope env = function
                        List.map (fun parameter -> TVar parameter) type_parameters
                      ))
           | Some _ | None ->
-              Error.error ("unknown protocol receiver type " ^ type_name)))
+              Error.error ~code:Error_code.Unresolved ("unknown protocol receiver type " ^ type_name)))
   | _ ->
-      Error.error
+      Error.error ~code:Error_code.Protocol
         "extend-type receiver must be a type keyword, record, or closed variant"
 
 let protocol_parameter_overrides receiver_ty = function
@@ -480,7 +480,7 @@ let predeclare_implementations scope env receiver_form protocol_name method_form
                     let argument_count = List.length parsed_params in
                     match select_method_arity protocol_marker argument_count with
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Unsupported
                           (method_name
                          ^ " called with unsupported protocol method arity "
                          ^ string_of_int argument_count)
@@ -692,7 +692,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                       let argument_count = List.length parsed_params in
                       (match select_method_arity protocol_marker argument_count with
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Unsupported
                             (method_name
                            ^ " called with unsupported protocol method arity "
                            ^ string_of_int argument_count)
@@ -744,13 +744,13 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                         match (marker.ty, expr.ty) with
                         | TFn (expected_params, _), TFn (actual_params, _)
                           when List.length expected_params <> List.length actual_params ->
-                            Error.error (method_name ^ " called with incompatible arguments")
+                            Error.error ~code:Error_code.Type_mismatch (method_name ^ " called with incompatible arguments")
                         | TFn (expected_params, expected_ret),
                           TFn (actual_params, actual_ret)
                           -> (
                             match actual_params with
                             | [] ->
-                                Error.error
+                                Error.error ~code:Error_code.Protocol
                                   "protocol methods must have a receiver parameter"
                             | actual_receiver :: _ ->
                                 let receiver_value_ty =
@@ -764,7 +764,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                                          (Protocol.registry_receiver_id
                                             receiver_value_ty))
                                 then
-                                  Error.error
+                                  Error.error ~code:Error_code.Protocol
                                     ("protocol implementation receiver must be "
                                    ^ source_name receiver_ty
                                    ^ ", got " ^ source_name actual_receiver)
@@ -787,7 +787,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                                   in
                                   (match mismatch with
                                   | Some (index, expected, _actual) ->
-                                      Error.error
+                                      Error.error ~code:Error_code.Protocol
                                         ("protocol method " ^ method_name ^ " parameter "
                                        ^ string_of_int (index + 1) ^ " must be "
                                        ^ source_name expected)
@@ -801,7 +801,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                                            (Types.assignable ~policy:Host_boundary
                                               ~expected:expected_ret
                                               ~actual:actual_ret) ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Protocol
                                     ("protocol method " ^ method_name ^ " must return "
                                    ^ source_name expected_ret)
                                   | None -> (
@@ -901,8 +901,8 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                                       Ok
                                         ( env,
                                           item )))))
-                        | _ -> Error.error "protocol method did not compile to a function")))))
-        | _ -> Error.error "extend-type methods must be (method-name [params] body)"
+                        | _ -> Error.error ~code:Error_code.Protocol "protocol method did not compile to a function")))))
+        | _ -> Error.error ~code:Error_code.Protocol "extend-type methods must be (method-name [params] body)"
       in
       let rec loop implementation_names env items = function
         | [] ->
@@ -956,7 +956,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                        select_method_arity protocol_marker argument_count
                      with
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Unsupported
                           (method_name
                          ^ " called with unsupported protocol method arity "
                          ^ string_of_int argument_count)
@@ -996,7 +996,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                               (fun env ->
                                 predeclare_declared env names rest)))))
         | _ :: _ ->
-            Error.error
+            Error.error ~code:Error_code.Protocol
               "extend-type methods must be (method-name [params] body)"
       in
       let rec predeclare_exact env evidence_env names = function
@@ -1018,7 +1018,7 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                          method_id receiver_id (Env.protocols evidence_env)
                      with
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Protocol
                           ("missing inferred protocol implementation for "
                          ^ method_name)
                     | Some binding ->
@@ -1036,11 +1036,11 @@ let compile_extend_type scope env next_type receiver_form protocol_name method_f
                               :: binding.overload_targets @ names)
                               rest))
                 | None, _ | _, None ->
-                    Error.error
+                    Error.error ~code:Error_code.Protocol
                       ("protocol implementations do not support receiver type "
                      ^ source_name receiver_ty)))
         | _ :: _ ->
-            Error.error "extend-type methods must be (method-name [params] body)"
+            Error.error ~code:Error_code.Protocol "extend-type methods must be (method-name [params] body)"
       in
       Result.bind (predeclare_declared env [] method_forms)
         (fun (initial_env, initial_implementation_names) ->

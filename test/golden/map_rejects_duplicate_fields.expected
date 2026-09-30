@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- map_rejects_duplicate_fields.cljc
+-- COMPILATION ERROR [LG2004] -- map_rejects_duplicate_fields.cljc
 
 duplicate field :name
 

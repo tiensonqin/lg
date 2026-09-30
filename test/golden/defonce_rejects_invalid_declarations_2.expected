@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- defonce_rejects_invalid_declarations_2.cljc
+-- COMPILATION ERROR [LG2001] -- defonce_rejects_invalid_declarations_2.cljc
 
 defonce expects a name and value
 

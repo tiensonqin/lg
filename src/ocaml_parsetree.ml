@@ -10,7 +10,7 @@ let parse_expression ~context source =
   Location.init lexbuf context;
   try Ok (Parse.expression lexbuf)
   with exn ->
-    Error.error
+    Error.error ~code:Error_code.Interop
       ("generated OCaml expression did not parse in " ^ context ^ ": "
      ^ Printexc.to_string exn)
 
@@ -1482,7 +1482,7 @@ and structure_of_items_with_sets ?(prune = true) requested_sets module_path item
               compile (declaration :: declarations)
                 (trailing :: trailing_definitions) rest
           | Ok _ ->
-              Error.error
+              Error.error ~code:Error_code.Internal
                 "internal error: recursive type item did not emit one declaration")
     in
     compile [] [] items

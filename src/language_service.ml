@@ -155,7 +155,7 @@ let analyze_workspace sources =
   match analyze_workspace_with_errors sources with
   | Error _ as err -> err
   | Ok ([], (_, error) :: _) -> Error error
-  | Ok ([], []) -> Error.error "workspace contains no analyzable lg files"
+  | Ok ([], []) -> Error.error ~code:Error_code.Semantic "workspace contains no analyzable lg files"
   | Ok (analyses, []) -> Ok analyses
   | Ok (analyses, _errors) -> Ok analyses
 
@@ -163,7 +163,7 @@ let analyze_workspace_from_state ?(target = Target.default) state sources =
   match analyze_workspace_with_errors_from_state ~target state sources with
   | Error _ as err -> err
   | Ok ([], (_, error) :: _) -> Error error
-  | Ok ([], []) -> Error.error "workspace contains no analyzable lg files"
+  | Ok ([], []) -> Error.error ~code:Error_code.Semantic "workspace contains no analyzable lg files"
   | Ok (analyses, []) -> Ok analyses
   | Ok (analyses, _errors) -> Ok analyses
 
@@ -2560,10 +2560,10 @@ let valid_rename_name name =
   | _ -> false
 
 let rename analysis ~offset ~new_name =
-  if not (valid_rename_name new_name) then Error.error "invalid rename target"
+  if not (valid_rename_name new_name) then Error.error ~code:Error_code.Invalid_form "invalid rename target"
   else
     match references analysis ~offset with
-    | [] -> Error.error "symbol cannot be renamed"
+    | [] -> Error.error ~code:Error_code.Semantic "symbol cannot be renamed"
     | ranges -> Ok (List.map (fun range -> { range; new_text = new_name }) ranges)
 
 let prepare_rename analysis ~offset =

@@ -34,7 +34,7 @@ let validate_unique_keywords pairs =
   let rec loop seen = function
     | [] -> Ok ()
     | (keyword, _) :: rest ->
-        if List.mem keyword seen then Error.error ("duplicate field " ^ keyword)
+        if List.mem keyword seen then Error.error ~code:Error_code.Duplicate ("duplicate field " ^ keyword)
         else loop (keyword :: seen) rest
   in
   loop [] pairs
@@ -294,7 +294,7 @@ let assoc target fields keyword value =
            || Types.assignable ~policy:Host_boundary ~expected:field.ty
                 ~actual:value.ty)
     ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         (Printf.sprintf "cannot assoc %s as %s because it is already %s" keyword
            (source_name value.ty) (source_name field.ty))
   | Some _ ->
@@ -332,11 +332,11 @@ let rec assoc_many target pairs =
       match assoc target fields keyword value with
       | Error _ as err -> err
       | Ok target -> assoc_many target rest)
-  | _ -> Error.error "assoc expects a map"
+  | _ -> Error.error ~code:Error_code.Arity "assoc expects a map"
 
 let dissoc target fields keyword =
   match find_field keyword fields with
-  | None -> Error.error ("cannot dissoc unknown field " ^ keyword)
+  | None -> Error.error ~code:Error_code.Unresolved ("cannot dissoc unknown field " ^ keyword)
   | Some removed
     when removed.runtime_map && List.length fields = 1 ->
       Ok
@@ -366,7 +366,7 @@ let rec dissoc_many target keywords =
       match dissoc target fields keyword with
       | Error _ as err -> err
       | Ok target -> dissoc_many target rest)
-  | _ -> Error.error "dissoc expects a map"
+  | _ -> Error.error ~code:Error_code.Arity "dissoc expects a map"
 
 let merge maps =
   let merge_one fields values right =
@@ -376,7 +376,7 @@ let merge maps =
         let add_field (fields, values) (right_field : field) =
           match find_field right_field.keyword fields with
           | Some existing when not (Types.equal existing.ty right_field.ty) ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 (Printf.sprintf "cannot merge %s as %s because it is already %s"
                    right_field.keyword (source_name right_field.ty)
                    (source_name existing.ty))
@@ -400,10 +400,10 @@ let merge maps =
             | Error _ as err -> err
             | Ok acc -> add_field acc field)
           (Ok (fields, values)) right_fields
-    | _ -> Error.error "merge expects maps"
+    | _ -> Error.error ~code:Error_code.Arity "merge expects maps"
   in
   match maps with
-  | [] -> Error.error "merge expects at least 1 map"
+  | [] -> Error.error ~code:Error_code.Arity "merge expects at least 1 map"
   | first :: rest -> (
       match first.ty with
       | TRecord fields | TNamed_record { fields; _ } -> (
@@ -439,16 +439,16 @@ let merge maps =
                               [ merged; right.semantic_expr ] ))
                         first.semantic_expr rest))
               else Ok (record_expr fields values))
-      | _ -> Error.error "merge expects maps")
+      | _ -> Error.error ~code:Error_code.Arity "merge expects maps")
 
 let update_value target fields keyword value_ty value_expr =
   match find_field keyword fields with
-  | None -> Error.error ("cannot update unknown field " ^ keyword)
+  | None -> Error.error ~code:Error_code.Unresolved ("cannot update unknown field " ^ keyword)
   | Some field
     when not
            (Types.equal field.ty value_ty || unresolved_field field)
     ->
-      Error.error
+      Error.error ~code:Error_code.Type_mismatch
         (Printf.sprintf "cannot update %s as %s because it is already %s" keyword
            (source_name value_ty) (source_name field.ty))
   | Some _ ->
@@ -456,7 +456,7 @@ let update_value target fields keyword value_ty value_expr =
 
 let update_value_as target fields keyword value_ty value_expr =
   match find_field keyword fields with
-  | None -> Error.error ("cannot update unknown field " ^ keyword)
+  | None -> Error.error ~code:Error_code.Unresolved ("cannot update unknown field " ^ keyword)
   | Some field ->
       let keyword = field.keyword in
       let updated =
@@ -482,7 +482,7 @@ let update_value_as target fields keyword value_ty value_expr =
       Ok (record_expr fields values)
 
 let select_keys target fields keywords =
-  if keywords = [] then Error.error "select-keys requires at least one key"
+  if keywords = [] then Error.error ~code:Error_code.Arity "select-keys requires at least one key"
   else
     let rec collect acc = function
       | [] ->

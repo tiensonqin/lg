@@ -961,7 +961,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 (fun adapted_item ->
                   adapt_items (adapted_item :: adapted) target_rest source_rest
                     name_rest)
-          | _ -> Error.error "internal tuple branch adaptation arity mismatch"
+          | _ -> Error.error ~code:Error_code.Internal "internal tuple branch adaptation arity mismatch"
         in
         Result.map
           (fun items ->
@@ -1016,7 +1016,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     ] ))
               sequence
         | Ok (source_inner, _) ->
-            Error.error
+            Error.error ~code:Error_code.Type_mismatch
               ("cannot adapt sequence element "
               ^ Types.source_name source_inner ^ " to vector element "
               ^ Types.source_name target_inner)
@@ -1038,7 +1038,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                  (merge_branch_types target_inner source_inner) ->
             Ok sequence
         | Ok (source_inner, _) ->
-            Error.error
+            Error.error ~code:Error_code.Type_mismatch
               ("cannot adapt lazy sequence branch element "
               ^ Types.source_name source_inner ^ " to "
               ^ Types.source_name target_inner)
@@ -1050,7 +1050,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                  (merge_branch_types target_inner source_inner) ->
             Ok sequence
         | Ok (source_inner, _) ->
-            Error.error
+            Error.error ~code:Error_code.Type_mismatch
               ("cannot adapt sequence branch element "
               ^ Types.source_name source_inner ^ " to "
               ^ Types.source_name target_inner)
@@ -1102,12 +1102,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   Ok
                     (coerce_expression_to_type source_ty target_ty
                        argument.semantic_expr)
-                else Error.error "cannot adapt function branch parameter"
+                else Error.error ~code:Error_code.Type_mismatch "cannot adapt function branch parameter"
               in
               Result.bind adapted_argument (fun argument ->
                   adapt_arguments (argument :: adapted) target_rest source_rest
                     name_rest)
-          | _ -> Error.error "cannot adapt function branch arity"
+          | _ -> Error.error ~code:Error_code.Type_mismatch "cannot adapt function branch arity"
         in
         Result.bind
           (adapt_arguments [] target_params source_params argument_names)
@@ -1212,10 +1212,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               (Semantic_ir.Constructor ("None", None) :: values)
               (TNil :: actual_types) expected_rest []
         | _ :: _, [] ->
-            Error.error
+            Error.error ~code:Error_code.Destructure
               "tuple literal is missing a required destructured element"
         | [], _ :: _ ->
-            Error.error "tuple literal has more elements than its static shape"
+            Error.error ~code:Error_code.Semantic "tuple literal has more elements than its static shape"
       in
       compile [] [] expected_types forms
     in
@@ -1287,7 +1287,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                              Types.source_name expression.ty)
                       |> List.sort_uniq String.compare
                     in
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       ("heterogeneous vector has element types "
                       ^ String.concat " | " types
                       ^ (match Env.expected_type env with
@@ -1440,7 +1440,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                 when Types.equal actual_value value_ty ->
                                   Ok (adapt_record expression fields)
                               | _ ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Semantic
                                     "not a homogeneous static map")
                           | ty -> (
                               match Types.dynamic_map_types ty with
@@ -1448,7 +1448,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                                 when Types.equal key_ty TKeyword
                                      && Types.equal actual_value value_ty ->
                                   Ok expression.semantic_expr
-                              | _ -> Error.error "not a homogeneous static map")
+                              | _ -> Error.error ~code:Error_code.Semantic "not a homogeneous static map")
                         in
                         let rec adapt values = function
                           | [] -> Ok (List.rev values)
@@ -1701,7 +1701,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           match compile_expr scope env value_form with
           | Ok value -> Ok (keyword, value_form, value)
           | Error _ as err -> err)
-      | _ -> Error.error "map keys must be keywords"
+      | _ -> Error.error ~code:Error_code.Semantic "map keys must be keywords"
     in
     let rec loop acc = function
       | [] ->
@@ -1802,14 +1802,14 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     | TOcaml "option" -> Ok TUnknown
     | TUnknown | TMeta _ | TVar _ -> Ok TUnknown
     | ty ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("option binding requires an option value, got "
          ^ Types.source_name ty)
   and parse_option_binding form error_message =
     match form with
     | FVector [ ((FSymbol _ | FVector _ | FMap _) as pattern); option_form ] ->
         Ok (pattern, option_form)
-    | _ -> Error.error error_message
+    | _ -> Error.error ~code:Error_code.Semantic error_message
   and compile_option_match ?(require_truthy = false) scope env pattern
       option_form compile_some compile_none branch_error =
     let payload_name = "__lg_option_value" in
@@ -1869,7 +1869,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           | Error _ as error -> error
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "first expects a seqable value"
+              | Error _ -> Error.error ~code:Error_code.Arity "first expects a seqable value"
               | Ok (inner, sequence) ->
                   Ok
                     (typed_ir (TNullable inner)
@@ -1914,7 +1914,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         | _, (Error _ as error) -> error
         | Ok some_expr, Ok none_expr -> (
             match merge_branch_expressions some_expr none_expr with
-            | None -> Error.error branch_error
+            | None -> Error.error ~code:Error_code.Semantic branch_error
             | Some (result_ty, some_code, none_code) -> (
                 match
                   adapt_merged_branches env result_ty some_expr some_code
@@ -1942,7 +1942,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         | _, (Error _ as error) -> error
         | Ok some_expr, Ok none_expr -> (
             match merge_branch_expressions some_expr none_expr with
-            | None -> Error.error branch_error
+            | None -> Error.error ~code:Error_code.Semantic branch_error
             | Some (result_ty, some_code, none_code) -> (
                 match
                   adapt_merged_branches env result_ty some_expr some_code
@@ -1985,7 +1985,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         | _, (Error _ as error) -> error
         | Ok some_expr, Ok none_expr -> (
             match merge_branch_expressions some_expr none_expr with
-            | None -> Error.error branch_error
+            | None -> Error.error ~code:Error_code.Semantic branch_error
             | Some (result_ty, some_code, none_code) -> (
                 match
                   adapt_merged_branches env result_ty some_expr some_code
@@ -2020,7 +2020,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
             | Ok some_expr, Ok none_expr -> (
                 match merge_branch_expressions some_expr none_expr with
                 | None ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       (branch_error ^ ": " ^ Types.source_name some_expr.ty
                      ^ " (" ^ Types.ocaml_name some_expr.ty ^ ") and "
                      ^ Types.source_name none_expr.ty ^ " ("
@@ -2250,13 +2250,13 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       | [] -> Ok (List.rev acc)
       | (FSymbol _ as pattern) :: option_form :: rest ->
           parse_bindings ((pattern, option_form) :: acc) rest
-      | _ -> Error.error "let-some bindings require name/option pairs"
+      | _ -> Error.error ~code:Error_code.Semantic "let-some bindings require name/option pairs"
     in
     match bindings_form with
     | FVector forms -> (
         match parse_bindings [] forms with
         | Error _ as err -> err
-        | Ok [] -> Error.error "let-some requires at least one binding"
+        | Ok [] -> Error.error ~code:Error_code.Arity "let-some requires at least one binding"
         | Ok bindings -> (
             match compile_expr scope env else_form with
             | Error _ as err -> err
@@ -2270,7 +2270,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                         "let-some branches must have same type"
                 in
                 compile_bindings env bindings))
-    | _ -> Error.error "let-some bindings must be a vector"
+    | _ -> Error.error ~code:Error_code.Type_mismatch "let-some bindings must be a vector"
   and compile_if scope env condition then_form else_form =
     let then_source_form = then_form in
     let else_source_form = else_form in
@@ -2293,7 +2293,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         if nominal then then_type ^ " and " ^ else_type ^ ")"
         else then_type ^ " and " ^ else_type
       in
-      Error.error ~title:"TYPE MISMATCH"
+      Error.error ~code:Error_code.Type_mismatch ~title:"TYPE MISMATCH"
         ?location:(Source_context.find else_source_form) ~related
         ~type_mismatch:
           (Error.type_mismatch ~context:Error.Conditional_branch
@@ -2598,16 +2598,16 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     in
                     match expression with
                     | None ->
-                        Error.error "if tuple branches must have same type"
+                        Error.error ~code:Error_code.Semantic "if tuple branches must have same type"
                     | Some expression ->
                         compile (expression :: values) expected_rest form_rest))
-            | _ -> Error.error "if tuple branches must have same arity"
+            | _ -> Error.error ~code:Error_code.Arity "if tuple branches must have same arity"
           in
           let result = compile [] expected_types forms in
           Result.map
             (fun expression -> { expression with ty = TTuple expected_types })
             result
-      | _ -> Error.error "if tuple branch must be a vector"
+      | _ -> Error.error ~code:Error_code.Semantic "if tuple branch must be a vector"
     in
     match compile_expr scope condition_env condition with
     | Error _ as error -> error
@@ -3161,7 +3161,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     in
                     adapt [] expressions
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Type_mismatch
                       ("conditional branches have incompatible types: "
                       ^ String.concat ", "
                           (List.map
@@ -3172,7 +3172,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
   and compile_match_with_result compile_result scope env target_form clauses =
     let rec parse_pairs acc = function
       | [] -> Ok (List.rev acc)
-      | [ _ ] -> Error.error "match requires pattern/result pairs"
+      | [ _ ] -> Error.error ~code:Error_code.Semantic "match requires pattern/result pairs"
       | pattern :: result :: rest -> parse_pairs ((pattern, result) :: acc) rest
     in
     let literal_pattern expected_ty form =
@@ -3185,8 +3185,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
             | FInt value -> Ok (Semantic_ir.PInt value)
             | FString value | FKeyword value -> Ok (Semantic_ir.PString value)
             | FBool value -> Ok (Semantic_ir.PBool value)
-            | _ -> Error.error "unsupported match pattern"
-          else Error.error "match pattern type must match target"
+            | _ -> Error.error ~code:Error_code.Unsupported "unsupported match pattern"
+          else Error.error ~code:Error_code.Semantic "match pattern type must match target"
     in
     let pattern_refinement = ref Type_solver.empty in
     let pattern_refines_type = ref false in
@@ -3196,12 +3196,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       match ty with
       | TFn (_, result) ->
           (match Type_solver.unify !pattern_refinement target_ty result with
-           | Error _ -> Error.error "GADT constructor index does not match the pattern target type"
+           | Error _ -> Error.error ~code:Error_code.Semantic "GADT constructor index does not match the pattern target type"
            | Ok substitutions ->
                pattern_refinement := substitutions;
                pattern_refines_type := true;
                Ok (Type_solver.apply substitutions ty))
-      | _ -> Error.error "invalid GADT constructor type"
+      | _ -> Error.error ~code:Error_code.Invalid_form "invalid GADT constructor type"
     in
     let rec compile_pattern target_ty pattern =
       let target_ty =
@@ -3220,8 +3220,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
            | Some None, [] -> Ok (Semantic_ir.PPolyTag (tag, None), [])
            | Some (Some ty), [pattern] -> Result.map (fun (pattern, bindings) ->
                (Semantic_ir.PPolyTag (tag, Some pattern), bindings)) (compile_pattern ty pattern)
-           | None, _ -> Error.error ("polymorphic variant type does not contain tag " ^ tag)
-           | _ -> Error.error "polymorphic variant pattern payload type mismatch")
+           | None, _ -> Error.error ~code:Error_code.Semantic ("polymorphic variant type does not contain tag " ^ tag)
+           | _ -> Error.error ~code:Error_code.Type_mismatch "polymorphic variant pattern payload type mismatch")
       | _, FSymbol "_" -> Ok (Semantic_ir.PAny, [])
         | ( target_ty,
             FList [ FSymbol "as"; inner_pattern; (FSymbol alias as alias_form) ]
@@ -3251,7 +3251,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               in
                 if binding_names left_bindings <> binding_names right_bindings
                 then
-                Error.error "or-pattern alternatives must bind the same names"
+                Error.error ~code:Error_code.Semantic "or-pattern alternatives must bind the same names"
               else Ok (Semantic_ir.POr (left, right), left_bindings))
         | ( (TRecord fields | TNamed_record { fields; _ }),
             FList (FSymbol "record" :: field_patterns) ) ->
@@ -3260,7 +3260,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               | FList [ FSymbol field_name; field_pattern ] :: rest -> (
                 let ocaml_name = Names.sanitize_name field_name in
                 if List.mem ocaml_name seen then
-                  Error.error ("duplicate record pattern field " ^ field_name)
+                  Error.error ~code:Error_code.Duplicate ("duplicate record pattern field " ^ field_name)
                   else
                   match
                     List.find_opt
@@ -3268,7 +3268,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       fields
                   with
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Unresolved
                           ("unknown record pattern field " ^ field_name)
                   | Some field -> (
                       match compile_pattern field.ty field_pattern with
@@ -3278,11 +3278,11 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             ((field.ocaml_name, pattern) :: compiled)
                               (bindings @ field_bindings)
                               (ocaml_name :: seen) rest))
-            | _ -> Error.error "record pattern fields must be (name pattern)"
+            | _ -> Error.error ~code:Error_code.Semantic "record pattern fields must be (name pattern)"
           in
           compile_fields [] [] [] field_patterns
       | _, FList (FSymbol "record" :: _) ->
-          Error.error "record pattern expects a record target"
+          Error.error ~code:Error_code.Arity "record pattern expects a record target"
         | TTuple payload_tys, FList (FSymbol "tuple" :: payload_patterns)
         | TTuple payload_tys, FVector payload_patterns ->
           let rec compile_payloads patterns bindings = function
@@ -3298,7 +3298,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     compile_payloads (pattern :: patterns)
                       (bindings @ pattern_bindings)
                       (payload_tys, payload_patterns))
-            | _ -> Error.error "tuple pattern arity mismatch"
+            | _ -> Error.error ~code:Error_code.Type_mismatch "tuple pattern arity mismatch"
           in
           compile_payloads [] [] (payload_tys, payload_patterns)
             |> Result.map (fun (patterns, bindings) ->
@@ -3335,7 +3335,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       compile_payloads (pattern :: patterns)
                         (bindings @ pattern_bindings)
                         (payload_tys, payload_patterns))
-              | _ -> Error.error "constructor pattern arity mismatch"
+              | _ -> Error.error ~code:Error_code.Type_mismatch "constructor pattern arity mismatch"
             in
             compile_payloads [] [] (payload_tys, payload_patterns)
             |> Result.map (fun (patterns, bindings) ->
@@ -3374,8 +3374,8 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             payload_tys
                       | _ -> assert false)
                   | Some (TFn _) ->
-                      Error.error "constructor pattern arity mismatch"
-                  | Some _ -> Error.error (name ^ " is not a constructor")
+                      Error.error ~code:Error_code.Type_mismatch "constructor pattern arity mismatch"
+                  | Some _ -> Error.error ~code:Error_code.Type_mismatch (name ^ " is not a constructor")
                   | None ->
                       let constructor_name =
                         resolve_ocaml_constructor_target scope env name
@@ -3410,7 +3410,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           compile_constructor_payloads constructor_name
                             payload_tys
                       | Ok _ ->
-                          Error.error "constructor pattern arity mismatch"))
+                          Error.error ~code:Error_code.Type_mismatch "constructor pattern arity mismatch"))
               | Ok constructor -> (
                   Result.bind (constructor_type target_ty constructor) (fun constructor_ty ->
                   match constructor_ty with
@@ -3425,9 +3425,9 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       | TFn (payload_tys, _) ->
                           compile_constructor_payloads constructor.ocaml_name
                             payload_tys
-                      | _ -> Error.error (name ^ " is not a constructor"))
-                  | TFn _ -> Error.error "constructor pattern arity mismatch"
-                  | _ -> Error.error (name ^ " is not a constructor")))))
+                      | _ -> Error.error ~code:Error_code.Type_mismatch (name ^ " is not a constructor"))
+                  | TFn _ -> Error.error ~code:Error_code.Type_mismatch "constructor pattern arity mismatch"
+                  | _ -> Error.error ~code:Error_code.Type_mismatch (name ^ " is not a constructor")))))
       | _, FSymbol name ->
           let ocaml_name = Names.sanitize_name name in
           Ok
@@ -3450,10 +3450,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 literal_pattern target_ty pattern
                 |> Result.map (fun code -> (code, []))
           | FVector _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "match collection pattern must match target collection"
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Unsupported
                 ("unsupported match pattern "
                ^ Macro_expander.string_of_form pattern
                ^ " for " ^ Types.source_name target_ty))
@@ -3476,7 +3476,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 (pattern, bindings @ tail_bindings))
               (compile_pattern (TList inner) rest)
         | FSymbol "&" :: _ ->
-            Error.error "collection rest pattern requires one final binding"
+            Error.error ~code:Error_code.Semantic "collection rest pattern requires one final binding"
         | pattern :: rest -> (
             match compile_pattern inner pattern with
             | Error _ as err -> err
@@ -3519,7 +3519,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                 | Error _ as err -> err
                 | Ok guard when Types.equal guard.ty TBool ->
                     Ok (Some guard.semantic_expr)
-                | Ok _ -> Error.error "match guard must be bool")
+                | Ok _ -> Error.error ~code:Error_code.Semantic "match guard must be bool")
           in
           match (guard, compile_result scope clause_env result_form) with
           | (Error _ as err), _ -> err
@@ -3650,7 +3650,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         in
         match compile_clauses [] pairs with
         | Error _ as err -> err
-        | Ok [] -> Error.error "match requires pattern/result pairs"
+        | Ok [] -> Error.error ~code:Error_code.Semantic "match requires pattern/result pairs"
         | Ok ((_, _, first_result) :: rest as clauses) -> (
             let result_ty =
               List.fold_left
@@ -3696,13 +3696,13 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                       (Semantic_ir.Match_guarded (target_expr, clauses)))
                   (adapt_clauses [] clauses)
             | Some _ | None ->
-                Error.error
+                Error.error ~code:Error_code.Type_mismatch
                   "conditional branches have incompatible types; define a closed sum type containing every branch type")))
   and compile_match scope env target_form clauses =
     compile_match_with_result compile_expr scope env target_form clauses
   and compile_body scope env empty_error forms =
     match forms with
-    | [] -> Error.error empty_error
+    | [] -> Error.error ~code:Error_code.Semantic empty_error
     | [ form ] -> compile_expr scope env form
     | form :: rest -> (
         match
@@ -3726,7 +3726,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       | _ -> false
     in
     let rec split_body acc = function
-      | [] -> Error.error "try requires at least one catch or finally clause"
+      | [] -> Error.error ~code:Error_code.Arity "try requires at least one catch or finally clause"
       | form :: rest
         when is_catch_clause form || is_finally_clause form ->
           Ok (List.rev acc, form :: rest)
@@ -3736,7 +3736,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       match List.rev handler_forms with
       | FList (FSymbol "finally" :: finally_forms) :: reversed_catches -> (
           match finally_forms with
-          | [] -> Error.error "finally requires a body"
+          | [] -> Error.error ~code:Error_code.Arity "finally requires a body"
           | _ -> Ok (List.rev reversed_catches, Some finally_forms))
       | _ -> Ok (handler_forms, None)
     in
@@ -3748,13 +3748,13 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           :: body_forms)
         when is_constructor_name exception_type -> (
           match body_forms with
-          | [] -> Error.error "catch requires a type, binding, and body"
+          | [] -> Error.error ~code:Error_code.Interop "catch requires a type, binding, and body"
           | _
             when exception_type = "ClassCastException"
                  || String.starts_with ~prefix:"java." exception_type
                  || String.starts_with ~prefix:"javax." exception_type
                  || String.starts_with ~prefix:"clojure.lang." exception_type ->
-              Error.error
+              Error.error ~code:Error_code.Unsupported
                 "Java interop is not supported; use static LG types and functions"
           | _ ->
               let pattern =
@@ -3776,12 +3776,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
               Ok (pattern, body))
       | FList (FSymbol "catch" :: pattern :: body_forms) -> (
           match body_forms with
-          | [] -> Error.error "catch requires a pattern and body"
+          | [] -> Error.error ~code:Error_code.Arity "catch requires a pattern and body"
           | [ body ] -> Ok (pattern, body)
           | body_forms -> Ok (pattern, FList (FSymbol "do" :: body_forms)))
       | FList [ FSymbol "catch" ] ->
-          Error.error "catch requires a pattern and body"
-      | _ -> Error.error "try handlers must be catch clauses"
+          Error.error ~code:Error_code.Arity "catch requires a pattern and body"
+      | _ -> Error.error ~code:Error_code.Semantic "try handlers must be catch clauses"
     in
     let rec parse_catches acc = function
       | [] -> Ok (List.rev acc)
@@ -3816,7 +3816,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
       | body_ty, handlers_ty
         when Types.contains_dynamic body_ty
              || Types.contains_dynamic handlers_ty ->
-          Error.error
+          Error.error ~code:Error_code.Invalid_form
             "try branch type is dynamic; add a static type annotation or define a closed sum type containing every branch type"
       | (TUnknown | TMeta _ | TVar _), _
         when never_returns body.semantic_expr ->
@@ -3825,13 +3825,13 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
         when never_returns handlers.semantic_expr ->
           Ok body_ty
       | (TUnknown | TMeta _ | TVar _), _ | _, (TUnknown | TMeta _ | TVar _) ->
-          Error.error
+          Error.error ~code:Error_code.Unresolved
             "try branch type is unresolved; add a static type annotation or define a closed sum type containing every branch type"
       | _ -> (
           match merge_branch_types body_ty handlers_ty with
           | Some ty -> Ok ty
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Type_mismatch
                 ("try body and handlers have incompatible types: "
                 ^ Types.source_name body_ty ^ " and "
                 ^ Types.source_name handlers_ty
@@ -3882,7 +3882,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             (Semantic_ir.Try (body_expression, cases)))
                         (adapt_cases [] cases))
               | _, Ok _ ->
-                  Error.error "internal error: malformed try handlers"))
+                  Error.error ~code:Error_code.Internal "internal error: malformed try handlers"))
     in
     let protect_with_finally body finally =
       typed_ir body.ty
@@ -3901,7 +3901,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     in
     match split_body [] forms with
     | Error _ as err -> err
-    | Ok ([], _) -> Error.error "try requires a body"
+    | Ok ([], _) -> Error.error ~code:Error_code.Arity "try requires a body"
     | Ok (body_forms, handler_forms) -> (
         match split_finally handler_forms with
         | Error _ as err -> err
@@ -3932,12 +3932,12 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     match merge_branch_types left right with
     | Some ty -> Ok ty
     | None ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("loop branches must have same type: " ^ Types.source_name left
          ^ " and " ^ Types.source_name right))
   and compile_recur scope env loop_name param_tys arg_forms =
     if List.length arg_forms <> List.length param_tys then
-      Error.error
+      Error.error ~code:Error_code.Arity
         ("recur expects " ^ string_of_int (List.length param_tys) ^ " arguments")
     else
       let rec compile_recur_args compiled expected forms =
@@ -3952,7 +3952,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
             | Error _ as error -> error
             | Ok expression ->
                 compile_recur_args (expression :: compiled) expected forms)
-        | _ -> Error.error "internal error: recur argument compilation"
+        | _ -> Error.error ~code:Error_code.Internal "internal error: recur argument compilation"
       in
       match compile_recur_args [] param_tys arg_forms with
       | Error _ as err -> err
@@ -3973,11 +3973,11 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                        (optional_payload arg.ty))
                 then validate (index + 1) expected actual
                 else
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("recur argument " ^ string_of_int index ^ " must be "
                    ^ Types.source_name expected_ty ^ ", got "
                    ^ Types.source_name arg.ty)
-            | _ -> Error.error "internal error: recur argument validation"
+            | _ -> Error.error ~code:Error_code.Internal "internal error: recur argument validation"
           in
           let adapt_argument expected_ty (arg : typed_expr) =
             if
@@ -4048,7 +4048,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                        Result.bind (adapt_argument expected_ty arg)
                          (fun expression ->
                            adapt (expression :: adapted) expected args)
-                   | _ -> Error.error "internal error: recur adaptation"
+                   | _ -> Error.error ~code:Error_code.Internal "internal error: recur adaptation"
                  in
                  adapt [] param_tys args)
           |> Result.map (fun arguments ->
@@ -4151,7 +4151,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
           | Error _ as error -> error
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "first expects a seqable value"
+              | Error _ -> Error.error ~code:Error_code.Arity "first expects a seqable value"
               | Ok (element_ty, sequence) ->
                   let some_env =
                     Env.add_bindings
@@ -4173,7 +4173,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                   | Ok some_expr, Ok none_expr -> (
                       match merge_branch_expressions some_expr none_expr with
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             "if-some branches have incompatible types; define a \
                              closed sum type"
                       | Some (result_ty, some_code, none_code) -> (
@@ -4296,7 +4296,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     | form -> compile_expr scope env form
   and compile_loop_tail_body scope env loop_name param_tys forms =
     match forms with
-    | [] -> Error.error "loop body requires at least one form"
+    | [] -> Error.error ~code:Error_code.Arity "loop body requires at least one form"
     | [ form ] -> compile_loop_tail scope env loop_name param_tys form
     | form :: rest -> (
         match
@@ -4317,7 +4317,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     | FVector forms -> (
         let forms = Destructure.normalize_binding_type_hints forms in
         if List.length forms mod 2 <> 0 then
-          Error.error "loop bindings require an even number of forms"
+          Error.error ~code:Error_code.Semantic "loop bindings require an even number of forms"
         else
           let rec compile_bindings names identities value_forms values tys =
             function
@@ -4330,7 +4330,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                     List.rev tys )
             | (FSymbol name as name_form) :: value_form :: rest -> (
                 if name = "_" || List.mem name names then
-                  Error.error "loop binding names must be unique symbols"
+                  Error.error ~code:Error_code.Semantic "loop binding names must be unique symbols"
                 else
                   match
                     compile_expr scope (Env.with_expected_type None env)
@@ -4374,7 +4374,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             (Destructure.source_identity name_form :: identities)
                             (value_form :: value_forms) (value :: values)
                             (binding_ty :: tys) rest))
-            | _ -> Error.error "loop binding names must be symbols"
+            | _ -> Error.error ~code:Error_code.Semantic "loop binding names must be symbols"
           in
           match compile_bindings [] [] [] [] [] forms with
           | Error _ as err -> err
@@ -4880,7 +4880,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                              (Type_solver.canonical (TFn (!refined_params, body.ty))) ->
                         Ok (param_tys, body)
                     | Ok _ when remaining = 0 ->
-                        Error.error "loop parameter and return types did not stabilize"
+                        Error.error ~code:Error_code.Semantic "loop parameter and return types did not stabilize"
                     | Ok body ->
                         stabilize_body (remaining - 1) !refined_params body.ty
                   in
@@ -4971,7 +4971,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                           (fun value ->
                             adapt_initials (value :: adapted) param_tys
                               value_forms values)
-                    | _ -> Error.error "internal error: loop initial values"
+                    | _ -> Error.error ~code:Error_code.Internal "internal error: loop initial values"
                   in
                   Result.bind
                     (adapt_initials [] param_tys value_forms values)
@@ -5067,7 +5067,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                             body.semantic_expr,
                             initial_values
                           )))))))
-    | _ -> Error.error "loop bindings must be a vector"
+    | _ -> Error.error ~code:Error_code.Arity "loop bindings must be a vector"
   and compile_let_tail scope env loop_name param_tys bindings body_forms =
     compile_let_with_body
       (fun scope env forms ->
@@ -5391,7 +5391,7 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
     | FVector forms ->
         let forms = Destructure.normalize_binding_type_hints forms in
         if List.length forms mod 2 <> 0 then
-          Error.error "let bindings require an even number of forms"
+          Error.error ~code:Error_code.Semantic "let bindings require an even number of forms"
         else
           let rec bind env ir_bindings = function
             | [] -> (
@@ -5545,10 +5545,10 @@ let create ~compile_expr ~dynamic_unpack ~pack_dynamic_value
                         in
                         bind env ir_bindings rest))
             | [ _ ] ->
-                Error.error "let bindings require an even number of forms"
+                Error.error ~code:Error_code.Semantic "let bindings require an even number of forms"
           in
           bind env [] forms
-    | _ -> Error.error "let bindings must be a vector"
+    | _ -> Error.error ~code:Error_code.Semantic "let bindings must be a vector"
   in
   {
     compile_vector;

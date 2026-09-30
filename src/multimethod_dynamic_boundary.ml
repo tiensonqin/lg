@@ -48,7 +48,7 @@ let rec convert_typed_value value =
                 apply (runtime "dynamic_map") [ Semantic_ir.List entries ])
               (compile_fields [] fields)
         | None ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "multimethod dynamic boundary requires record field evidence")
     | TVector element_ty -> (
         match mapper_for_type element_ty with
@@ -79,7 +79,7 @@ let rec convert_typed_value value =
               (apply (runtime "dynamic_map_of_runtime_map")
                  [ key_mapper; value_mapper; value.semantic_expr ]))
     | ty ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("multimethod dynamic boundary does not support " ^ Types.source_name ty)
 
 and convert_type ty expression =
@@ -104,7 +104,7 @@ let rec compile_form ~compile_expr scope env form =
         (typed_dynamic
            (apply (runtime "dynamic_float") [ Semantic_ir.Float value ]))
   | FDecimal _ ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         "static decimal values cannot cross the multimethod dynamic boundary"
   | FChar value ->
       Ok

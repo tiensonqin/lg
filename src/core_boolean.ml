@@ -3,7 +3,7 @@ open Types
 let one_arg name args =
   match args with
   | [ arg ] -> Ok arg
-  | _ -> Error.error (name ^ " expects 1 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
 
 let evaluated_argument arg =
   Semantic_ir.evaluate_for_effect arg.semantic_expr
@@ -128,7 +128,7 @@ let compile_string_family_predicate ~target name ~keyword args =
       | actual
         when Option.is_some (Types.protocol_constraint_info actual)
              || Option.is_some (Types.contains_constraint_info actual) ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             (name
            ^ " requires a closed sum type when the value may have multiple \
               static types")
@@ -274,4 +274,4 @@ let compile ~target name args =
       compile_type_predicate name
         (function TOcaml_app ("Lazy.t", [ _ ]) -> true | _ -> false)
         args
-  | _ -> Error.error ("unknown function " ^ name)
+  | _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)

@@ -31,7 +31,7 @@ let rec collection_to_list_expr collection =
           (inner, apply (set_module ^ ".elements") [ collection.semantic_expr ]))
   | TOcaml_app ("array", [ inner ]) ->
       Ok (inner, apply "Array.to_list" [ collection.semantic_expr ])
-  | _ -> Error.error "collection value is not sequenceable"
+  | _ -> Error.error ~code:Error_code.Semantic "collection value is not sequenceable"
 
 let collection_to_seq_expr collection =
   match collection.ty with
@@ -65,7 +65,7 @@ let collection_to_seq_expr collection =
   | TString ->
       Ok
         (TChar, apply "Lg_runtime.Runtime_seq.of_string" [ collection.semantic_expr ])
-  | _ -> Error.error "collection value is not sequenceable"
+  | _ -> Error.error ~code:Error_code.Semantic "collection value is not sequenceable"
 
 let rec collection_from_list_expr collection_ty list_expr =
   match collection_ty with
@@ -133,9 +133,9 @@ let remove fn collection =
             list_expr ]
       in
       Ok (typed_ir collection.ty (collection_from_list_expr collection.ty filtered))
-  | TFn _, Ok _ -> Error.error "remove expects a predicate matching collection elements"
-  | _, Ok _ -> Error.error "remove expects a function"
-  | _, Error _ -> Error.error "remove expects a list, vector, or set"
+  | TFn _, Ok _ -> Error.error ~code:Error_code.Arity "remove expects a predicate matching collection elements"
+  | _, Ok _ -> Error.error ~code:Error_code.Arity "remove expects a function"
+  | _, Error _ -> Error.error ~code:Error_code.Arity "remove expects a list, vector, or set"
 
 let take_drop_while name fn collection =
   match (fn.ty, collection_to_list_expr collection) with
@@ -168,9 +168,9 @@ let take_drop_while name fn collection =
       in
       Ok (typed_ir collection.ty (collection_from_list_expr collection.ty list_expr))
   | TFn _, Ok _ ->
-      Error.error (name ^ " expects a predicate matching collection elements")
-  | _, Ok _ -> Error.error (name ^ " expects a function")
-  | _, Error _ -> Error.error (name ^ " expects a list, vector, or set")
+      Error.error ~code:Error_code.Arity (name ^ " expects a predicate matching collection elements")
+  | _, Ok _ -> Error.error ~code:Error_code.Arity (name ^ " expects a function")
+  | _, Error _ -> Error.error ~code:Error_code.Arity (name ^ " expects a list, vector, or set")
 
 let sort collection =
   if Types.is_dynamic collection.ty then
@@ -179,7 +179,7 @@ let sort collection =
          (apply "Lg_runtime.Runtime_dynamic.sort" [ collection.semantic_expr ]))
   else
     match collection_to_list_expr collection with
-    | Error _ -> Error.error "sort expects a list, vector, or set"
+    | Error _ -> Error.error ~code:Error_code.Arity "sort expects a list, vector, or set"
     | Ok (inner, list_expr) ->
         let comparator =
           if Types.is_dynamic inner then
@@ -194,13 +194,13 @@ let sort collection =
 
 let vec collection =
   match collection_to_list_expr collection with
-  | Error _ -> Error.error "vec expects a list, vector, or set"
+  | Error _ -> Error.error ~code:Error_code.Arity "vec expects a list, vector, or set"
   | Ok (inner, list_expr) ->
       Ok (typed_ir (TVector inner) (apply "Rrbvec.of_list" [ list_expr ]))
 
 let set collection =
   match collection_to_list_expr collection with
-  | Error _ -> Error.error "set expects a list, vector, or set"
+  | Error _ -> Error.error ~code:Error_code.Arity "set expects a list, vector, or set"
   | Ok (TSeq inner, list_expr) ->
       let element_ty = TList inner in
       Types.set_module_name element_ty
@@ -222,7 +222,7 @@ let set collection =
 
 let into target source =
   match collection_to_list_expr source with
-  | Error _ -> Error.error "into source must be a collection"
+  | Error _ -> Error.error ~code:Error_code.Semantic "into source must be a collection"
   | Ok (source_inner, source_list_expr) -> (
       match target.ty with
       | target_ty when Option.is_some (Types.dynamic_map_types target_ty) ->
@@ -345,12 +345,12 @@ let into target source =
                         source_list_expr;
                       ]))
           | TTuple [ _; _ ] ->
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 ("into source entry types " ^ Types.source_name source_inner
                ^ " must match target map types "
                ^ Types.source_name target.ty)
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 "into map target expects key-value tuple entries")
       | TVector (TUnknown | TMeta _ | TVar _) ->
           Ok
@@ -413,13 +413,13 @@ let into target source =
                             apply (set_module ^ ".elements") [ target.semantic_expr ],
                             source_list_expr ) ]))
       | TVector _ | TList _ | TSet _ ->
-          Error.error "into source element type must match target element type"
-      | _ -> Error.error "into target must be a collection")
+          Error.error ~code:Error_code.Semantic "into source element type must match target element type"
+      | _ -> Error.error ~code:Error_code.Semantic "into target must be a collection")
 
 let into_cat target source =
   match collection_to_list_expr source with
   | Error _ ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         ("into cat source must be a collection, got "
        ^ Types.source_name source.ty)
   | Ok (TVector element_type, outer) ->
@@ -452,7 +452,7 @@ let into_cat target source =
       into target
         (typed_ir (TList (Types.dynamic_constraint TUnknown)) flattened)
   | Ok _ ->
-      Error.error "into cat source elements must be collections"
+      Error.error ~code:Error_code.Semantic "into cat source elements must be collections"
 
 let compile name args =
   match (name, args) with
@@ -464,10 +464,10 @@ let compile name args =
   | "set", [ collection ] -> set collection
   | "__lg_into", [ target; source ] -> into target source
   | "into-cat", [ target; source ] -> into_cat target source
-  | "remove", _ -> Error.error "remove expects function and collection"
+  | "remove", _ -> Error.error ~code:Error_code.Arity "remove expects function and collection"
   | ("take-while" | "drop-while"), _ ->
-      Error.error (name ^ " expects function and collection")
+      Error.error ~code:Error_code.Arity (name ^ " expects function and collection")
   | ("sort" | "vec" | "set"),
-    _ -> Error.error (name ^ " expects 1 arguments")
-  | "__lg_into", _ -> Error.error "into expects target and source collections"
-  | _ -> Error.error ("unknown function " ^ name)
+    _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
+  | "__lg_into", _ -> Error.error ~code:Error_code.Arity "into expects target and source collections"
+  | _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)

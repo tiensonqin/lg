@@ -287,7 +287,7 @@ let test_exposes_structured_error_identity () =
   Lg.Compiler.compile_string "("
   |> expect_structured_error "LG1002" `Parsing;
   Lg.Compiler.compile_string "(def value missing-symbol)"
-  |> expect_structured_error "LG2000" `Semantic
+  |> expect_structured_error "LG2003" `Semantic
 
 let tests =
   [

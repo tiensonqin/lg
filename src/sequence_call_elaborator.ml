@@ -161,7 +161,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                 body,
                                 Semantic_ir.Ident ocaml_name ));
                      }
-               | _ -> Error.error "named fn requires a function body"))
+               | _ -> Error.error ~code:Error_code.Arity "named fn requires a function body"))
   in
   let external_record_type = function
     | TOcaml type_name -> (
@@ -410,7 +410,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
               ~expected:expected_accumulator_ty
               ~actual:actual_accumulator_ty
           then Ok accumulator.semantic_expr
-          else Error.error "reducer accumulator type does not match init"
+          else Error.error ~code:Error_code.Semantic "reducer accumulator type does not match init"
         in
         Result.bind accumulator (fun accumulator ->
             let call =
@@ -447,7 +447,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
     then Ok argument.semantic_expr
     else if Types.is_dynamic argument.ty then
       dynamic_unpack env expected argument.semantic_expr
-    else Error.error "protocol argument type does not match implementation"
+    else Error.error ~code:Error_code.Protocol "protocol argument type does not match implementation"
   in
   let reify_reducible_method collection =
     match collection.ty with
@@ -483,7 +483,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                 (fun initial ->
                   Semantic_ir.Apply (method_expr, [ reducer; initial ]))
                 (adapt_protocol_argument env initial_ty init))
-      | Some _ -> Error.error "Reducible reify method has an invalid type"
+      | Some _ -> Error.error ~code:Error_code.Protocol "Reducible reify method has an invalid type"
       | None ->
       match
         Core_protocols.find_reducible collection.ty
@@ -509,7 +509,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                     || Types.assignable ~policy:Host_boundary
                          ~expected:result_ty ~actual:return_ty
                   then Ok call
-                  else Error.error "Reducible result type does not match init"))
+                  else Error.error ~code:Error_code.Semantic "Reducible result type does not match init"))
       | Some _ | None ->
           Ok
             (Collection_capability.reduce_expr env ~short_circuit fn init
@@ -970,7 +970,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
             in
             match compare with
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "sort-by key function must return a comparable value"
             | Some compare ->
                 Ok
@@ -994,11 +994,11 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           list_expr;
                         ])))
         | TFn ([ param_ty ], _) when not (Types.equal param_ty inner) ->
-            Error.error "sort-by key function must match collection elements"
+            Error.error ~code:Error_code.Semantic "sort-by key function must match collection elements"
         | TFn _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "sort-by key function must return a comparable value"
-        | _ -> Error.error "sort-by expects a function"
+        | _ -> Error.error ~code:Error_code.Arity "sort-by expects a function"
       in
       let sort_with_comparator fn comparator inner list_expr =
         match (fn.ty, comparator.ty) with
@@ -1032,12 +1032,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                       list_expr;
                     ]))
         | TFn ([ param_ty ], _), _ when not (Types.equal param_ty inner) ->
-            Error.error "sort-by key function must match collection elements"
+            Error.error ~code:Error_code.Semantic "sort-by key function must match collection elements"
         | TFn _, TFn _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "sort-by comparator must accept two keys and return int"
-        | _, TFn _ -> Error.error "sort-by expects a key function"
-        | _, _ -> Error.error "sort-by expects key and comparator functions"
+        | _, TFn _ -> Error.error ~code:Error_code.Arity "sort-by expects a key function"
+        | _, _ -> Error.error ~code:Error_code.Arity "sort-by expects key and comparator functions"
       in
       match arg_forms with
       | [ fn_form; collection_form ] -> (
@@ -1049,7 +1049,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | _, (Error _ as err) -> err
           | Ok fn, Ok collection -> (
                   match collection_to_list_expr env collection with
-                  | Error _ -> Error.error "sort-by expects a collection"
+                  | Error _ -> Error.error ~code:Error_code.Arity "sort-by expects a collection"
                   | Ok (inner, list_expr) ->
                       Result.bind (adapt_unary_function env inner fn) (fun fn ->
                       sort_default fn inner list_expr)))
@@ -1063,12 +1063,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | _, _, (Error _ as error) -> error
           | Ok fn, Ok comparator, Ok collection -> (
               match collection_to_list_expr env collection with
-              | Error _ -> Error.error "sort-by expects a collection"
+              | Error _ -> Error.error ~code:Error_code.Arity "sort-by expects a collection"
               | Ok (inner, list_expr) ->
                   Result.bind (adapt_unary_function env inner fn) (fun fn ->
                       sort_with_comparator fn comparator inner list_expr)))
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             "sort-by expects a key function, optional comparator, and collection"
     and compile_mapcat scope env arg_forms =
       match arg_forms with
@@ -1081,7 +1081,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("mapcat expects a collection, got "
                    ^ Types.source_name collection.ty)
               | Ok (inner, sequence) -> (
@@ -1100,7 +1100,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                       in
                     match Collection_capability.to_seq_expr env result with
                       | Error _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             ("mapcat function must return a collection, got "
                            ^ Types.source_name return_ty)
                       | Ok (result_inner, result_sequence) ->
@@ -1114,9 +1114,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                     sequence;
                                   ])))
                   | Ok { ty = TFn _; _ } ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "mapcat function argument type does not match collection"
-                  | Ok _ -> Error.error "mapcat expects a function")))
+                  | Ok _ -> Error.error ~code:Error_code.Arity "mapcat expects a function")))
       | fn_form :: (_ :: _ as collection_forms) ->
           let rec compile_collections compiled = function
             | [] -> Ok (List.rev compiled)
@@ -1128,7 +1128,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                 | Ok collection -> (
                     match Collection_capability.to_seq_expr env collection with
                     | Error _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           ("mapcat expects seqable collections, got "
                          ^ Types.source_name collection.ty)
                     | Ok (element_ty, sequence) ->
@@ -1180,7 +1180,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                 | _ -> false
                               then Ok argument.semantic_expr
                               else
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   "mapcat function type does not match \
                                    collections"
                             in
@@ -1188,7 +1188,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                 prepare_arguments (argument :: prepared)
                                   parameter_tys element_tys names)
                         | _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "internal multi-collection mapcat arity \
                                mismatch"
                       in
@@ -1250,7 +1250,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                             Collection_capability.to_seq_expr env result
                           with
                           | Error _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Semantic
                                 ("mapcat function must return a collection, \
                                   got "
                                 ^ Types.source_name return_ty)
@@ -1282,10 +1282,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                         ],
                                         result ))))
                   | TFn _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "mapcat function arity does not match collections"
-                  | _ -> Error.error "mapcat expects a function")))
-      | _ -> Error.error "mapcat expects function and collection"
+                  | _ -> Error.error ~code:Error_code.Arity "mapcat expects a function")))
+      | _ -> Error.error ~code:Error_code.Arity "mapcat expects function and collection"
     and compile_repeatedly scope env arg_forms =
       match arg_forms with
     | [ count_form; fn_form ] -> (
@@ -1297,7 +1297,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | _, (Error _ as err) -> err
           | Ok count, Ok fn -> (
             if not (Types.equal count.ty TInt) then
-              Error.error "repeatedly count must be int"
+              Error.error ~code:Error_code.Semantic "repeatedly count must be int"
               else
                 match fn.ty with
                 | TFn ([], ret) ->
@@ -1323,9 +1323,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                               body,
                               [ Semantic_ir.List []; count.semantic_expr ] )))
               | TFn _ ->
-                  Error.error "repeatedly expects a zero-argument function"
-                | _ -> Error.error "repeatedly expects a function"))
-      | _ -> Error.error "repeatedly expects count and function"
+                  Error.error ~code:Error_code.Arity "repeatedly expects a zero-argument function"
+                | _ -> Error.error ~code:Error_code.Arity "repeatedly expects a function"))
+      | _ -> Error.error ~code:Error_code.Arity "repeatedly expects count and function"
     and compile_reductions scope env arg_forms =
       match arg_forms with
     | [ fn_form; collection_form ] -> (
@@ -1393,9 +1393,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                   ] ) );
                           ] )))
             | TFn _, Ok _ ->
-                Error.error "reductions function type does not match collection"
-              | _, Ok _ -> Error.error "reductions expects a function"
-              | _, Error _ -> Error.error "reductions expects a collection"))
+                Error.error ~code:Error_code.Semantic "reductions function type does not match collection"
+              | _, Ok _ -> Error.error ~code:Error_code.Arity "reductions expects a function"
+              | _, Error _ -> Error.error ~code:Error_code.Arity "reductions expects a collection"))
     | [ fn_form; init_form; collection_form ] -> (
           match
             ( compile_function_arg scope env fn_form,
@@ -1454,12 +1454,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                             list_expr;
                           ] )))
             | TFn _, Ok _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "reductions function type does not match init and collection"
-              | _, Ok _ -> Error.error "reductions expects a function"
-              | _, Error _ -> Error.error "reductions expects a collection"))
+              | _, Ok _ -> Error.error ~code:Error_code.Arity "reductions expects a function"
+              | _, Error _ -> Error.error ~code:Error_code.Arity "reductions expects a collection"))
     | _ ->
-        Error.error "reductions expects function, optional init, and collection"
+        Error.error ~code:Error_code.Arity "reductions expects function, optional init, and collection"
     and compile_map_indexed scope env arg_forms =
       match arg_forms with
     | [ fn_form; collection_form ] -> (
@@ -1467,7 +1467,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
         | Error _ as error -> error
         | Ok collection -> (
             match Collection_capability.to_seq_expr env collection with
-            | Error _ -> Error.error "map-indexed expects a collection"
+            | Error _ -> Error.error ~code:Error_code.Arity "map-indexed expects a collection"
             | Ok (inner, sequence) -> (
                 match compile_function_arg scope env fn_form with
                 | Error _ as error -> error
@@ -1489,10 +1489,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                               sequence;
                             ]))
                 | Ok { ty = TFn _; _ } ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "map-indexed function type does not match collection"
-                | Ok _ -> Error.error "map-indexed expects a function")))
-      | _ -> Error.error "map-indexed expects function and collection"
+                | Ok _ -> Error.error ~code:Error_code.Arity "map-indexed expects a function")))
+      | _ -> Error.error ~code:Error_code.Arity "map-indexed expects function and collection"
   and compile_multi_map scope env ~vector fn_form collection_forms =
     let rec compile_collections compiled = function
       | [] -> Ok (List.rev compiled)
@@ -1502,7 +1502,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ((if vector then "mapv" else "map")
                     ^ " expects seqable collections, got "
                     ^ Types.source_name collection.ty)
@@ -1546,7 +1546,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           || match expected with TVar _ -> true | _ -> false
                         then Ok argument.semantic_expr
                         else
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             ((if vector then "mapv" else "map")
                             ^ " function type does not match collections")
                       in
@@ -1554,7 +1554,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           prepare_arguments (argument :: prepared) parameter_tys
                             element_tys names)
                   | _ ->
-                      Error.error "internal multi-collection map arity mismatch"
+                      Error.error ~code:Error_code.Type_mismatch "internal multi-collection map arity mismatch"
                 in
                 Result.map
                   (fun arguments ->
@@ -1632,11 +1632,11 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                            result )))
                   (prepare_arguments [] parameter_tys element_tys argument_names)
             | TFn _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ((if vector then "mapv" else "map")
                   ^ " function arity does not match collections")
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ((if vector then "mapv" else "map") ^ " expects a function")))
     and compile_mapv scope env arg_forms =
       match arg_forms with
@@ -1647,7 +1647,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Error _ as error -> error
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "mapv expects a collection"
+              | Error _ -> Error.error ~code:Error_code.Arity "mapv expects a collection"
               | Ok (inner, sequence) -> (
                   match
                     compile_function_arg_for_collection scope env inner fn_form
@@ -1677,13 +1677,13 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                               Ok
                                 (typed_ir (TVector ret) mapped)
                           | TFn _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Semantic
                                 ("mapv function type " ^ Types.source_name fn.ty
                                  ^ " does not match collection element " ^ Types.source_name inner)
-                          | _ -> Error.error "mapv expects a function"))))
+                          | _ -> Error.error ~code:Error_code.Arity "mapv expects a function"))))
     | fn_form :: (_ :: _ as collection_forms) ->
         compile_multi_map scope env ~vector:true fn_form collection_forms
-      | _ -> Error.error "mapv expects function and collection"
+      | _ -> Error.error ~code:Error_code.Arity "mapv expects function and collection"
     and compile_reduce_kv scope env arg_forms =
       match arg_forms with
     | [ fn_form; init_form; collection_form ] -> (
@@ -1745,9 +1745,9 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                 entries;
                               ]))
                     | TFn _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "reduce-kv function type does not match collection"
-                    | _ -> Error.error "reduce-kv expects a function")
+                    | _ -> Error.error ~code:Error_code.Arity "reduce-kv expects a function")
               in
             match collection.ty with
               | TVector value_ty ->
@@ -1774,7 +1774,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                       compile_for "Lg_runtime.Runtime_map.fold_left" TKeyword
                         value_ty collection.semantic_expr
                   | None ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "reduce-kv requires map values with one static type")
               | map_type -> (
                   match Types.dynamic_map_types map_type with
@@ -1786,8 +1786,8 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                     compile_for "List.fold_left" dynamic dynamic
                       (apply "Lg_runtime.Runtime_dynamic.entries"
                          [ collection.semantic_expr ])
-                | None -> Error.error "reduce-kv expects a vector or map")))
-      | _ -> Error.error "reduce-kv expects function, init, and vector"
+                | None -> Error.error ~code:Error_code.Arity "reduce-kv expects a vector or map")))
+      | _ -> Error.error ~code:Error_code.Arity "reduce-kv expects function, init, and vector"
     and compile_some scope env arg_forms =
       match arg_forms with
     | [ fn_form; collection_form ] -> (
@@ -1795,7 +1795,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
         | Error _ as err -> err
         | Ok collection -> (
             match collection_to_list_expr env collection with
-            | Error _ -> Error.error "some expects a collection"
+            | Error _ -> Error.error ~code:Error_code.Arity "some expects a collection"
             | Ok (inner, list_expr) -> (
                 match
                   compile_function_arg_for_collection scope env inner fn_form
@@ -1867,10 +1867,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                               (Semantic_ir.Ident "find_truthy", [ list_expr ]) )))
                   item_argument
                     | TFn _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "some function type must match collection elements"
-                    | _ -> Error.error "some expects a function"))))
-      | _ -> Error.error "some expects function and collection"
+                    | _ -> Error.error ~code:Error_code.Arity "some expects a function"))))
+      | _ -> Error.error ~code:Error_code.Arity "some expects function and collection"
     and compile_map_call scope env arg_forms =
       match arg_forms with
     | [ fn_form; collection_form ] -> (
@@ -1879,7 +1879,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("map expects a seqable value, got "
                     ^ Types.source_name collection.ty)
               | Ok (inner, sequence) -> (
@@ -1897,19 +1897,19 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                [ fn.semantic_expr; sequence ]))
                         (adapt_unary_function env inner fn)
                   | Ok { ty = TFn _; _ } ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "map function argument type does not match sequence"
                   | Ok fn when Types.is_dynamic fn.ty ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "map requires a statically typed function; define a \
                          typed wrapper or closed sum type"
                   | Ok fn ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         ("map expects a function, got "
                         ^ Types.source_name fn.ty))))
     | fn_form :: (_ :: _ as collection_forms) ->
         compile_multi_map scope env ~vector:false fn_form collection_forms
-      | _ -> Error.error "map expects function and collection"
+      | _ -> Error.error ~code:Error_code.Arity "map expects function and collection"
     and compile_filter scope env arg_forms =
       match arg_forms with
     | [ fn_form; collection_form ] -> (
@@ -1917,7 +1917,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Error _ as err -> err
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "filter expects a seqable value"
+              | Error _ -> Error.error ~code:Error_code.Arity "filter expects a seqable value"
               | Ok (inner, sequence) -> (
                   match
                     compile_function_arg_for_collection scope env inner fn_form
@@ -1949,15 +1949,15 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                    [ predicate; sequence ]))
                             (adapt_unary_function env inner fn)
                     | ty when Types.is_dynamic ty ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "filter requires a statically typed predicate; define \
                            a typed wrapper or closed sum type"
                       | TFn _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                           "filter expects a predicate matching sequence \
                            elements"
-                      | _ -> Error.error "filter expects a function"))))
-      | _ -> Error.error "filter expects function and collection"
+                      | _ -> Error.error ~code:Error_code.Arity "filter expects a function"))))
+      | _ -> Error.error ~code:Error_code.Arity "filter expects function and collection"
     and compile_keep scope env arg_forms =
       match arg_forms with
       | [ fn_form; collection_form ] -> (
@@ -1965,7 +1965,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Error _ as error -> error
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "keep expects a Seqable value"
+              | Error _ -> Error.error ~code:Error_code.Arity "keep expects a Seqable value"
               | Ok (inner, sequence) -> (
                   match
                     compile_function_arg_for_collection scope env inner fn_form
@@ -2026,10 +2026,10 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                    [ fn.semantic_expr; sequence ]))
                         (adapt_unary_function env inner fn)
                   | Ok { ty = TFn _; _ } ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "keep function argument type does not match sequence"
-                  | Ok _ -> Error.error "keep expects a function")))
-      | _ -> Error.error "keep expects function and collection"
+                  | Ok _ -> Error.error ~code:Error_code.Arity "keep expects a function")))
+      | _ -> Error.error ~code:Error_code.Arity "keep expects function and collection"
     and compile_reduce scope env arg_forms =
       let compile_initial ?expected_type fn_form init_form =
         let env =
@@ -2094,7 +2094,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("reduce expects a seqable value, got "
                    ^ Types.source_name collection.ty)
               | Ok (inner, sequence) ->
@@ -2138,12 +2138,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                        Semantic_ir.Ident "__lg_reduce_rest";
                                      ])
                             | Some _ | None ->
-                                Error.error
+                                Error.error ~code:Error_code.Semantic
                                   "reduce function must preserve the first element type")
                         | TFn _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "reduce function type does not match first and next"
-                        | _ -> Error.error "reduce expects a function"
+                        | _ -> Error.error ~code:Error_code.Arity "reduce expects a function"
                       in
                       Result.map
                         (fun reduction ->
@@ -2173,7 +2173,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
           | Ok collection -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("reduce expects a seqable value, got "
                    ^ Types.source_name collection.ty)
               | Ok (inner, sequence) -> (
@@ -2277,12 +2277,12 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                        Semantic_ir.Ident "__lg_reduce_rest";
                                      ])
                             | _ ->
-                                Error.error
+                                Error.error ~code:Error_code.Arity
                                   "two-arity reduce function must preserve the sequence element type")
                         | TFn _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Arity
                               "two-arity reduce expects a binary reducer"
-                        | _ -> Error.error "reduce expects a function"
+                        | _ -> Error.error ~code:Error_code.Arity "reduce expects a function"
                       in
                       Result.map
                         (fun reduction ->
@@ -2339,7 +2339,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           _ ) ->
                         Ok (item, Semantic_ir.Ident "Seq.empty")
                     | Some _ ->
-                        Error.error "Reducible reify method has an invalid type"
+                        Error.error ~code:Error_code.Protocol "Reducible reify method has an invalid type"
                     | None ->
                     match
                       Core_protocols.find_reducible collection.ty
@@ -2355,7 +2355,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                           _ } ->
                         Ok (item, Semantic_ir.Ident "Seq.empty")
                     | Some _ | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           ("reduce expects a seqable or reducible value, got "
                           ^ Types.source_name collection.ty))
               in
@@ -2489,7 +2489,7 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                      ~expected:item_ty ~actual:inner) -> (
                           match Types.reduced_element reduced_type with
                           | None ->
-                              Error.error
+                              Error.error ~code:Error_code.Semantic
                               "nullable reduce result must contain a reduced \
                                value"
                           | Some result_type ->
@@ -2642,15 +2642,15 @@ let create ~compile_expr ~pack_dynamic_value ~dynamic_unpack
                                    (Collection_capability.reduce_expr env
                                       ~short_circuit:true adapted_fn
                                       nullable_init_expr collection sequence))
-                          | _ -> Error.error "reduced value must match init")
+                          | _ -> Error.error ~code:Error_code.Semantic "reduced value must match init")
                       | TFn _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                           ("reduce function type does not match init and \
                             sequence: fn=" ^ Types.source_name fn.ty ^ ", init="
                            ^ Types.source_name init.ty ^ ", sequence="
                            ^ Types.source_name inner)
-                      | _ -> Error.error "reduce expects a function")))))
-      | _ -> Error.error "reduce expects function, init, and collection"
+                      | _ -> Error.error ~code:Error_code.Arity "reduce expects a function")))))
+      | _ -> Error.error ~code:Error_code.Arity "reduce expects function, init, and collection"
   in
   {
     compile_sort_by;

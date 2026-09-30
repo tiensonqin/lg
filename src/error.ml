@@ -135,10 +135,20 @@ let default_title = function
   | `Infrastructure -> "INFRASTRUCTURE ERROR"
 
 let error ?location ?(related = []) ?(hints = []) ?(fixes = []) ?type_mismatch
-    ?title ?(code = "LG2000") ?(phase = `Semantic) message =
+    ?title ?(code = Error_code.Semantic) ?(phase = `Semantic) message =
   let title = Option.value title ~default:(default_title phase) in
   Error
-    { code; phase; title; message; location; related; hints; fixes; type_mismatch }
+    {
+      code = Error_code.code code;
+      phase;
+      title;
+      message;
+      location;
+      related;
+      hints;
+      fixes;
+      type_mismatch;
+    }
 
 let with_location_if_missing location error =
   match (error.location, location) with

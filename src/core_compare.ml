@@ -473,7 +473,7 @@ let melange_nil_numeric_args env args =
   | Some _ | None -> None
 
 let numeric_type_error name args =
-  Error.error
+  Error.error ~code:Error_code.Arity
     (name ^ " numeric arguments must all have the same type: "
     ^ String.concat ", " (List.map (fun arg -> Types.source_name arg.ty) args))
 
@@ -496,7 +496,7 @@ let compile ?env name args =
           in
           Ok (typed_ir TBool expression)
         else
-          Error.error
+          Error.error ~code:Error_code.Arity
             (name ^ " arguments must have the same type: "
             ^ String.concat ", " (List.map (fun arg -> Types.source_name arg.ty) args))
       else
@@ -506,7 +506,7 @@ let compile ?env name args =
           | Some expressions ->
               Ok (typed_ir TBool (and_expressions expressions))
           | None ->
-              Error.error (name ^ " expects numeric arguments")
+              Error.error ~code:Error_code.Arity (name ^ " expects numeric arguments")
         else if
           List.exists (fun arg -> host_ordering_int_type arg.ty) args
           && (List.for_all

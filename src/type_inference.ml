@@ -381,7 +381,7 @@ let add_record_field_constraint name keyword field_ty params =
                  (fun field -> field.keyword <> inferred.keyword)
                  fields)
       | Some existing ->
-          Error.error
+          Error.error ~code:Error_code.Inference
             ("cannot infer " ^ inferred.keyword ^ " as "
            ^ Types.source_name inferred.ty ^ " because it is already "
             ^ Types.source_name existing.ty)
@@ -553,7 +553,7 @@ let add_record_field_constraint name keyword field_ty params =
                    (fun candidate -> candidate.keyword <> keyword)
                    fields)
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Inference
               ("cannot infer " ^ keyword ^ " as " ^ Types.source_name field_ty
              ^ " because it is already " ^ Types.source_name field.ty))
   in
@@ -650,7 +650,7 @@ let add_record_field_constraint name keyword field_ty params =
                           | ty -> ty) ->
                 Ok record_ty
             | Error _ ->
-                Error.error
+                Error.error ~code:Error_code.Inference
                   ("cannot infer " ^ keyword ^ " as "
                  ^ Types.source_name inferred_ty ^ " because it is already "
                  ^ Types.source_name field.ty))))
@@ -5399,7 +5399,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                     let ty = Option.join previous |> Option.value ~default:(Type_solver.fresh ()) in
                     let ty, bindings = bind pattern ty in
                     Ok (Some (pattern, ty), bindings)
-                | _ -> Error.error "polymorphic variant pattern expects at most one payload" in
+                | _ -> Error.error ~code:Error_code.Arity "polymorphic variant pattern expects at most one payload" in
               Result.bind payload (fun (payload, bindings) ->
                 let names = List.map fst bindings in
                 let shadowed = List.filter (fun (name, _) -> List.mem name names) params in
@@ -5418,7 +5418,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                   let params = List.remove_assoc name params in
                   match shadowed with None -> params | Some ty -> (name, ty) :: params in
                 infer params tags rest)
-          | _ -> Error.error "invalid polymorphic variant pattern" in
+          | _ -> Error.error ~code:Error_code.Invalid_form "invalid polymorphic variant pattern" in
         infer params (Option.fold ~none:[] ~some:(fun row -> row.tags) initial) clauses
     | _ -> infer_nominal_match params target clauses
   and infer_nominal_match params target clauses =
@@ -6429,7 +6429,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                          (name, Type_solver.apply substitutions ty))
                        params)
               | Error _ ->
-                  Error.error "compare arguments must have the same type"
+                  Error.error ~code:Error_code.Arity "compare arguments must have the same type"
             in
             let rec add_comparable = function
               | TConstraint (Comparable_constraint _value_ty) as ty ->
@@ -7343,7 +7343,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
     | FList [ FSymbol "satisfies?"; FSymbol protocol_name; FSymbol receiver ]
       -> (
         match lookup_protocol_constraint protocol_name with
-        | None -> Error.error ("unknown protocol " ^ protocol_name)
+        | None -> Error.error ~code:Error_code.Unresolved ("unknown protocol " ^ protocol_name)
         | Some _ when Protocol_id.name (Protocol_id.of_string protocol_name) = "ISequential" ->
             constrain_optional_sequential TUnknown params receiver
         | Some constraint_ty ->
@@ -9082,7 +9082,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
                   let current = state local_params and next = state inferred in
                   if current = next then Ok inferred
                   else if List.mem next seen then
-                    Error.error "local parameter type constraints do not converge"
+                    Error.error ~code:Error_code.Inference "local parameter type constraints do not converge"
                   else infer_local (current :: seen) inferred)
             in
             Result.map
@@ -9303,7 +9303,7 @@ let infer_params ?expected_return_ty ?(materialize_open_equality = false)
         let current = state params and next = state inferred in
         if current = next then Ok inferred
         else if List.mem next seen then
-          Error.error "parameter type constraints do not converge"
+          Error.error ~code:Error_code.Inference "parameter type constraints do not converge"
         else stabilize (current :: seen) inferred))
   in
   Result.map

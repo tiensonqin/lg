@@ -57,7 +57,7 @@ let resolve_manifests items =
 
 let apply
     ?(resolve_module =
-      fun name -> Error.error ("unknown module signature " ^ name)) constraints
+      fun name -> Error.error ~code:Error_code.Unresolved ("unknown module signature " ^ name)) constraints
     items =
   let rec apply items = function
     | [] -> Ok (resolve_manifests items)
@@ -89,7 +89,7 @@ let apply
         in
         match nested with
         | None ->
-            Error.error ("unknown constrained signature module " ^ module_name)
+            Error.error ~code:Error_code.Unresolved ("unknown constrained signature module " ^ module_name)
         | Some (source_name, location, nested) ->
             Result.bind nested (fun nested ->
                 Result.bind
@@ -141,11 +141,11 @@ let apply
             items
         in
         match declaration with
-        | None -> Error.error ("unknown constrained signature type " ^ name)
+        | None -> Error.error ~code:Error_code.Unresolved ("unknown constrained signature type " ^ name)
         | Some parameters
           when List.length parameters
                <> List.length constraint_.constrained_parameters ->
-            Error.error
+            Error.error ~code:Error_code.Type_mismatch
               ("signature type constraint parameter arity mismatch for " ^ name)
         | Some _ ->
             let items =

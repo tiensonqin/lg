@@ -167,7 +167,7 @@ let resolve_var_symbol_name scope env name =
         else resolved_owner
       in
       Ok (output_owner ^ "/" ^ member)
-    else Error.error ("unknown var " ^ alias ^ "/" ^ member)
+    else Error.error ~code:Error_code.Unresolved ("unknown var " ^ alias ^ "/" ^ member)
   in
   match String.rindex_opt name '/' with
   | Some separator ->
@@ -187,7 +187,7 @@ let resolve_var_symbol_name scope env name =
           Ok (Names.scoped_key (core_var_symbol_namespace env) name)
       | Some _, _ -> Ok local
       | None, Some _ -> Ok (Names.scoped_key (core_var_symbol_namespace env) name)
-      | None, None -> Error.error ("unknown var " ^ name))
+      | None, None -> Error.error ~code:Error_code.Unresolved ("unknown var " ^ name))
 
 let is_java_namespace name =
   String.starts_with ~prefix:"java." name
@@ -200,7 +200,7 @@ let is_java_type_name name =
        [ "ClassCastException"; "Comparable"; "Iterable"; "Number"; "Object" ]
 
 let java_interop_error name =
-  Error.error
+  Error.error ~code:Error_code.Unsupported
     ("Java interop is not supported; use static LG types and functions ("
    ^ name ^ ")")
 
@@ -1504,7 +1504,7 @@ let rec compile_static_hash_capability env value =
           compile_static_collection_hash_capability env
             "Lg_runtime.Runtime_hash.hash_unordered" value
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             ("hash requires a statically supported type, got "
            ^ Types.source_name value_ty)))
 
@@ -1513,7 +1513,7 @@ and compile_static_collection_hash_capability env hash_name value =
     (fun (element_ty, sequence) ->
       match element_ty with
       | TUnknown | TMeta _ | TVar _ ->
-          Error.error "hash requires a closed collection element type"
+          Error.error ~code:Error_code.Arity "hash requires a closed collection element type"
       | element_ty ->
           let item_name = "__lg_hash_item" in
           let item = typed_ir element_ty (Semantic_ir.Ident item_name) in
@@ -1535,7 +1535,7 @@ and compile_static_collection_hash_capability env hash_name value =
 let compile_static_compare_capability env left right =
   let value_ty = Types.constraint_value_type left.ty in
   if not (Types.equal value_ty (Types.constraint_value_type right.ty)) then
-    Error.error
+    Error.error ~code:Error_code.Arity
       ("compare arguments must have the same type: "
      ^ Types.source_name value_ty ^ " and "
      ^ Types.source_name (Types.constraint_value_type right.ty))
@@ -1551,7 +1551,7 @@ let compile_static_compare_capability env left right =
           (Semantic_ir.Apply
              ( Semantic_ir.Ident ocaml_name,
                [ constrained_argument_value left; constrained_argument_value right ] ))
-    | Some _ -> Error.error "IComparable/-compare has an invalid signature"
+    | Some _ -> Error.error ~code:Error_code.Invalid_form "IComparable/-compare has an invalid signature"
     | None ->
         let rec comparable_type = function
           | TInt | TFloat | TChar | TString | TSymbol | TKeyword | TBool ->
@@ -1600,7 +1600,7 @@ let compile_static_compare_capability env left right =
                ( Semantic_ir.Ident "Stdlib.compare",
                  [ constrained_argument_value left; constrained_argument_value right ] ))
         else
-          Error.error
+          Error.error ~code:Error_code.Semantic
             "compare expects one concrete comparable type; define a closed sum \
              type and match its cases explicitly for a heterogeneous domain"
 
@@ -1630,7 +1630,7 @@ let compile_static_array_index value =
           (Semantic_ir.Apply
              (Semantic_ir.Ident "int_of_float", [ expression ]))
       else
-        Error.error
+        Error.error ~code:Error_code.Interop
           ("array index requires int or float, got " ^ Types.source_name value_ty)
 
 let dynamic_boundary_error_message direction ty =
@@ -1736,7 +1736,7 @@ let argument_type_mismatch_error ~context ~callee ~index ~expected argument =
     | Conditional_branch | Record_property _ | Annotation | Host_boundary _ ->
         ""
   in
-  Error.error ~title:"ARGUMENT TYPE MISMATCH"
+  Error.error ~code:Error_code.Arity ~title:"ARGUMENT TYPE MISMATCH"
     ?location:(semantic_expression_location argument.semantic_expr)
     ~type_mismatch:
       (Error.type_mismatch ~context
@@ -1757,7 +1757,7 @@ let dynamic_unpack env ty expression =
   let ty = resolve_named_record_application env ty in
   match dynamic_boundary_error_message `Unpack ty with
   | Some message ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         ?location:(semantic_expression_location expression)
         (message ^ "; got " ^ Types.source_name ty ^ " while unpacking")
   | None ->
@@ -1790,7 +1790,7 @@ let dynamic_optional_lookup_unpack env expected expression =
 let pack_dynamic_value _env expected_dynamic argument =
   match dynamic_boundary_error_message `Pack argument.ty with
   | Some message ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         ?location:(semantic_expression_location argument.semantic_expr)
         (message ^ "; got " ^ Types.source_name argument.ty
        ^ " while packing")
@@ -1878,7 +1878,7 @@ let rec pack_metadata_expression
                (Semantic_ir.Apply
                   (Semantic_ir.Ident adapter, arguments)))
       | _ ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             "exception-data fields adapter requires a record value")
   | None -> (
   match value_ty with
@@ -2056,7 +2056,7 @@ let rec pack_metadata_expression
                    ( Semantic_ir.Ident "Lg_runtime.Runtime_metadata.of_map",
                      [ key_mapper; value_mapper; expression ] )))
       | None ->
-          Error.error
+          Error.error ~code:Error_code.Arity
             ("metadata requires a closed EDN-compatible static value; got "
             ^ Types.source_name ty)))
 
@@ -2142,7 +2142,7 @@ let rec unpack_metadata_expression ty expression =
                    ( Semantic_ir.Ident "Lg_runtime.Runtime_metadata.map_value",
                      [ key_decoder; value_decoder; expression ] )))
       | None ->
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("metadata lookup cannot decode " ^ Types.source_name ty))
 
 and metadata_decoder ty =
@@ -2483,7 +2483,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
           (fun packed -> Semantic_ir.Tuple [ witness; packed ])
           (pack_constrained_value env value_ty argument)
       | Error _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           ("exception data requires an EDN-compatible value, got "
          ^ Types.source_name witness_value_ty))
   | expected, actual
@@ -2553,7 +2553,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
             (Semantic_ir.Apply
                (Semantic_ir.Ident "int_of_float", [ value.semantic_expr ]))
         else
-          Error.error
+          Error.error ~code:Error_code.Semantic
             ("array index requires int or float, got "
            ^ Types.source_name witness_value_ty)
       in
@@ -2683,7 +2683,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
             Result.map
               (fun methods -> method_ty :: methods)
               (witness_method_types rest)
-        | _ -> Error.error "invalid protocol witness type"
+        | _ -> Error.error ~code:Error_code.Protocol "invalid protocol witness type"
       in
       let rec adapt_witness_method expected_ty (implementation : binding) =
         match (expected_ty, implementation.ty) with
@@ -2710,12 +2710,12 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
               | expected :: rest -> (
                   match find_actual expected with
                   | None ->
-                      Error.error
+                      Error.error ~code:Error_code.Protocol
                         "protocol witness implementation is missing an arity"
                   | Some (index, actual) -> (
                       match List.nth_opt implementation.overload_targets index with
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Protocol
                             "protocol witness implementation is missing an overload target"
                       | Some ocaml_name ->
                           let selected =
@@ -2820,7 +2820,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
                   Result.bind adapted_value (fun adapted_value ->
                       adapt_parameters (adapted_value :: adapted) expected
                         actual names)
-              | _ -> Error.error "protocol witness method arity mismatch"
+              | _ -> Error.error ~code:Error_code.Protocol "protocol witness method arity mismatch"
             in
             Result.bind
               (adapt_parameters [] expected_params actual_params
@@ -2951,7 +2951,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
                         adapted_result ))
                   adapted_result)
         | _ ->
-            Error.error "protocol witness implementation type mismatch"
+            Error.error ~code:Error_code.Protocol "protocol witness implementation type mismatch"
       in
       let witness =
         match projected_protocol with
@@ -2968,7 +2968,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
                 else
                 match Types.constraint_value_type argument.ty with
                 | TNamed_record record ->
-                    Error.error
+                    Error.error ~code:Error_code.Protocol
                       ("missing protocol implementation for "
                       ^ Protocol_id.to_string protocol_id
                       ^ " on " ^ Type_id.to_string record.type_id)
@@ -3005,7 +3005,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
                         (fun method_ ->
                           adapt_methods (method_ :: adapted) expected_rest
                             implementation_rest)
-                  | _ -> Error.error "protocol witness method count mismatch"
+                  | _ -> Error.error ~code:Error_code.Protocol "protocol witness method count mismatch"
                 in
                 Result.bind (witness_method_types witness_ty)
                   (fun method_tys ->
@@ -3489,7 +3489,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
                                       "Lg_runtime.Runtime_seq.map",
                                     [ mapper; sequence ] ))
                       | Ok (actual_element, _) ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             ("cannot store seqable element "
                             ^ Types.source_name actual_element ^ " as "
                             ^ Types.source_name stored_element)
@@ -3568,7 +3568,7 @@ and pack_constrained_value_with_plan ?row_type_name ?sequence_plan
 and project_constraint_row ?named_record env type_name expected_fields argument =
   let type_name = row_call_type_name type_name in
   match Types.record_fields argument.ty with
-  | None -> Error.error "constraint row projection expects a record value"
+  | None -> Error.error ~code:Error_code.Arity "constraint row projection expects a record value"
   | Some actual_fields ->
       let rec build values = function
         | [] -> Ok (List.rev values)
@@ -3593,7 +3593,7 @@ and project_constraint_row ?named_record env type_name expected_fields argument 
                   :: values)
                   rest
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   ("constraint row projection is missing field "
                   ^ expected.keyword)
             | Some actual ->
@@ -3798,7 +3798,7 @@ let unwrap_optional_argument expected argument =
 
 let pack_optional_dynamic_argument env expected argument =
   match optional_payload expected with
-  | None -> Error.error "expected an optional dynamic argument"
+  | None -> Error.error ~code:Error_code.Arity "expected an optional dynamic argument"
   | Some expected_inner -> (
       match argument.ty with
       | TNil -> Ok (Semantic_ir.Constructor ("None", None))
@@ -3998,7 +3998,7 @@ let adapt_every_special_arity env expected actual =
                          invalid_predicate );
                      ] )))
             (Collection_capability.first_expr env collection)))
-  | _ -> Error.error "not a non-callable every? empty-collection adapter"
+  | _ -> Error.error ~code:Error_code.Semantic "not a non-callable every? empty-collection adapter"
 
 let function_has_host_int_return_boundary expected actual =
   match (expected, actual) with
@@ -4096,7 +4096,7 @@ let rec adapt_value_to_type env expected actual =
           let value = typed_ir expected_ty (Semantic_ir.Ident name) in
           Result.bind (adapt_value_to_type env actual_ty value) (fun value ->
               adapt_parameters (value :: adapted) expected actual_params names)
-      | _ -> Error.error "reduced callback parameter arity mismatch"
+      | _ -> Error.error ~code:Error_code.Type_mismatch "reduced callback parameter arity mismatch"
     in
     Result.map
       (fun arguments ->
@@ -4177,7 +4177,7 @@ let rec adapt_value_to_type env expected actual =
             (fun argument ->
               adapt_parameters (argument :: adapted) expected_rest actual_rest
                 names)
-      | _ -> Error.error "truthy callback parameter arity mismatch"
+      | _ -> Error.error ~code:Error_code.Type_mismatch "truthy callback parameter arity mismatch"
     in
     Result.bind
       (adapt_parameters [] expected_params actual_params parameter_names)
@@ -4365,7 +4365,7 @@ let rec adapt_value_to_type env expected actual =
              | Some _ | None -> None)
     in
     (match selected with
-    | None -> Error.error "overloaded callback has no compatible arity"
+    | None -> Error.error ~code:Error_code.Arity "overloaded callback has no compatible arity"
     | Some (arity_index, arity, actual_params) ->
         let source_name = "__lg_overloaded_callback_adapter" in
         let source =
@@ -4389,7 +4389,7 @@ let rec adapt_value_to_type env expected actual =
                 (fun argument ->
                   adapt_arguments (argument :: adapted) expected_rest
                     actual_rest names)
-          | _ -> Error.error "overloaded callback argument mismatch"
+          | _ -> Error.error ~code:Error_code.Type_mismatch "overloaded callback argument mismatch"
         in
         Result.bind
           (adapt_arguments [] expected_params actual_params argument_names)
@@ -4464,7 +4464,7 @@ let rec adapt_value_to_type env expected actual =
       | expected :: expected_rest -> (
           match matching_overloaded_arity expected actual_arities with
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Internal
                 "internal overloaded function adapter mismatch"
           | Some (actual_index, actual_arity) ->
               let selected =
@@ -4566,7 +4566,7 @@ let rec adapt_value_to_type env expected actual =
                 (fun argument ->
                   adapt_arguments (argument :: adapted) expected_rest
                     actual_rest names)
-          | _ -> Error.error "internal callback argument mismatch"
+          | _ -> Error.error ~code:Error_code.Type_mismatch "internal callback argument mismatch"
         in
         Result.bind
           (adapt_arguments [] expected_params actual_params argument_names)
@@ -4685,7 +4685,7 @@ let rec adapt_value_to_type env expected actual =
                 (fun value ->
                   adapt_fields ((expected_field, value) :: values) rest)
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 ("record argument is missing field " ^ expected_field.keyword)
           | Some actual_field ->
               let value =
@@ -4765,7 +4765,7 @@ let rec adapt_value_to_type env expected actual =
                 (fun value ->
                   adapt_fields ((expected_field, value) :: values) rest)
           | None ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 ("record argument is missing field " ^ expected_field.keyword)
           | Some actual_field ->
               let value =
@@ -5280,7 +5280,7 @@ let rec compile_record_iequiv_pair scope env left right =
                 (Semantic_ir.Apply
                    (Semantic_ir.Ident ocaml_name, [ left; right ])))
             (adapt right_ty right))
-  | Some _ -> Error.error "IEquiv/-equiv has an invalid signature"
+  | Some _ -> Error.error ~code:Error_code.Invalid_form "IEquiv/-equiv has an invalid signature"
   | None -> Ok None
 
 let compile_equality scope env args =
@@ -5621,7 +5621,7 @@ let compile_equality scope env args =
             | Ok left_module, Ok "Lg_runtime.Runtime_poly_set"
               when not (String.equal left_module "Lg_runtime.Runtime_poly_set") ->
                 Ok left_module
-            | Ok _, Ok _ -> Error.error "set equality storage mismatch"
+            | Ok _, Ok _ -> Error.error ~code:Error_code.Type_mismatch "set equality storage mismatch"
             | (Error _ as error), _ | _, (Error _ as error) -> error
           in
           Some
@@ -5752,7 +5752,7 @@ let typed_row_argument_unshared env type_name expected_fields argument =
           | [] -> Ok (List.rev fields)
           | (field : field) :: rest ->
               if Types.is_record_extension_field field then
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "cannot project a runtime map into an open row"
               else
                 let key =
@@ -5879,7 +5879,7 @@ let typed_row_argument_unshared env type_name expected_fields argument =
 	                  (fun value ->
 	                    build ((expected.ocaml_name, value) :: values) rest)
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("record argument is missing field " ^ expected.keyword)
             | Some actual ->
                 let actual_value =
@@ -5991,7 +5991,7 @@ let rec emit_argument_adaptation env adaptation argument =
           in
           emit_argument_adaptation env adaptation
             (typed_ir payload_ty payload_expression)
-      | None -> Error.error "internal optional unwrap source mismatch")
+      | None -> Error.error ~code:Error_code.Type_mismatch "internal optional unwrap source mismatch")
   | Adaptation.Protocol_storage_passthrough -> Ok argument.semantic_expr
   | Adaptation.Unit_after_effect ->
       Ok (Semantic_ir.Sequence [ argument.semantic_expr; Semantic_ir.Unit ])
@@ -6035,7 +6035,7 @@ let rec emit_argument_adaptation env adaptation argument =
                   (fun element ->
                     emit (element :: emitted) type_rest adaptation_rest
                       name_rest)
-            | _ -> Error.error "internal tuple adaptation plan mismatch"
+            | _ -> Error.error ~code:Error_code.Internal "internal tuple adaptation plan mismatch"
           in
           Result.map
             (fun elements ->
@@ -6047,7 +6047,7 @@ let rec emit_argument_adaptation env adaptation argument =
                       Semantic_ir.Tuple elements );
                   ] ))
             (emit [] actual_elements adaptations names)
-      | _ -> Error.error "internal tuple adaptation source mismatch")
+      | _ -> Error.error ~code:Error_code.Internal "internal tuple adaptation source mismatch")
   | Adaptation.Tuple_to_vector tuple -> (
       match Types.constraint_value_type argument.ty with
       | TTuple actual_elements
@@ -6068,7 +6068,7 @@ let rec emit_argument_adaptation env adaptation argument =
                   (fun element ->
                     emit (element :: emitted) type_rest adaptation_rest
                       name_rest)
-            | _ -> Error.error "internal tuple-to-vector plan mismatch"
+            | _ -> Error.error ~code:Error_code.Internal "internal tuple-to-vector plan mismatch"
           in
           Result.map
             (fun elements ->
@@ -6082,7 +6082,7 @@ let rec emit_argument_adaptation env adaptation argument =
                     ( Semantic_ir.Ident "Rrbvec.of_list",
                       [ Semantic_ir.List elements ] ) ))
             (emit [] actual_elements tuple.element_adaptations names)
-      | _ -> Error.error "internal tuple-to-vector source mismatch")
+      | _ -> Error.error ~code:Error_code.Internal "internal tuple-to-vector source mismatch")
   | Adaptation.Callback callback ->
       incr function_adapter_counter;
       let adapter_index = !function_adapter_counter in
@@ -6122,7 +6122,7 @@ let rec emit_argument_adaptation env adaptation argument =
               (fun emitted_argument ->
                 emit_arguments (emitted_argument :: emitted) expected_rest
                   actual_rest adaptation_rest name_rest)
-        | _ -> Error.error "internal callback adaptation plan mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "internal callback adaptation plan mismatch"
       in
       Result.bind
         (emit_arguments [] callback.expected_params callback.actual_params
@@ -6183,7 +6183,7 @@ let rec emit_argument_adaptation env adaptation argument =
               (fun emitted_argument ->
                 emit_arguments (emitted_argument :: emitted) adaptation_rest
                   value_rest)
-        | _ -> Error.error "internal constrained callback plan mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "internal constrained callback plan mismatch"
       in
       Result.bind
         (emit_arguments [] callback.argument_adaptations incoming)
@@ -6255,7 +6255,7 @@ let rec emit_argument_adaptation env adaptation argument =
               match callable.result_adaptation with
               | Some adaptation ->
                   emit_argument_adaptation env adaptation lookup
-              | None -> Error.error "internal callable map result mismatch"
+              | None -> Error.error ~code:Error_code.Internal "internal callable map result mismatch"
           in
           Result.map
             (fun result ->
@@ -6263,7 +6263,7 @@ let rec emit_argument_adaptation env adaptation argument =
             result)
   | Adaptation.Record_callable callable -> (
       match argument.record_values with
-      | None -> Error.error "internal callable record values are unavailable"
+      | None -> Error.error ~code:Error_code.Internal "internal callable record values are unavailable"
       | Some values ->
           let key_name = "__lg_callable_record_key" in
           let find_value (field : field) =
@@ -6277,7 +6277,7 @@ let rec emit_argument_adaptation env adaptation argument =
             | [], [] -> Ok (List.rev bindings, List.rev clauses)
             | (field : field) :: rest, adaptation :: adaptation_rest -> (
                 match find_value field with
-                | None -> Error.error "internal callable record field mismatch"
+                | None -> Error.error ~code:Error_code.Internal "internal callable record field mismatch"
                 | Some (_, value) ->
                     let value_name =
                       "__lg_callable_record_value_" ^ string_of_int index
@@ -6297,7 +6297,7 @@ let rec emit_argument_adaptation env adaptation argument =
                           ((Semantic_ir.PVar value_name, value) :: bindings)
                           ((Semantic_ir.PString field.keyword, result) :: clauses)
                           rest adaptation_rest))
-            | _ -> Error.error "internal callable record plan mismatch"
+            | _ -> Error.error ~code:Error_code.Internal "internal callable record plan mismatch"
           in
           let adaptations =
             if callable.truthy_result then
@@ -6315,7 +6315,7 @@ let rec emit_argument_adaptation env adaptation argument =
                       emit_argument_adaptation env adaptation
                         (typed_ir TNil Semantic_ir.Unit)
                   | None ->
-                      Error.error "internal callable record missing-key mismatch"
+                      Error.error ~code:Error_code.Internal "internal callable record missing-key mismatch"
               in
               Result.map
                 (fun missing ->
@@ -6440,7 +6440,7 @@ let rec emit_argument_adaptation env adaptation argument =
       let emit_fixed_to_variadic expected argument_adaptations
           result_adaptation =
         match expected.rest_param with
-        | None -> Error.error "internal variadic overload plan mismatch"
+        | None -> Error.error ~code:Error_code.Type_mismatch "internal variadic overload plan mismatch"
         | Some rest_ty ->
             let fixed_count = List.length expected.fixed_params in
             let extra_count = List.length overload.actual_params - fixed_count in
@@ -6472,7 +6472,7 @@ let rec emit_argument_adaptation env adaptation argument =
                     (fun emitted_argument ->
                       emit_arguments (emitted_argument :: emitted)
                         adaptation_rest value_rest)
-              | _ -> Error.error "internal variadic overload plan mismatch"
+              | _ -> Error.error ~code:Error_code.Type_mismatch "internal variadic overload plan mismatch"
             in
             Result.bind
               (emit_arguments [] argument_adaptations incoming)
@@ -6569,7 +6569,7 @@ let rec emit_argument_adaptation env adaptation argument =
               (fun emitted_argument ->
                 emit_arguments (emitted_argument :: emitted) adaptation_rest
                   value_rest)
-        | _ -> Error.error "internal overloaded callback plan mismatch"
+        | _ -> Error.error ~code:Error_code.Internal "internal overloaded callback plan mismatch"
       in
       Result.bind
         (emit_arguments [] callback.argument_adaptations incoming)
@@ -6616,7 +6616,7 @@ let rec emit_argument_adaptation env adaptation argument =
             else
               match callback.result_adaptation with
               | Some adaptation -> emit_argument_adaptation env adaptation result
-              | None -> Error.error "internal overloaded callback result mismatch"
+              | None -> Error.error ~code:Error_code.Internal "internal overloaded callback result mismatch"
           in
           Result.map
             (fun body ->
@@ -6647,7 +6647,7 @@ let rec emit_argument_adaptation env adaptation argument =
               (fun emitted_argument ->
                 emit_arguments (emitted_argument :: emitted) adaptation_rest
                   value_rest)
-        | _ -> Error.error "internal reduced callback plan mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "internal reduced callback plan mismatch"
       in
       Result.bind
         (emit_arguments [] callback.argument_adaptations incoming)
@@ -6923,7 +6923,7 @@ let rec emit_argument_adaptation env adaptation argument =
                Result.map
                  (fun error -> Semantic_ir.Match (argument.semantic_expr, [ success; error ]))
                  (branch "Error" error_ty error))
-       | _ -> Error.error "result adaptation requires a result value")
+       | _ -> Error.error ~code:Error_code.Type_mismatch "result adaptation requires a result value")
   | Adaptation.Optional_map adaptation
   | Adaptation.Option_boundary adaptation ->
       let value_ty = Types.constraint_value_type argument.ty in
@@ -7322,13 +7322,13 @@ let plan_and_emit_argument_with_options env ?row_type_name
   with
   | Ok adaptation -> emit_argument_adaptation env adaptation argument
   | Error (Adaptation.Missing_row_field keyword) ->
-      Error.error ("record argument is missing field " ^ keyword)
+      Error.error ~code:Error_code.Arity ("record argument is missing field " ^ keyword)
   | Error (Adaptation.Incompatible_row_field { keyword; expected; actual }) ->
-      Error.error
+      Error.error ~code:Error_code.Type_mismatch
         ("record field " ^ keyword ^ " cannot adapt " ^ Types.source_name actual
        ^ " to " ^ Types.source_name expected)
   | Error (Adaptation.Non_seqable actual) ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         ("collection value is not seqable: " ^ Types.source_name actual)
   | Error
       (Adaptation.Incompatible_types
@@ -7339,7 +7339,7 @@ let plan_and_emit_argument_with_options env ?row_type_name
            heterogeneous collection storage such as Lg_edn_backend.t Seq.t"
         else ""
       in
-      Error.error
+      Error.error ~code:Error_code.Type_mismatch
         ("cannot adapt " ^ Types.source_name failed_actual ^ " to "
        ^ Types.source_name failed_expected ^ closed_sum_hint)))))
 
@@ -7442,7 +7442,7 @@ let adapt_nullable_callback env expected arg =
             in
             Result.bind adapted (fun expression ->
                 adapt_parameters (expression :: acc) expected actual names)
-        | _ -> Error.error "callback parameter arity mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "callback parameter arity mismatch"
       in
       Result.bind
         (adapt_parameters [] expected_params actual_params parameter_names)
@@ -7593,7 +7593,7 @@ let adapt_dynamic_callback env expected arg =
                             (plan_and_emit_argument env
                                ~expected:actual_field.ty field)
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             ("callback argument is missing field "
                            ^ actual_field.keyword)
                     in
@@ -7617,7 +7617,7 @@ let adapt_dynamic_callback env expected arg =
             in
             Result.bind adapted (fun expression ->
                 adapt_parameters (expression :: acc) expected actual names)
-        | _ -> Error.error "callback parameter arity mismatch"
+        | _ -> Error.error ~code:Error_code.Type_mismatch "callback parameter arity mismatch"
       in
       Result.bind
         (adapt_parameters [] expected_params actual_params parameter_names)
@@ -7679,7 +7679,7 @@ let compile_protocol_swap ~compile_expr scope env swap_name reference
   let reference_ty = reference.ty in
   let public_name = if swap_name = "__lg_swap!" then "swap!" else swap_name in
   let type_error () =
-    Error.error
+    Error.error ~code:Error_code.Arity
       (public_name ^ " expects a reference or ISwap as its first argument")
   in
   if swap_name <> "__lg_swap!" then type_error ()
@@ -7728,7 +7728,7 @@ let compile_protocol_swap ~compile_expr scope env swap_name reference
                                [ receiver; updater ] )))
                       (plan_and_emit_argument env ~expected:receiver_ty
                          reference))))
-    | Some _ -> Error.error "ISwap/-swap! has an invalid signature"
+    | Some _ -> Error.error ~code:Error_code.Invalid_form "ISwap/-swap! has an invalid signature"
 
 
 
@@ -7810,7 +7810,7 @@ let create ~compile_expr =
             Ok (owner ^ "/" ^ member)
         | _ -> Ok (Names.scoped_key scope name))
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           "multimethod introspection currently expects a multimethod symbol"
   in
   let compile_cljs_test_report_call scope env arg_forms =
@@ -7841,7 +7841,7 @@ let create ~compile_expr =
                       Semantic_ir.Unit;
                     ]))
         | (Error _ as error), _ | _, (Error _ as error) -> error)
-    | _ -> Error.error "cljs.test/report expects one report event"
+    | _ -> Error.error ~code:Error_code.Arity "cljs.test/report expects one report event"
   in
   let rec stringify_value scope env ~pr ?(print_context = true) ?print_length
       ?print_level value =
@@ -8214,9 +8214,9 @@ let create ~compile_expr =
       if
         not
           (Types.equal writer.ty (TOcaml "Buffer.t") || unresolved_ty writer.ty)
-      then Error.error (name ^ " expects a Buffer.t writer")
+      then Error.error ~code:Error_code.Arity (name ^ " expects a Buffer.t writer")
       else if not (Types.equal options.ty TNil || unresolved_ty options.ty)
-      then Error.error (name ^ " options must be nil")
+      then Error.error ~code:Error_code.Semantic (name ^ " options must be nil")
       else Ok ()
     in
     match (name, args) with
@@ -8239,7 +8239,7 @@ let create ~compile_expr =
               if Types.equal prefix.ty TString || unresolved_ty prefix.ty then
                 Ok prefix.semantic_expr
               else if Types.equal prefix.ty TNil then Ok (Semantic_ir.String "")
-              else Error.error "__lg_print-prefix-map prefix must be string or nil"
+              else Error.error ~code:Error_code.Semantic "__lg_print-prefix-map prefix must be string or nil"
             in
             Result.map
               (fun prefix ->
@@ -8261,7 +8261,7 @@ let create ~compile_expr =
                        ],
                        write writer rendered )))
               prefix_expr)
-    | _ -> Error.error (name ^ " expects map, printer, writer, and options")
+    | _ -> Error.error ~code:Error_code.Arity (name ^ " expects map, printer, writer, and options")
   in
   let compile_print_meta_call scope env args =
     let option_meta_flag options =
@@ -8288,7 +8288,7 @@ let create ~compile_expr =
           | None -> Ok (Semantic_ir.Bool false)
           | Some (field, value) when Types.equal field.ty TBool ->
               Ok value
-          | Some _ -> Error.error "print-meta? :meta option must be bool")
+          | Some _ -> Error.error ~code:Error_code.Semantic "print-meta? :meta option must be bool")
       | ty, _ when Option.is_some (Types.dynamic_map_types ty) -> (
           match Types.dynamic_map_types ty with
           | Some (key_ty, value_ty)
@@ -8301,8 +8301,8 @@ let create ~compile_expr =
                        Semantic_ir.String ":meta";
                        Semantic_ir.Bool false;
                      ] ))
-          | _ -> Error.error "print-meta? options must be {:meta bool}")
-      | _ -> Error.error "print-meta? options must be nil or {:meta bool}"
+          | _ -> Error.error ~code:Error_code.Semantic "print-meta? options must be {:meta bool}")
+      | _ -> Error.error ~code:Error_code.Semantic "print-meta? options must be nil or {:meta bool}"
     in
     let metadata_expr value =
       match value.ty with
@@ -8347,7 +8347,7 @@ let create ~compile_expr =
                           Semantic_ir.Apply
                             ( Semantic_ir.Ident "Lg_runtime.Runtime_edn.is_nil",
                               [ metadata ] ) ) ))))
-    | _ -> Error.error "print-meta? expects options and value"
+    | _ -> Error.error ~code:Error_code.Arity "print-meta? expects options and value"
   in
   let rec parse_ocaml_argument_forms forms =
     Ocaml_signature.parse_argument_forms forms
@@ -8595,11 +8595,11 @@ let create ~compile_expr =
                      with
                     | Ok _ as result -> result
                     | Error _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           ("transient expects a set, vector, or map, got "
                          ^ source_name map_type)))
             ))
-    | _ -> Error.error "transient expects 1 argument"
+    | _ -> Error.error ~code:Error_code.Arity "transient expects 1 argument"
   and compile_conj_bang scope env = function
     | [] -> compile_transient scope env [ FVector [] ]
     | [ collection_form ] -> compile_expr scope env collection_form
@@ -8639,11 +8639,11 @@ let create ~compile_expr =
                     then pack_dynamic_value env expected actual
                     else if Types.same_shape expected actual.ty then
                       Ok actual.semantic_expr
-                    else Error.error "incompatible transient map entry"
+                    else Error.error ~code:Error_code.Type_mismatch "incompatible transient map entry"
                   in
                   (match (adapt key_type key, adapt value_type value) with
                   | Error _, _ | _, Error _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         ("conj! map entry types must match transient map: \
                           expected "
                        ^ Types.source_name key_type ^ " and "
@@ -8781,10 +8781,10 @@ let create ~compile_expr =
                       ( ("Lg_runtime.Runtime_transient.set"
                         | "Lg_runtime.Runtime_transient.vector"),
                         _ ) ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         "conj! value type must match transient element type"
                   | _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         ("conj! expects a transient set or vector, got "
                        ^ source_name collection.ty))
               )
@@ -8795,7 +8795,7 @@ let create ~compile_expr =
                 | Error _ as error -> error
                 | Ok collection -> add_value collection value_form)
               (Ok collection) value_forms)
-    | _ -> Error.error "conj! expects a transient collection and values"
+    | _ -> Error.error ~code:Error_code.Arity "conj! expects a transient collection and values"
   and compile_get scope env arg_forms =
     let unresolved_dynamic ty =
       match Types.dynamic_constraint_info ty with
@@ -8868,7 +8868,7 @@ let create ~compile_expr =
                       (unpack_metadata_expression expected
                          (Semantic_ir.Apply
                             (Semantic_ir.Ident "Option.get", [ found ]))))
-            | _ -> Error.error "EDN metadata lookup requires a keyword key")
+            | _ -> Error.error ~code:Error_code.Arity "EDN metadata lookup requires a keyword key")
         | Ok target, Ok key when Types.is_dynamic target.ty -> (
             let expected = Types.dynamic_constraint TUnknown in
             match dynamic_scalar_value env expected key with
@@ -8936,7 +8936,7 @@ let create ~compile_expr =
                   | (Error _ as error), _ -> error
                   | _, (Error _ as error) -> error
                   | Ok _, Ok _ when Types.is_dynamic collection.ty ->
-                      Error.error
+                      Error.error ~code:Error_code.Interop
                         "assoc! requires a statically typed transient map or \
                          vector"
                   | Ok key, Ok value -> (
@@ -8966,7 +8966,7 @@ let create ~compile_expr =
                              (adapt key_type key, adapt value_type value)
                            with
                           | Error _, _ | _, Error _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               ("assoc! key and value types must match \
                                 transient map: expected "
                              ^ Types.source_name key_type ^ " and "
@@ -9017,17 +9017,17 @@ let create ~compile_expr =
                                     ] )))
                             rest
                       | TOcaml_app ("Lg_runtime.Runtime_transient.vector", _) ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             "assoc! vector expects an int index and matching \
                              value"
                       | _ ->
-                          Error.error "assoc! expects a transient map or vector"
+                          Error.error ~code:Error_code.Arity "assoc! expects a transient map or vector"
                       ))
               | _ -> assert false
             in
             add_pairs initial_collection pair_forms)
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           "assoc! expects a transient collection followed by key/value pairs"
   and compile_dissoc_bang scope env = function
     | [ collection_form; key_form ] -> (
@@ -9068,7 +9068,7 @@ let create ~compile_expr =
                   else if Types.same_shape key_type key.ty then
                     Ok key.semantic_expr
                   else
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "dissoc! key type must match the transient map key type"
                 in
                 Result.map
@@ -9087,10 +9087,10 @@ let create ~compile_expr =
                            [ collection.semantic_expr; key ] )))
                   key
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("dissoc! expects a transient map, got "
                  ^ Types.source_name collection.ty)))
-    | _ -> Error.error "dissoc! expects a transient map and key"
+    | _ -> Error.error ~code:Error_code.Arity "dissoc! expects a transient map and key"
   and compile_persistent_bang scope env = function
     | [ collection_form ] -> (
         match compile_expr scope env collection_form with
@@ -9147,10 +9147,10 @@ let create ~compile_expr =
                 with
                 | Ok _ as result -> result
                 | Error _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       ("persistent! expects a transient collection, got "
                      ^ Types.source_name other_type))))
-    | _ -> Error.error "persistent! expects 1 argument"
+    | _ -> Error.error ~code:Error_code.Arity "persistent! expects 1 argument"
   and compile_apply_zip_vectors scope env constructor_form fixed_forms rest_form =
     match
       ( compile_function_arg scope env constructor_form,
@@ -9179,7 +9179,7 @@ let create ~compile_expr =
                      | TVector _ | TUnknown | TMeta _ | TVar _ -> true
                      | _ -> false)
                    fixed)
-            then Error.error "apply mapv expects vector collections"
+            then Error.error ~code:Error_code.Arity "apply mapv expects vector collections"
             else
               let element_ty =
                 fixed
@@ -9205,7 +9205,7 @@ let create ~compile_expr =
                           "Lg_runtime.Runtime_seq.zip_vectors",
                         [ collections ] )))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ("apply mapv requires a statically typed variadic vector constructor, got "
               ^ Types.source_name constructor.ty))
   and compile_mutable_field_assignment scope env keyword target_form value_form =
@@ -9272,9 +9272,9 @@ let create ~compile_expr =
             | Some _ -> (
                 match mutable_field_from_compatible_record target.ty with
                 | Some field -> compile_assignment field
-                | None -> Error.error ("field " ^ keyword ^ " is not mutable"))
-            | None -> Error.error ("unknown field " ^ keyword))
-        | _ -> Error.error "mutable field assignment expects a record value")
+                | None -> Error.error ~code:Error_code.Semantic ("field " ^ keyword ^ " is not mutable"))
+            | None -> Error.error ~code:Error_code.Unresolved ("unknown field " ^ keyword))
+        | _ -> Error.error ~code:Error_code.Arity "mutable field assignment expects a record value")
   and compile_call scope env name arg_forms =
     let name = Resolver.canonical_core_binding_name scope env name in
     let name =
@@ -9294,7 +9294,7 @@ let create ~compile_expr =
             (fun qualified_name ->
               typed_ir TSymbol (Semantic_ir.String qualified_name))
             (resolve_var_symbol_name scope env var_name)
-      | _ -> Error.error "symbol var literal expects #'var"
+      | _ -> Error.error ~code:Error_code.Arity "symbol var literal expects #'var"
     else if is_java_namespace name then java_interop_error name
     else if member_name = "->Eduction" then
       match arg_forms with
@@ -9314,7 +9314,7 @@ let create ~compile_expr =
           compile_expr scope env
             (FList
                [ FSymbol "__lg_transformer_sequence"; transducer; collection ])
-      | _ -> Error.error "->Eduction expects a transducer and collection"
+      | _ -> Error.error ~code:Error_code.Arity "->Eduction expects a transducer and collection"
     else if member_name = "__lg_defer_seq" then
       match arg_forms with
       | [ thunk_form ] -> (
@@ -9375,8 +9375,8 @@ let create ~compile_expr =
                                "Lg_runtime.Runtime_seq.defer"),
                          [ normalized_thunk ] )))
                 normalized
-          | Ok _ -> Error.error "__lg_defer_seq expects a zero-argument function")
-      | _ -> Error.error "__lg_defer_seq expects one argument"
+          | Ok _ -> Error.error ~code:Error_code.Arity "__lg_defer_seq expects a zero-argument function")
+      | _ -> Error.error ~code:Error_code.Arity "__lg_defer_seq expects one argument"
     else if member_name = "__lg_with-meta" then
       compile_metadata_call scope env member_name arg_forms
     else if member_name = "__lg_second" then
@@ -9447,7 +9447,7 @@ let create ~compile_expr =
                    ( Semantic_ir.Ident "Lg_runtime.Runtime_reduced.reduced",
                      [ value.semantic_expr ] )))
             (compile_expr scope env form)
-      | _ -> Error.error "__lg_reduced expects one argument"
+      | _ -> Error.error ~code:Error_code.Arity "__lg_reduced expects one argument"
     else
     let qualified_core = String.starts_with ~prefix:"clojure.core/" name in
     let name =
@@ -9529,7 +9529,7 @@ let create ~compile_expr =
       | [ value ] ->
           compile_expr scope env
             (FList [ FSymbol "satisfies?"; FSymbol "IMap"; value ])
-      | _ -> Error.error "map? expects 1 argument")
+      | _ -> Error.error ~code:Error_code.Arity "map? expects 1 argument")
     else
     match lookup_binding scope env name with
     | Ok binding
@@ -9539,7 +9539,7 @@ let create ~compile_expr =
         compile_named_function_call scope env name arg_forms
           | Error _
             when (not qualified_core) && Env.core_excluded ~scope name env ->
-        Error.error ("unknown function " ^ name)
+        Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)
           | Ok _ | Error _ -> (
     let compile_args () = compile_args_for scope env arg_forms in
               let constructor ?(display_name = name) ?(constructor_name = name)
@@ -9569,7 +9569,7 @@ let create ~compile_expr =
       match args with
       | Error _ as err -> err
       | Ok args when List.length args <> expected_arity ->
-          Error.error
+          Error.error ~code:Error_code.Arity
                       (display_name ^ " expects "
                       ^ string_of_int expected_arity
                       ^ " arguments")
@@ -9598,7 +9598,7 @@ let create ~compile_expr =
     | "Object." when Env.target env = Target.Native -> (
         match arg_forms with
         | [] -> Ok (typed_ir (TOcaml "unit") Semantic_ir.Unit)
-        | _ -> Error.error "Object. expects 0 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "Object. expects 0 arguments")
     | "." -> (
         match arg_forms with
                   | [
@@ -9617,7 +9617,7 @@ let create ~compile_expr =
             compile_expr scope env
                         (FList
                            (FSymbol ("." ^ method_name) :: target :: method_args))
-        | _ -> Error.error ". expects a target and method")
+        | _ -> Error.error ~code:Error_code.Arity ". expects a target and method")
     | "with-out-str" ->
         let writer_name = "__lg_with_out_str_writer" in
         let body_form =
@@ -9679,7 +9679,7 @@ let create ~compile_expr =
                             body.semantic_expr );
                     })
                   (compile_expr scope body_env body_form)
-            | Ok _ -> Error.error "binding *out* expects a writer")
+            | Ok _ -> Error.error ~code:Error_code.Arity "binding *out* expects a writer")
         | FVector bindings :: body_forms ->
             let rec compile_bindings compiled = function
               | [] -> Ok (List.rev compiled)
@@ -9708,15 +9708,15 @@ let create ~compile_expr =
                                   ((ocaml_name, value) :: compiled)
                                   rest)
                           else
-                            Error.error
+                            Error.error ~code:Error_code.Arity
                               ("binding " ^ name ^ " expects "
                              ^ Types.source_name value_ty ^ ", got "
                               ^ Types.source_name value.ty))
                   | Some _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         ("binding expects a dynamic var, got " ^ name)
-                  | None -> Error.error ("unknown dynamic var " ^ name))
-              | _ -> Error.error "binding expects symbol/value pairs"
+                  | None -> Error.error ~code:Error_code.Unresolved ("unknown dynamic var " ^ name))
+              | _ -> Error.error ~code:Error_code.Arity "binding expects symbol/value pairs"
             in
             let body_form =
               match body_forms with
@@ -9740,7 +9740,7 @@ let create ~compile_expr =
                     in
                     typed_ir body.ty expression)
                   (compile_expr scope env body_form))
-        | _ -> Error.error "binding expects a binding vector and body"
+        | _ -> Error.error ~code:Error_code.Arity "binding expects a binding vector and body"
                   )
     | "__lg_watch_redef" -> (
         match arg_forms with
@@ -9755,10 +9755,10 @@ let create ~compile_expr =
                       match Env.resolve_namespace_alias ~scope alias env with
                       | Some namespace -> lookup (namespace ^ "/" ^ member)
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Unresolved
                             ("unknown watch-redef! target " ^ name))
                   | _ ->
-                      Error.error ("unknown watch-redef! target " ^ name))
+                      Error.error ~code:Error_code.Unresolved ("unknown watch-redef! target " ^ name))
             in
             Result.bind resolved (fun binding ->
                 match
@@ -9784,7 +9784,7 @@ let create ~compile_expr =
                                       callback.semantic_expr;
                                     ] )))
                         else
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             ("watch-redef! " ^ name ^ " expects "
                            ^ Types.source_name callback_ty ^ ", got "
                            ^ Types.source_name callback.ty))
@@ -9793,7 +9793,7 @@ let create ~compile_expr =
                       (typed_ir (TFn ([], TBool))
                          (Semantic_ir.Fun ([], Semantic_ir.Bool false))))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "watch-redef! expects one function symbol and one callback")
     | "__lg_with_redefs" -> (
         match arg_forms with
@@ -9807,8 +9807,8 @@ let create ~compile_expr =
                   | [ alias; member ] -> (
                       match Env.resolve_namespace_alias ~scope alias env with
                       | Some namespace -> lookup (namespace ^ "/" ^ member)
-                      | None -> Error.error ("unknown with-redefs target " ^ name))
-                  | _ -> Error.error ("unknown with-redefs target " ^ name))
+                      | None -> Error.error ~code:Error_code.Unresolved ("unknown with-redefs target " ^ name))
+                  | _ -> Error.error ~code:Error_code.Unresolved ("unknown with-redefs target " ^ name))
             in
             let rec compile_bindings compiled = function
               | [] -> Ok (List.rev compiled)
@@ -9837,15 +9837,15 @@ let create ~compile_expr =
                                       :: compiled)
                                       rest)
                               else
-                                Error.error
+                                Error.error ~code:Error_code.Arity
                                   ("with-redefs " ^ name ^ " expects "
                                   ^ Types.source_name value_ty ^ ", got "
                                   ^ Types.source_name value.ty))
                       | None, _ | _, None ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             ("with-redefs expects a redefable var root, got "
                            ^ name)))
-              | _ -> Error.error "with-redefs expects symbol/value pairs"
+              | _ -> Error.error ~code:Error_code.Arity "with-redefs expects symbol/value pairs"
             in
             let body_form =
               match body_forms with
@@ -9869,7 +9869,7 @@ let create ~compile_expr =
                     in
                     typed_ir body.ty expression)
                   (compile_expr scope env body_form))
-        | _ -> Error.error "with-redefs expects a binding vector and body")
+        | _ -> Error.error ~code:Error_code.Arity "with-redefs expects a binding vector and body")
     | "with-open" -> (
         match arg_forms with
         | FVector bindings :: body_forms when List.length bindings mod 2 = 0 ->
@@ -9882,8 +9882,8 @@ let create ~compile_expr =
             compile_expr scope env
               (FList [ FSymbol "let"; FVector bindings; body_form ])
         | FVector _ :: _ ->
-            Error.error "with-open expects symbol/value binding pairs"
-        | _ -> Error.error "with-open expects a binding vector and body")
+            Error.error ~code:Error_code.Arity "with-open expects symbol/value binding pairs"
+        | _ -> Error.error ~code:Error_code.Arity "with-open expects a binding vector and body")
     | "js/parseInt" -> (
         match compile_args () with
         | Ok [ source; radix ]
@@ -9895,7 +9895,7 @@ let create ~compile_expr =
                     ( Semantic_ir.Ident
                         "Lg_runtime.Runtime_string.parse_int_radix",
                       [ source.semantic_expr; radix.semantic_expr ] )))
-        | Ok _ -> Error.error "js/parseInt expects a string and radix"
+        | Ok _ -> Error.error ~code:Error_code.Arity "js/parseInt expects a string and radix"
         | Error _ as error -> error)
     | "js/Error." | "IllegalArgumentException." -> (
         match compile_args () with
@@ -9905,7 +9905,7 @@ let create ~compile_expr =
                  (Semantic_ir.Constructor
                     ("Failure", Some message.semantic_expr)))
         | Ok _ ->
-            Error.error "js/Error expects a string message"
+            Error.error ~code:Error_code.Interop "js/Error expects a string message"
         | Error _ as error -> error)
     | "js/Date." -> (
         match (Env.target env, arg_forms) with
@@ -9947,9 +9947,9 @@ let create ~compile_expr =
                                       [ milliseconds ] );
                                 ] )))
         | Target.Native, [] ->
-                      Error.error
+                      Error.error ~code:Error_code.Interop
                         "js/Date is only available on JavaScript targets"
-        | _, _ -> Error.error "js/Date expects 0 arguments")
+        | _, _ -> Error.error ~code:Error_code.Arity "js/Date expects 0 arguments")
     | "current-time-millis" -> (
         match arg_forms with
         | [] ->
@@ -9974,20 +9974,20 @@ let create ~compile_expr =
               (typed_ir TInt
                  (Semantic_ir.Apply
                     (Semantic_ir.Ident conversion, [ current_time ])))
-        | _ -> Error.error "current-time-millis expects 0 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "current-time-millis expects 0 arguments")
     | "System/getProperty" -> (
         match (Env.target env, arg_forms) with
         | Target.Native, [ FString "line.separator" ] ->
             Ok (typed_ir TString (Semantic_ir.String "\n"))
         | Target.Native, [ FString property ] ->
-            Error.error
+            Error.error ~code:Error_code.Unsupported
               ("unsupported System/getProperty property " ^ property)
         | Target.Native, [ _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "System/getProperty expects a string literal property name"
         | Target.Native, _ ->
-            Error.error "System/getProperty expects 1 argument"
-        | _, _ -> Error.error "System/getProperty is only available on Native")
+            Error.error ~code:Error_code.Arity "System/getProperty expects 1 argument"
+        | _, _ -> Error.error ~code:Error_code.Semantic "System/getProperty is only available on Native")
     | "js/performance.now" -> (
         match (Env.target env, arg_forms) with
         | Target.Melange, [] ->
@@ -9996,9 +9996,9 @@ let create ~compile_expr =
                  (Semantic_ir.Apply
                     (Semantic_ir.Ident "Lg_runtime_melange.Runtime_time_melange.now", [])))
         | Target.Melange, _ ->
-            Error.error "js/performance.now expects 0 arguments"
+            Error.error ~code:Error_code.Arity "js/performance.now expects 0 arguments"
         | _, _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "js/performance.now is only available on the Melange target")
     | "js/isNaN" as function_name -> (
         match compile_args () with
@@ -10009,12 +10009,12 @@ let create ~compile_expr =
                   (Semantic_ir.Apply
                      (Semantic_ir.Ident "Float.is_nan", [ value ])))
               (plan_and_emit_argument env ~expected:TFloat value)
-        | Ok _ -> Error.error (function_name ^ " expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity (function_name ^ " expects 1 argument")
         | Error _ as error -> error)
     | "clj->js" -> (
         match compile_args () with
         | Ok [ value ] -> Ok value
-        | Ok _ -> Error.error "clj->js expects 1 argument"
+        | Ok _ -> Error.error ~code:Error_code.Arity "clj->js expects 1 argument"
         | Error _ as error -> error)
     | "__lg_protocol-value" -> (
         match arg_forms with
@@ -10023,7 +10023,7 @@ let create ~compile_expr =
               ( Protocol.find_protocol_id scope env protocol_name,
                 compile_expr scope env receiver_form )
             with
-            | None, _ -> Error.error ("unknown protocol " ^ protocol_name)
+            | None, _ -> Error.error ~code:Error_code.Unresolved ("unknown protocol " ^ protocol_name)
             | _, (Error _ as error) -> error
             | Some protocol_id, Ok receiver -> (
                 let storage_ty = Types.constraint_value_type receiver.ty in
@@ -10081,7 +10081,7 @@ let create ~compile_expr =
                             record_values = None;
                           }
                     | None -> Ok receiver)))
-        | _ -> Error.error "internal protocol narrowing expects 2 arguments")
+        | _ -> Error.error ~code:Error_code.Protocol "internal protocol narrowing expects 2 arguments")
     | "satisfies?" -> (
         match arg_forms with
         | [ FSymbol protocol_name; receiver_form ] -> (
@@ -10089,10 +10089,10 @@ let create ~compile_expr =
               ( Protocol.find_protocol_id scope env protocol_name,
                 compile_expr scope env receiver_form )
             with
-            | None, _ -> Error.error ("unknown protocol " ^ protocol_name)
+            | None, _ -> Error.error ~code:Error_code.Unresolved ("unknown protocol " ^ protocol_name)
             | _, (Error _ as error) -> error
             | Some _, Ok receiver when Types.is_dynamic receiver.ty ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "satisfies? requires a statically typed receiver; define a \
                    closed sum type for alternative receiver types"
             | Some protocol_id, Ok receiver ->
@@ -10405,7 +10405,7 @@ let create ~compile_expr =
                               [ receiver.semantic_expr; result ]))
                 in
                 Ok (typed_ir TBool expression))
-        | _ -> Error.error "satisfies? expects a protocol and value")
+        | _ -> Error.error ~code:Error_code.Protocol "satisfies? expects a protocol and value")
     | "__type-hint" -> (
         match arg_forms with
         | [ (FSymbol annotation as annotation_form); value_form ] -> (
@@ -10476,7 +10476,7 @@ let create ~compile_expr =
                                         "protocol"
                                     | _ -> "other"
                                   in
-                                  Error.error
+                                  Error.error ~code:Error_code.Semantic
                                     ("type hint does not match optional value: "
                                    ^ Types.source_name actual_type ^ " -> "
                                    ^ Types.source_name hinted_type ^ " ("
@@ -10506,7 +10506,7 @@ let create ~compile_expr =
                             Types.is_dynamic value.ty
                             && not (Types.is_dynamic hinted_type)
                           then
-                            Error.error
+                            Error.error ~code:Error_code.Invalid_form
                               "a type hint cannot narrow a dynamic value; \
                                define a closed sum type and match its \
                                constructors"
@@ -10527,7 +10527,7 @@ let create ~compile_expr =
                                       }
                                        : Error.related))
                             in
-                            Error.error ~title:"ANNOTATION TYPE MISMATCH"
+                            Error.error ~code:Error_code.Arity ~title:"ANNOTATION TYPE MISMATCH"
                               ?location:(Source_context.find value_form) ~related
                               ~type_mismatch:
                                 (Error.type_mismatch ~context:Error.Annotation
@@ -10553,7 +10553,7 @@ let create ~compile_expr =
                                     ( value.semantic_expr,
                                       Types.ocaml_name hinted_type );
                   })))
-        | _ -> Error.error "type hint expects metadata and a value")
+        | _ -> Error.error ~code:Error_code.Arity "type hint expects metadata and a value")
     | ".toByteArray" -> (
         match compile_args () with
         | Ok [ output ] when Types.equal output.ty (TOcaml "Buffer.t") ->
@@ -10562,7 +10562,7 @@ let create ~compile_expr =
                  (Semantic_ir.Apply
                     ( Semantic_ir.Ident "Buffer.contents",
                       [ output.semantic_expr ] )))
-        | Ok _ -> Error.error ".toByteArray expects a byte output stream"
+        | Ok _ -> Error.error ~code:Error_code.Arity ".toByteArray expects a byte output stream"
         | Error _ as error -> error)
     | ".getBytes" -> (
         match compile_args () with
@@ -10572,7 +10572,7 @@ let create ~compile_expr =
               (typed_ir TString
                  (Semantic_ir.Sequence
                     [ encoding.semantic_expr; value.semantic_expr ]))
-        | Ok _ -> Error.error ".getBytes expects a string and encoding"
+        | Ok _ -> Error.error ~code:Error_code.Arity ".getBytes expects a string and encoding"
         | Error _ as error -> error)
     | ".write" | "__lg_write" -> (
         match compile_args () with
@@ -10586,7 +10586,7 @@ let create ~compile_expr =
                               ( Semantic_ir.Ident
                                   "Lg_runtime.Runtime_print.write",
                       [ writer.semantic_expr; text.semantic_expr ] )))
-        | Ok _ -> Error.error (name ^ " expects a writer and string")
+        | Ok _ -> Error.error ~code:Error_code.Arity (name ^ " expects a writer and string")
         | Error _ as error -> error)
     | "__lg_pr-writer" -> (
         match compile_args () with
@@ -10599,9 +10599,9 @@ let create ~compile_expr =
               not
                 (Types.equal writer.ty (TOcaml "Buffer.t")
                 || unresolved writer.ty)
-            then Error.error "pr-writer expects a Buffer.t writer"
+            then Error.error ~code:Error_code.Arity "pr-writer expects a Buffer.t writer"
             else if not (Types.equal options.ty TNil || unresolved options.ty)
-            then Error.error "pr-writer options must be nil"
+            then Error.error ~code:Error_code.Semantic "pr-writer options must be nil"
             else
               Ok
                 (typed_ir TUnit
@@ -10612,7 +10612,7 @@ let create ~compile_expr =
                             [ writer.semantic_expr;
                               stringify_value scope env ~pr:true value;
                             ] ) )))
-        | Ok _ -> Error.error "pr-writer expects 3 arguments"
+        | Ok _ -> Error.error ~code:Error_code.Arity "pr-writer expects 3 arguments"
         | Error _ as error -> error)
     | ("__lg_print-map" | "__lg_print-prefix-map") as print_map_name -> (
         match compile_args () with
@@ -10623,17 +10623,17 @@ let create ~compile_expr =
         | Ok args -> compile_print_meta_call scope env args
         | Error _ as error -> error)
     | ".getClass" | ".getName" | ".compareTo" ->
-        Error.error
+        Error.error ~code:Error_code.Unsupported
           "Java reflection interop is not supported; use static LG types"
     | ".equals" ->
-        Error.error
+        Error.error ~code:Error_code.Interop
           "Java interop is not supported; use static LG types and functions \
            (.equals)"
     | ".getTime" -> (
         match compile_args () with
         | Ok [ ({ ty = TOcaml "__lg_date_millis"; _ } as date) ] ->
             Ok (typed_ir TInt date.semantic_expr)
-        | Ok _ -> Error.error ".getTime expects a JavaScript Date"
+        | Ok _ -> Error.error ~code:Error_code.Interop ".getTime expects a JavaScript Date"
         | Error _ as error -> error)
     | ".toString" -> (
         match arg_forms with
@@ -10653,8 +10653,8 @@ let create ~compile_expr =
                             "Lg_runtime.Runtime_string.int_to_string_radix",
                           [ value.semantic_expr; radix.semantic_expr ] )))
             | (Error _ as error), _ | _, (Error _ as error) -> error
-            | _ -> Error.error ".toString expects an int and radix")
-        | _ -> Error.error ".toString expects an int and radix")
+            | _ -> Error.error ~code:Error_code.Arity ".toString expects an int and radix")
+        | _ -> Error.error ~code:Error_code.Arity ".toString expects an int and radix")
     | map_constructor
       when Option.is_some (map_record_constructor_type_name map_constructor) -> (
         let type_name =
@@ -10795,7 +10795,7 @@ let create ~compile_expr =
                     })
                   (prepare [] record.fields)
                       | Ok _ ->
-                          Error.error (map_constructor ^ " expects 1 argument"))
+                          Error.error ~code:Error_code.Arity (map_constructor ^ " expects 1 argument"))
                   )
     | constructor_name
               when String.ends_with ~suffix:"." constructor_name
@@ -10860,7 +10860,7 @@ let create ~compile_expr =
                       compile_constructor_args (argument :: compiled) fields
                         forms)
               | _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     (constructor_name ^ " expects "
                    ^ string_of_int (List.length constructor_fields)
                    ^ " arguments")
@@ -10983,7 +10983,7 @@ let create ~compile_expr =
                             :: values)
                             fields args)
                                 | _ ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Type_mismatch
                                       "record constructor arity mismatch"
                 in
                               match prepare_values [] constructor_fields args with
@@ -11048,7 +11048,7 @@ let create ~compile_expr =
             compile_mutable_field_assignment scope env keyword target_form
               value_form
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "mutable field assignment expects a field, deftype value, and value")
     | field_access when String.starts_with ~prefix:".-" field_access -> (
         match compile_args () with
@@ -11153,22 +11153,22 @@ let create ~compile_expr =
             match (target.ty, fields) with
             | (TRecord _ | TNamed_record _), Some fields -> (
                 match find_field keyword fields with
-                | None -> Error.error ("unknown field " ^ keyword)
+                | None -> Error.error ~code:Error_code.Unresolved ("unknown field " ^ keyword)
                 | Some field ->
                     Ok
                       (typed_ir field.ty
                          (Structural_map.field_expr target field)))
                       | ty, _ when Types.is_dynamic ty ->
-                          Error.error
+                          Error.error ~code:Error_code.Semantic
                             (field_access
                            ^ " requires a statically typed record; define a \
                               closed sum type and match its constructors")
                       | ty, _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             (field_access ^ " expects a deftype value, got "
                            ^ Types.source_name ty ^ source_suffix)
                   )
-        | Ok _ -> Error.error (field_access ^ " expects 1 argument"))
+        | Ok _ -> Error.error ~code:Error_code.Arity (field_access ^ " expects 1 argument"))
     | ".map" -> (
         match arg_forms with
         | [ receiver_form; callback_form ] -> (
@@ -11176,7 +11176,7 @@ let create ~compile_expr =
             | Error _ as error -> error
             | Ok { ty = receiver_ty; semantic_expr = receiver; _ } -> (
                 match array_element_type receiver_ty with
-                | None -> Error.error ".map expects an array and a unary function"
+                | None -> Error.error ~code:Error_code.Arity ".map expects an array and a unary function"
                 | Some element_ty ->
                     let callback_env =
                       Env.with_expected_type
@@ -11203,9 +11203,9 @@ let create ~compile_expr =
                         Ok
                           (typed_ir (TArray return_ty) (apply map arguments))
                     | Ok _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           ".map expects an array and a unary function")))
-        | _ -> Error.error ".map expects an array and a unary function")
+        | _ -> Error.error ~code:Error_code.Arity ".map expects an array and a unary function")
     | ".replace" -> (
         let string_env = Env.with_expected_type (Some TString) env in
         let compile_string_argument form =
@@ -11228,7 +11228,7 @@ let create ~compile_expr =
             | _, (Error _ as error), _
             | _, _, (Error _ as error) ->
                 error)
-        | _ -> Error.error ".replace expects a receiver, match, and replacement")
+        | _ -> Error.error ~code:Error_code.Arity ".replace expects a receiver, match, and replacement")
     | method_name
       when String.starts_with ~prefix:"." method_name
            && not
@@ -11268,7 +11268,7 @@ let create ~compile_expr =
                             (fun value -> typed_ir comparator_ty value)
                             (dynamic_unpack env comparator_ty value)
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Interop
                             (method_name ^ " expects a host receiver, got "
                            ^ source_name receiver.ty))
                   | Ok
@@ -11299,7 +11299,7 @@ let create ~compile_expr =
                           source_method_name (List.length args)
              with
             | Error _ ->
-                Error.error
+                Error.error ~code:Error_code.Unresolved
                             (method_name ^ " is not defined for "
                            ^ record.type_name)
             | Ok implementation -> (
@@ -11335,7 +11335,7 @@ let create ~compile_expr =
                                arguments )))
                       (prepare [] parameter_tys args)
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Type_mismatch
                                 (method_name
                                ^ " called with incompatible arguments")))
         | Ok ({ ty = TOcaml receiver_type; _ } :: _) -> (
@@ -11343,7 +11343,7 @@ let create ~compile_expr =
                         Host_interop.instance_method ~receiver_type ~method_name
                       with
                       | None ->
-                          Error.error ("unsupported host method " ^ method_name)
+                          Error.error ~code:Error_code.Unsupported ("unsupported host method " ^ method_name)
             | Some function_name ->
                           compile_inferred_ocaml_call scope env function_name
                             arg_forms)
@@ -11352,16 +11352,16 @@ let create ~compile_expr =
                         Host_interop.instance_method ~receiver_type ~method_name
                       with
                       | None ->
-                          Error.error ("unsupported host method " ^ method_name)
+                          Error.error ~code:Error_code.Unsupported ("unsupported host method " ^ method_name)
             | Some function_name ->
                           compile_inferred_ocaml_call scope env function_name
                             arg_forms)
         | Ok (receiver :: _) ->
-            Error.error
+            Error.error ~code:Error_code.Interop
               (method_name ^ " expects a host receiver, got "
              ^ source_name receiver.ty)
                   | Ok [] ->
-                      Error.error (method_name ^ " expects a host receiver"))
+                      Error.error ~code:Error_code.Interop (method_name ^ " expects a host receiver"))
     | ".valAt" -> java_interop_error ".valAt"
     | ".containsKey" -> java_interop_error ".containsKey"
     | ".entryAt" -> java_interop_error ".entryAt"
@@ -11384,7 +11384,7 @@ let create ~compile_expr =
                                   [
                                     value.semantic_expr; Semantic_ir.Bool false;
                                   ])))
-        | Ok _ -> Error.error "reduced? expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "reduced? expects 1 argument")
     | "__lg_unreduced" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11398,7 +11398,7 @@ let create ~compile_expr =
                                       "Lg_runtime.Runtime_reduced.unreduced",
                           [ value.semantic_expr ] )))
             | None -> Ok value)
-        | Ok _ -> Error.error "unreduced expects 1 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "unreduced expects 1 arguments")
     | "__lg_ensure-reduced" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11412,7 +11412,7 @@ let create ~compile_expr =
                         ( Semantic_ir.Ident
                             "Lg_runtime.Runtime_reduced.reduced",
                           [ value.semantic_expr ] ))))
-        | Ok _ -> Error.error "ensure-reduced expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "ensure-reduced expects 1 argument")
     | "__lg_force" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11425,7 +11425,7 @@ let create ~compile_expr =
                         ( Semantic_ir.Ident "Lazy.force",
                           [ value.semantic_expr ] )))
             | _ -> Ok value)
-        | Ok _ -> Error.error "force expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "force expects 1 argument")
     | "raise" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11434,7 +11434,7 @@ let create ~compile_expr =
               (typed_ir TUnknown
                            (Semantic_ir.Apply
                               (Semantic_ir.Ident "raise", [ arg.semantic_expr ])))
-        | Ok _ -> Error.error "raise expects 1 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "raise expects 1 arguments")
     | "ex-info" ->
         let metadata_runtime_call name args =
           Semantic_ir.Apply
@@ -11458,7 +11458,7 @@ let create ~compile_expr =
               with
               | Ok expression -> Ok expression
               | Error _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   ("exception data requires an EDN-compatible value, got "
                  ^ Types.source_name value.ty))
         in
@@ -11519,7 +11519,7 @@ let create ~compile_expr =
                   match compile_exception_data_value value with
                   | Ok packed -> Ok packed
                   | Error _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Semantic
                         ("ex-info data literal cannot contain "
                        ^ Types.source_name value.ty
                        ^ "; use EDN-like literal values or a value that is \
@@ -11529,7 +11529,7 @@ let create ~compile_expr =
         let compile_message form =
           match compile_expr scope env form with
           | Ok message when Types.equal message.ty TString -> Ok message
-          | Ok _ -> Error.error "ex-info message must be a string"
+          | Ok _ -> Error.error ~code:Error_code.Semantic "ex-info message must be a string"
           | Error _ as error -> error
         in
         let compile_data data_form =
@@ -11548,7 +11548,7 @@ let create ~compile_expr =
         let compile_cause form =
           match compile_expr scope env form with
           | Ok cause when Types.equal cause.ty (TOcaml "exn") -> Ok cause
-          | Ok _ -> Error.error "ex-info cause must be an exception"
+          | Ok _ -> Error.error ~code:Error_code.Semantic "ex-info cause must be an exception"
           | Error _ as error -> error
         in
         let compile_ex_info message data cause =
@@ -11575,7 +11575,7 @@ let create ~compile_expr =
                 Result.bind (compile_cause cause_form) (fun cause ->
                     Result.bind (compile_data data_form) (fun data ->
                         compile_ex_info message data (Some cause))))
-        | _ -> Error.error "ex-info expects 2 or 3 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "ex-info expects 2 or 3 arguments")
     | "throw" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -11587,8 +11587,8 @@ let create ~compile_expr =
                               ( Semantic_ir.Ident
                                   "Lg_runtime.Runtime_exception.throw",
                       [ exception_.semantic_expr ] )))
-        | Ok [ _ ] -> Error.error "throw expects an exception"
-        | Ok _ -> Error.error "throw expects 1 arguments")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "throw expects an exception"
+        | Ok _ -> Error.error ~code:Error_code.Arity "throw expects 1 arguments")
     | "Some" -> (
         match arg_forms with
         | [ value_form ] ->
@@ -11604,7 +11604,7 @@ let create ~compile_expr =
                   (Semantic_ir.Constructor ("Some", Some value.semantic_expr)))
               (compile_expr scope (Env.with_expected_type value_expected env)
                  value_form)
-        | _ -> Error.error "Some expects 1 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "Some expects 1 arguments")
               | "None" ->
                   constructor (fun _ -> TOcaml_app ("option", [ TUnknown ])) 0
     | "Ok" ->
@@ -11642,13 +11642,13 @@ let create ~compile_expr =
         | Error _ as err -> err
         | Ok [ collection ] -> (
             match Collection_capability.to_seq_expr env collection with
-            | Error _ -> Error.error "seq-uncons expects a seqable value"
+            | Error _ -> Error.error ~code:Error_code.Arity "seq-uncons expects a seqable value"
             | Ok (element_ty, sequence) ->
                 Ok
                   (typed_ir
                      (TNullable (TTuple [ element_ty; TSeq element_ty ]))
                      (apply "Lg_runtime.Runtime_seq.uncons" [ sequence ])))
-        | Ok _ -> Error.error "seq-uncons expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "seq-uncons expects 1 argument")
     | "seq-unfold-chunks" -> (
         match arg_forms with
         | [ step_form; initial_form ] ->
@@ -11710,14 +11710,14 @@ let create ~compile_expr =
                                     [ step.semantic_expr;
                                       initial.semantic_expr ]))
                         | Some _ | None ->
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "seq-unfold-chunks expects a state step returning \
                                option<tuple<array<value>;int;int;fn<state>>>")
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "seq-unfold-chunks expects a state step returning \
                            option<tuple<array<value>;int;int;fn<state>>>"))
-        | _ -> Error.error "seq-unfold-chunks expects 2 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "seq-unfold-chunks expects 2 arguments")
     | ("seq-unfold" | "seq-unfold-unmemoized") as name -> (
         match arg_forms with
         | [ step_form; initial_form ] -> (
@@ -11761,10 +11761,10 @@ let create ~compile_expr =
                                 else "Seq.unfold")
                             [ step; initial.semantic_expr ]))
                 | Ok _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       (name
                       ^ " expects a state step function and initial state")))
-        | _ -> Error.error (name ^ " expects 2 arguments"))
+        | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 2 arguments"))
     | ("uncurried-call" | "uncurried-compare") as name -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11793,7 +11793,7 @@ let create ~compile_expr =
                      Semantic_ir.Apply
                        (fn, [ left.semantic_expr; right.semantic_expr ])))
         | Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               (name
                        ^ " expects a binary function and two compatible \
                           arguments"))
@@ -11807,7 +11807,7 @@ let create ~compile_expr =
             let expected = TFn ([ left_ty; right_ty ], TOcaml "int") in
             Result.map (typed_ir expected)
               (plan_and_emit_argument env ~expected comparator)
-        | Ok _ -> Error.error "as-ordering expects a binary function")
+        | Ok _ -> Error.error ~code:Error_code.Arity "as-ordering expects a binary function")
     | ("seq-flat-map" | "seq-flat-map-rev") as name -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11858,11 +11858,11 @@ let create ~compile_expr =
                   (typed_ir (TSeq TUnknown)
                      (apply "Lg_runtime.Runtime_seq.memoize" [ flattened ]))
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   (name
                            ^ " expects a sequence function and compatible array"
                             ))
-        | Ok _ -> Error.error (name ^ " expects 2 arguments"))
+        | Ok _ -> Error.error ~code:Error_code.Arity (name ^ " expects 2 arguments"))
     | "__lg_make-array" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11881,18 +11881,18 @@ let create ~compile_expr =
                  (apply "Array.make"
                     [ size.semantic_expr; initial.semantic_expr ]))
         | Ok [ size; _ ] when not (Types.equal size.ty TInt) ->
-            Error.error "make-array size must be int"
+            Error.error ~code:Error_code.Semantic "make-array size must be int"
         | Ok [ _; _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "make-array initial value must have a static type"
         | Ok [ _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "make-array requires a size and a statically typed initial value"
-        | Ok _ -> Error.error "make-array expects a size and initial value")
+        | Ok _ -> Error.error ~code:Error_code.Arity "make-array expects a size and initial value")
     | "__lg_array" -> (
         match compile_args () with
         | Error _ as err -> err
-        | Ok [] -> Error.error "empty OCaml array requires a type"
+        | Ok [] -> Error.error ~code:Error_code.Interop "empty OCaml array requires a type"
         | Ok (first :: rest as values) ->
             if
               List.for_all
@@ -11910,7 +11910,7 @@ let create ~compile_expr =
                                    (fun value -> value.semantic_expr)
                                    values)))
                       else
-                        Error.error
+                        Error.error ~code:Error_code.Interop
                           "OCaml array elements must have the same type")
     | "array-of" -> (
         match arg_forms with
@@ -11921,7 +11921,7 @@ let create ~compile_expr =
                           Ok
                             (typed_ir (TArray element_ty) (Semantic_ir.Array []))
                       )
-        | _ -> Error.error "array-of expects one type")
+        | _ -> Error.error ~code:Error_code.Arity "array-of expects one type")
     | "tuple-get" -> (
         match arg_forms with
         | [ tuple_form; index_form ] -> (
@@ -11953,9 +11953,9 @@ let create ~compile_expr =
                                       Semantic_ir.Ident value_name );
                                   ] )))
                     | FInt _ ->
-                        Error.error "tuple-get index is out of bounds"
+                        Error.error ~code:Error_code.Semantic "tuple-get index is out of bounds"
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "tuple-get tuple index must be an integer literal")
                 | TArray element_ty -> (
                     match compile_expr scope env index_form with
@@ -11969,11 +11969,11 @@ let create ~compile_expr =
                              (apply "Array.get"
                                 [ tuple.semantic_expr; index.semantic_expr ]))
                     | Ok _ ->
-                        Error.error "tuple-get array index must be int")
+                        Error.error ~code:Error_code.Semantic "tuple-get array index must be int")
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "tuple-get expects a statically typed tuple or array"))
-        | _ -> Error.error "tuple-get expects 2 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "tuple-get expects 2 arguments")
     | ("__lg_aget" | "unsafe-aget") as name -> (
         match compile_args () with
         | Error _ as err -> err
@@ -11991,7 +11991,7 @@ let create ~compile_expr =
                 Types.equal index.ty TUnknown
                 || match index.ty with TMeta _ | TVar _ -> true | _ -> false
               then Ok index.semantic_expr
-              else Error.error "OCaml array index must be int"
+              else Error.error ~code:Error_code.Interop "OCaml array index must be int"
             in
             let dynamic_target = Types.is_dynamic array.ty in
             if dynamic_target then
@@ -12032,11 +12032,11 @@ let create ~compile_expr =
                          [ array.semantic_expr; index ]))
                   (compile_index index)
               | None ->
-                  Error.error
+                  Error.error ~code:Error_code.Interop
                     ((if name = "__lg_aget" then "array read" else name)
                    ^ " expects an OCaml array")))
         | Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ((if name = "__lg_aget" then "array read" else name)
              ^ " expects 2 arguments"))
     | ("__lg_aset" | "unsafe-aset") as name -> (
@@ -12056,7 +12056,7 @@ let create ~compile_expr =
                 Types.equal index.ty TUnknown
                 || match index.ty with TMeta _ | TVar _ -> true | _ -> false
               then Ok index.semantic_expr
-              else Error.error "OCaml array index must be int"
+              else Error.error ~code:Error_code.Interop "OCaml array index must be int"
             in
             Result.bind index (fun index ->
             if Types.is_dynamic array.ty then
@@ -12102,7 +12102,7 @@ let create ~compile_expr =
                            ]))
                     (pack_dynamic_value env element_ty value)
                 else if not (argument_compatible element_ty value.ty) then
-                  Error.error "OCaml array value must match element type"
+                  Error.error ~code:Error_code.Interop "OCaml array value must match element type"
                 else if name = "__lg_aset" then
                     let value_name = "__lg_aset_value" in
                     let bound_value =
@@ -12139,11 +12139,11 @@ let create ~compile_expr =
                            ]))
                     (pack_constrained_value env element_ty value)
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Interop
                   ((if name = "__lg_aset" then "array write" else name)
                  ^ " expects an OCaml array")))
         | Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ((if name = "__lg_aset" then "array write" else name)
              ^ " expects 3 arguments"))
     | "__lg_array-predicate" | "__lg_array-value-predicate" -> (
@@ -12168,12 +12168,12 @@ let create ~compile_expr =
               if name = "__lg_array-predicate" then "array?"
               else "array-value?"
             in
-            Error.error (source_name ^ " expects 1 argument"))
+            Error.error ~code:Error_code.Arity (source_name ^ " expects 1 argument"))
     | "__lg_atom" -> (
         let rec option_pairs pairs = function
           | [] -> Ok (List.rev pairs)
           | key :: value :: rest -> option_pairs ((key, value) :: pairs) rest
-          | _ -> Error.error "atom expects a value followed by option pairs"
+          | _ -> Error.error ~code:Error_code.Arity "atom expects a value followed by option pairs"
         in
         let compile_reference value_form option_forms =
           let value_env =
@@ -12196,7 +12196,7 @@ let create ~compile_expr =
                   ->
                     Ok expected_ty
                 | FSymbol "nil", _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "atom nil requires an explicit option element type, for \
                        example ^:ref<option<int>>"
                 | _ -> Ok value.ty
@@ -12276,7 +12276,7 @@ let create ~compile_expr =
                           ])
                     validator_expr)
           | _ ->
-              Error.error "atom option key must be :meta, :validator, or nil"
+              Error.error ~code:Error_code.Semantic "atom option key must be :meta, :validator, or nil"
         in
         let rec compile_option_steps value_ty steps = function
           | [] -> Ok (List.rev steps)
@@ -12285,7 +12285,7 @@ let create ~compile_expr =
                   compile_option_steps value_ty (step :: steps) rest)
         in
         match arg_forms with
-        | [] -> Error.error "atom expects at least 1 argument"
+        | [] -> Error.error ~code:Error_code.Arity "atom expects at least 1 argument"
         | value_form :: option_forms -> (
             match compile_reference value_form option_forms with
             | Error _ as error -> error
@@ -12317,7 +12317,7 @@ let create ~compile_expr =
             match reference.ty with
             | TRef value_ty ->
                 if not (Types.equal key.ty TKeyword) then
-                  Error.error "add-watch key must be a keyword"
+                  Error.error ~code:Error_code.Semantic "add-watch key must be a keyword"
                 else
                   let callback_result_ty =
                     match callback.ty with
@@ -12347,10 +12347,10 @@ let create ~compile_expr =
                     (plan_and_emit_argument env
                        ~expected:expected_callback_ty callback)
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "add-watch requires a statically typed reference"
-            | _ -> Error.error "add-watch expects a reference")
-        | Ok _ -> Error.error "add-watch expects 3 arguments")
+            | _ -> Error.error ~code:Error_code.Arity "add-watch expects a reference")
+        | Ok _ -> Error.error ~code:Error_code.Arity "add-watch expects 3 arguments")
     | "__lg_remove-watch" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12358,17 +12358,17 @@ let create ~compile_expr =
             match reference.ty with
             | TRef value_ty ->
                 if not (Types.equal key.ty TKeyword) then
-                  Error.error "remove-watch key must be a keyword"
+                  Error.error ~code:Error_code.Semantic "remove-watch key must be a keyword"
                 else
                   Ok
                     (typed_ir (TRef value_ty)
                        (apply "Lg_runtime.Runtime_reference.remove_watch"
                           [ reference.semantic_expr; key.semantic_expr ]))
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "remove-watch requires a statically typed reference"
-            | _ -> Error.error "remove-watch expects a reference")
-        | Ok _ -> Error.error "remove-watch expects 2 arguments")
+            | _ -> Error.error ~code:Error_code.Arity "remove-watch expects a reference")
+        | Ok _ -> Error.error ~code:Error_code.Arity "remove-watch expects 2 arguments")
     | "__lg_get-validator" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12381,10 +12381,10 @@ let create ~compile_expr =
                      (apply "Lg_runtime.Runtime_reference.get_validator"
                         [ reference.semantic_expr ]))
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "get-validator requires a statically typed reference"
-            | _ -> Error.error "get-validator expects a reference")
-        | Ok _ -> Error.error "get-validator expects 1 argument")
+            | _ -> Error.error ~code:Error_code.Arity "get-validator expects a reference")
+        | Ok _ -> Error.error ~code:Error_code.Arity "get-validator expects 1 argument")
     | "__lg_set-validator!" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12415,10 +12415,10 @@ let create ~compile_expr =
                          [ reference.semantic_expr; validator_expr ]))
                   validator_expr
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "set-validator! requires a statically typed reference"
-            | _ -> Error.error "set-validator! expects a reference")
-        | Ok _ -> Error.error "set-validator! expects 2 arguments")
+            | _ -> Error.error ~code:Error_code.Arity "set-validator! expects a reference")
+        | Ok _ -> Error.error ~code:Error_code.Arity "set-validator! expects 2 arguments")
     | "weak-ref" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12440,8 +12440,8 @@ let create ~compile_expr =
             Ok
               (typed_ir (Types.weak_type value_ty)
                  (apply make [ value_expression ]))
-        | Ok [ _ ] -> Error.error "weak-ref expects a heap value"
-        | Ok _ -> Error.error "weak-ref expects 1 argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "weak-ref expects a heap value"
+        | Ok _ -> Error.error ~code:Error_code.Arity "weak-ref expects 1 argument")
     | "__lg_weak-deref" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12453,10 +12453,10 @@ let create ~compile_expr =
                      (apply "Lg_runtime.Runtime_weak.get"
                         [ reference.semantic_expr ]))
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("weak-deref expects a weak reference, got "
                  ^ Types.source_name reference.ty))
-        | Ok _ -> Error.error "weak-deref expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "weak-deref expects 1 argument")
     | "__lg_weak-clear!" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -12468,10 +12468,10 @@ let create ~compile_expr =
                      (apply "Lg_runtime.Runtime_weak.clear"
                         [ reference.semantic_expr ]))
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("weak-clear! expects a weak reference, got "
                  ^ Types.source_name reference.ty))
-        | Ok _ -> Error.error "weak-clear! expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "weak-clear! expects 1 argument")
     | "tuple" -> (
         let expected_items =
           match Env.expected_type env with
@@ -12497,7 +12497,7 @@ let create ~compile_expr =
         match compile_items 0 [] arg_forms with
         | Error _ as err -> err
         | Ok ([] | [ _ ]) ->
-            Error.error "tuple expects at least 2 values"
+            Error.error ~code:Error_code.Arity "tuple expects at least 2 values"
         | Ok values ->
             Ok
               (typed_ir
@@ -12518,7 +12518,7 @@ let create ~compile_expr =
                   record.fields
               with
                         | None ->
-                            Error.error ("unknown record field " ^ field_name)
+                            Error.error ~code:Error_code.Unresolved ("unknown record field " ^ field_name)
               | Some field -> (
                   match
                     compile_expr scope
@@ -12552,7 +12552,7 @@ let create ~compile_expr =
                                   }
                                    : Error.related))
                         in
-                        Error.error ~title:"PROPERTY TYPE MISMATCH"
+                        Error.error ~code:Error_code.Arity ~title:"PROPERTY TYPE MISMATCH"
                           ?location:(Source_context.find value_form) ~related
                           ~type_mismatch:
                             (Error.type_mismatch
@@ -12575,7 +12575,7 @@ let create ~compile_expr =
                              property_name record.type_name
                              (Types.source_name field.ty)
                              (Types.source_name value.ty))))
-          | _ -> Error.error "record fields must be (name value)"
+          | _ -> Error.error ~code:Error_code.Semantic "record fields must be (name value)"
         in
         let rec compile_fields record acc seen = function
           | [] -> Ok (List.rev acc)
@@ -12584,14 +12584,14 @@ let create ~compile_expr =
               | Error _ as err -> err
               | Ok ((field, _value) as pair) ->
                   if List.mem field.ocaml_name seen then
-                    Error.error "duplicate record field name"
+                    Error.error ~code:Error_code.Duplicate "duplicate record field name"
                             else
                               compile_fields record (pair :: acc)
                                 (field.ocaml_name :: seen) rest)
         in
         let infer_external_record type_name field_forms =
           if not (String.contains type_name '.') then
-            Error.error ("unknown record type " ^ type_name)
+            Error.error ~code:Error_code.Unresolved ("unknown record type " ^ type_name)
           else
           let field_type field_name =
             let ocaml_name = Names.sanitize_name field_name in
@@ -12614,8 +12614,8 @@ let create ~compile_expr =
                 match field_type field_name with
                 | Ok field -> fields (field :: acc) rest
                 | Error _ ->
-                    Error.error ("unknown record type " ^ type_name))
-            | _ -> Error.error "record fields must be (name value)"
+                    Error.error ~code:Error_code.Unresolved ("unknown record type " ^ type_name))
+            | _ -> Error.error ~code:Error_code.Semantic "record fields must be (name value)"
           in
           fields [] field_forms
         in
@@ -12650,7 +12650,7 @@ let create ~compile_expr =
                                   values))
                     in
                               if missing <> [] then
-                                Error.error "record value is missing fields"
+                                Error.error ~code:Error_code.Semantic "record value is missing fields"
                     else
                       let instantiated_record =
                         let inferred_type_variable name =
@@ -12828,7 +12828,7 @@ let create ~compile_expr =
                                    values);
                           })
                         (adapt_fields [] values))))
-        | _ -> Error.error "record expects a record type and fields")
+        | _ -> Error.error ~code:Error_code.Arity "record expects a record type and fields")
     | "__lg_add" | "__lg_subtract" | "__lg_multiply" | "__lg_divide"
     | "__lg_divide-melange" -> (
         let operator =
@@ -13058,9 +13058,9 @@ let create ~compile_expr =
                       thunk;
                     ]))
         | Ok [ _; _; _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "with-precision expects an integer precision, rounding mode, and zero-argument body"
-        | Ok _ -> Error.error "with-precision expects 3 internal arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "with-precision expects 3 internal arguments")
     | "__lg_rand" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -13082,8 +13082,8 @@ let create ~compile_expr =
                  (Semantic_ir.Apply
                     ( Semantic_ir.Ident "Lg_runtime.Runtime_random.rand",
                       [ semantic_expr ] )))
-        | Ok [ _ ] -> Error.error "rand expects a numeric bound"
-        | Ok _ -> Error.error "rand expects zero or one argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "rand expects a numeric bound"
+        | Ok _ -> Error.error ~code:Error_code.Arity "rand expects zero or one argument")
     | "__lg_int" | "__lg_long" -> (
         let source_name = if name = "__lg_int" then "int" else "long" in
         match compile_args () with
@@ -13116,8 +13116,8 @@ let create ~compile_expr =
                       [ semantic_expr ] )))
                   | Ok [ ({ ty = TUnknown | TMeta _ | TVar _; _ } as value) ] ->
             Ok { value with ty = TInt }
-        | Ok [ _ ] -> Error.error (source_name ^ " expects a numeric value")
-        | Ok _ -> Error.error (source_name ^ " expects 1 argument"))
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity (source_name ^ " expects a numeric value")
+        | Ok _ -> Error.error ~code:Error_code.Arity (source_name ^ " expects 1 argument"))
     | "__lg_double" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -13128,9 +13128,9 @@ let create ~compile_expr =
         | Ok [ ({ ty = TFloat; _ } as value) ] -> Ok value
         | Ok [ value ] when Env.target env = Target.Melange -> Ok value
         | Ok [ value ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ("double expects a numeric value, got " ^ Types.source_name value.ty)
-        | Ok _ -> Error.error "double expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "double expects 1 argument")
     | "__lg_bigdec" -> (
         let decimal_ty = TOcaml "Lg_runtime.Runtime_decimal.t" in
         match compile_args () with
@@ -13162,8 +13162,8 @@ let create ~compile_expr =
                  (apply "Lg_runtime.Runtime_decimal.of_string"
                     [ semantic_expr ]))
         | Ok [ ({ ty; _ } as value) ] when Types.equal ty decimal_ty -> Ok value
-        | Ok [ _ ] -> Error.error "bigdec expects a numeric value"
-        | Ok _ -> Error.error "bigdec expects 1 argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "bigdec expects a numeric value"
+        | Ok _ -> Error.error ~code:Error_code.Arity "bigdec expects 1 argument")
     | "__lg_bigint" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -13175,8 +13175,8 @@ let create ~compile_expr =
               (typed_ir TInt
                  (apply "Lg_runtime.Runtime_string.parse_int_radix"
                     [ semantic_expr; Semantic_ir.Int 10 ]))
-        | Ok [ _ ] -> Error.error "bigint expects a numeric value"
-        | Ok _ -> Error.error "bigint expects 1 argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "bigint expects a numeric value"
+        | Ok _ -> Error.error ~code:Error_code.Arity "bigint expects 1 argument")
     | "__lg_ex-message" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -13185,8 +13185,8 @@ let create ~compile_expr =
               (typed_ir (TNullable TString)
                  (apply "Lg_runtime.Runtime_exception.message"
                     [ semantic_expr ]))
-        | Ok [ _ ] -> Error.error "ex-message expects an exception"
-        | Ok _ -> Error.error "ex-message expects 1 arguments")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "ex-message expects an exception"
+        | Ok _ -> Error.error ~code:Error_code.Arity "ex-message expects 1 arguments")
     | "__lg_ex-cause" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -13194,8 +13194,8 @@ let create ~compile_expr =
             Ok
               (typed_ir (TNullable (TOcaml "exn"))
                  (apply "Lg_runtime.Runtime_exception.cause" [ semantic_expr ]))
-        | Ok [ _ ] -> Error.error "ex-cause expects an exception"
-        | Ok _ -> Error.error "ex-cause expects 1 arguments")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "ex-cause expects an exception"
+        | Ok _ -> Error.error ~code:Error_code.Arity "ex-cause expects 1 arguments")
     | "__lg_ex-data" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -13203,8 +13203,8 @@ let create ~compile_expr =
             Ok
               (typed_ir (TOcaml "Lg_edn_backend.t")
                  (apply "Lg_runtime.Runtime_exception.data" [ semantic_expr ]))
-        | Ok [ _ ] -> Error.error "ex-data expects an exception"
-        | Ok _ -> Error.error "ex-data expects 1 arguments")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "ex-data expects an exception"
+        | Ok _ -> Error.error ~code:Error_code.Arity "ex-data expects 1 arguments")
     | "__lg_re-pattern" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -13213,8 +13213,8 @@ let create ~compile_expr =
             Ok
               (typed_ir TRegex
                  (apply "Lg_runtime.Runtime_string.regex" [ semantic_expr ]))
-        | Ok [ _ ] -> Error.error "re-pattern expects a string or regex"
-        | Ok _ -> Error.error "re-pattern expects 1 argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "re-pattern expects a string or regex"
+        | Ok _ -> Error.error ~code:Error_code.Protocol "re-pattern expects 1 argument")
     | "reify" -> (
         let contextual_payload =
           match Env.expected_type env with
@@ -13251,13 +13251,13 @@ let create ~compile_expr =
               in
               let method_forms, rest = take_methods [] forms in
               if method_forms = [] then
-                Error.error
+                Error.error ~code:Error_code.Protocol
                   ("reify protocol " ^ protocol_name
                  ^ " requires method implementations")
               else
                 parse_protocols ((protocol_name, method_forms) :: protocols) rest
           | _ ->
-              Error.error
+              Error.error ~code:Error_code.Protocol
                 "reify expects protocol names followed by method implementations"
         in
         let compile_protocol (protocol_name, method_forms) =
@@ -13312,13 +13312,13 @@ let create ~compile_expr =
                     protocol_name method_name
                 with
                 | None ->
-                    Error.error
+                    Error.error ~code:Error_code.Protocol
                       ("protocol " ^ protocol_name ^ " does not define method "
                      ^ method_name)
                 | Some marker -> (
                     match Protocol.method_position env marker method_name with
                     | None ->
-                        Error.error ("unknown protocol method " ^ method_name)
+                        Error.error ~code:Error_code.Unresolved ("unknown protocol method " ^ method_name)
                     | Some position ->
                     let contextual_implementation_ty =
                       Option.bind marker.protocol_id (fun protocol_id ->
@@ -13399,7 +13399,7 @@ let create ~compile_expr =
                         in
                         Ok (position, marker, implementation)) )
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Protocol
                   "reify methods must be (method-name [params] body...)"
           in
           let rec compile_methods implementations = function
@@ -13413,7 +13413,7 @@ let create ~compile_expr =
                     compile_methods (implementation :: implementations) rest)
           in
           Result.bind (compile_methods [] method_forms) (function
-            | [] -> Error.error "reify expects at least one method"
+            | [] -> Error.error ~code:Error_code.Protocol "reify expects at least one method"
             | ((_, marker, _) :: _ as implementations) ->
                 let positions =
                   List.map (fun (position, _, _) -> position) implementations
@@ -13422,13 +13422,13 @@ let create ~compile_expr =
                   List.init (Protocol.method_count env marker) Fun.id
                 in
                 if positions <> expected_positions then
-                  Error.error
+                  Error.error ~code:Error_code.Protocol
                     ("reify must implement every method of protocol "
                    ^ protocol_name)
                 else
                   match marker.protocol_id with
                   | None ->
-                      Error.error
+                      Error.error ~code:Error_code.Protocol
                         ("reify requires a declared protocol: " ^ protocol_name)
                   | Some protocol_id ->
                       let methods =
@@ -13451,7 +13451,7 @@ let create ~compile_expr =
         in
         Result.bind (parse_protocols [] arg_forms) (function
           | [] ->
-              Error.error
+              Error.error ~code:Error_code.Protocol
                 "reify expects a protocol and method implementations"
           | protocols ->
               let rec compile_protocols payloads = function
@@ -13473,7 +13473,7 @@ let create ~compile_expr =
                       protocol_ids
                   in
                   if List.length unique_protocol_ids <> List.length protocol_ids then
-                    Error.error "reify cannot implement the same protocol twice"
+                    Error.error ~code:Error_code.Protocol "reify cannot implement the same protocol twice"
                   else
                     let payload_ty, payload_expr =
                       match payloads with
@@ -13529,16 +13529,16 @@ let create ~compile_expr =
                           [ message.semantic_expr ] ) )))
                   | Ok [ _; message ] when not (Types.equal message.ty TString)
                     ->
-            Error.error "assert message must be a string"
+            Error.error ~code:Error_code.Semantic "assert message must be a string"
         | Ok [ _ ] | Ok [ _; _ ] ->
-            Error.error "assert condition must be bool"
+            Error.error ~code:Error_code.Semantic "assert condition must be bool"
                   | Ok _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "assert expects condition and optional message")
     | "__lg_fnil" -> compile_static_fnil scope env arg_forms
     | "delay" -> (
         match arg_forms with
-        | [] -> Error.error "delay expects at least one body form"
+        | [] -> Error.error ~code:Error_code.Arity "delay expects at least one body form"
         | body_forms ->
             Result.map
               (fun body ->
@@ -13562,7 +13562,7 @@ let create ~compile_expr =
                             "Lg_runtime.Runtime_reference.of_value",
                           [ Semantic_ir.Constructor ("None", None) ] )))
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "volatile! nil requires an explicit option element type, \
                    for example ^:ref<option<int>>")
         | _ -> (
@@ -13597,11 +13597,11 @@ let create ~compile_expr =
                         ( Semantic_ir.Ident
                             "Lg_runtime.Runtime_reference.of_value",
                           [ initial.semantic_expr ] )))
-            | Ok _ -> Error.error "volatile! expects 1 argument"))
+            | Ok _ -> Error.error ~code:Error_code.Arity "volatile! expects 1 argument"))
     | name when is_var_quote_marker name -> (
         match arg_forms with
         | [ symbol ] -> compile_expr scope env symbol
-        | _ -> Error.error "var expects one symbol")
+        | _ -> Error.error ~code:Error_code.Arity "var expects one symbol")
     | "set!" -> (
         match arg_forms with
         | [ FList [ FSymbol field_access; target_form ]; value_form ]
@@ -13645,9 +13645,9 @@ let create ~compile_expr =
                                  ] )))
                       (plan_and_emit_argument env ~expected:referenced_ty
                          stored_value))
-            | Some _ -> Error.error ("set! expects a mutable target, got " ^ name)
-            | None -> Error.error ("unknown set! target " ^ name))
-        | _ -> Error.error "set! expects a target and value")
+            | Some _ -> Error.error ~code:Error_code.Arity ("set! expects a mutable target, got " ^ name)
+            | None -> Error.error ~code:Error_code.Unresolved ("unknown set! target " ^ name))
+        | _ -> Error.error ~code:Error_code.Arity "set! expects a target and value")
     | "__lg_swap!" as swap_name -> (
         match arg_forms with
         | reference_form :: function_form :: extra_forms -> (
@@ -13878,7 +13878,7 @@ let create ~compile_expr =
                     in
                     compile_generic ()
                           | reference_ty when Types.is_dynamic reference_ty ->
-                              Error.error
+                              Error.error ~code:Error_code.Semantic
                                 (swap_name
                                ^ " requires a statically typed reference and \
                                   updater")
@@ -13886,7 +13886,7 @@ let create ~compile_expr =
                     compile_protocol_swap ~compile_expr scope env
                       swap_name reference function_form extra_forms))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
                         (swap_name
                        ^ " expects a reference, function, and optional \
                           arguments"))
@@ -13920,7 +13920,7 @@ let create ~compile_expr =
           Ok (typed_ir TBool expression)
         in
         if arg_forms = [] then
-          Error.error (operator ^ " expects at least 1 arguments")
+          Error.error ~code:Error_code.Arity (operator ^ " expects at least 1 arguments")
         else
           let equality_expected_type = function
             | Some (TRecord _ | TNamed_record { nominal = false; _ }) -> None
@@ -13955,7 +13955,7 @@ let create ~compile_expr =
           | Ok args
             when operator <> "="
                  && List.exists (fun arg -> Types.is_dynamic arg.ty) args ->
-              Error.error
+              Error.error ~code:Error_code.Arity
                 (operator ^ " expects statically typed numeric arguments")
           | Ok args
             when operator <> "="
@@ -14299,7 +14299,7 @@ let create ~compile_expr =
                     ( "not",
                       Expression_support.truthiness_expression ~env arg.ty
                         arg.semantic_expr )))
-        | Ok _ -> Error.error "not expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "not expects 1 argument")
     | "__lg_dec" -> (
         match compile_args_for scope (Env.with_expected_type None env) arg_forms with
         | Error _ as err -> err
@@ -14341,8 +14341,8 @@ let create ~compile_expr =
             else if
               Types.equal value_ty TNil && Env.target env = Target.Melange
             then Ok (typed_ir TInt (Semantic_ir.Int (-1)))
-            else Error.error "dec expects a numeric value"
-        | Ok _ -> Error.error "dec expects 1 arguments")
+            else Error.error ~code:Error_code.Arity "dec expects a numeric value"
+        | Ok _ -> Error.error ~code:Error_code.Arity "dec expects 1 arguments")
               | "__lg_nil-predicate" | "__lg_true-predicate"
               | "__lg_false-predicate" | "__lg_int-predicate"
               | "__lg_number-predicate" | "__lg_string-predicate"
@@ -14446,10 +14446,10 @@ let create ~compile_expr =
                                         Semantic_ir.Bool false );
                                     ] )))
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           "instance? requires a statically known record type; define a closed sum type and match a closed sum type over its constructors")
                   ))
-        | _ -> Error.error "instance? expects a record type and value")
+        | _ -> Error.error ~code:Error_code.Arity "instance? expects a record type and value")
     | "__lg_builtin-name" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -14534,7 +14534,7 @@ let create ~compile_expr =
               | _ -> invalid_nan_argument
             in
             Ok (typed_ir TBool expression)
-        | Ok _ -> Error.error "NaN? expects 1 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "NaN? expects 1 arguments")
     | "__lg_name" -> (
         match arg_forms with
         | [ _ ] -> (
@@ -14571,16 +14571,16 @@ let create ~compile_expr =
                                               "name expects keyword, string, or symbol";
                                           ] );
                                     ])))))
-            | Ok _ -> Error.error "name expects 1 arguments")
-        | _ -> Error.error "name expects 1 arguments")
+            | Ok _ -> Error.error ~code:Error_code.Arity "name expects 1 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "name expects 1 arguments")
     | "__lg_namespace" -> (
         match arg_forms with
         | [ _ ] ->
             compile_protocol_call scope env
               "clojure.core/INamed/-namespace" arg_forms
-        | _ -> Error.error "namespace expects 1 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "namespace expects 1 arguments")
     | ("resolve" | "requiring-resolve") as resolve_name ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           (resolve_name
           ^ " cannot be used without a closed result type; define a closed sum \
              type containing the supported Vars")
@@ -14710,7 +14710,7 @@ let create ~compile_expr =
                         ],
                       Semantic_ir.Int 0 )
               | _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("expected numeric argument for " ^ source_predicate
                    ^ ", got " ^ Types.source_name arg.ty)
             in
@@ -14719,7 +14719,7 @@ let create ~compile_expr =
                 typed_ir TBool
                   (Semantic_ir.Infix (operator, value, zero)))
               zero
-        | Ok _ -> Error.error (source_predicate ^ " expects 1 arguments"))
+        | Ok _ -> Error.error ~code:Error_code.Arity (source_predicate ^ " expects 1 arguments"))
     | "__lg_abs" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -14750,8 +14750,8 @@ let create ~compile_expr =
                   (typed_ir arg.ty
                      (apply "Lg_runtime.Runtime_ratio.abs"
                         [ arg.semantic_expr ]))
-            | _ -> Error.error "abs expects a numeric argument")
-        | Ok _ -> Error.error "abs expects 1 argument")
+            | _ -> Error.error ~code:Error_code.Arity "abs expects a numeric argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "abs expects 1 argument")
     | "__lg_repl-result" -> (
         match arg_forms with
         | [ form ] -> (
@@ -14770,7 +14770,7 @@ let create ~compile_expr =
                             Semantic_ir.String (Types.source_name value.ty);
                             rendered;
                           ] ))))
-        | _ -> Error.error "internal REPL result expects one argument")
+        | _ -> Error.error ~code:Error_code.Arity "internal REPL result expects one argument")
     | "__lg_format" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -14786,7 +14786,7 @@ let create ~compile_expr =
                     Semantic_ir.Let ([binding], body)) bindings expression))
               | value :: rest ->
                   if contains_unresolved_type value.ty then
-                    Error.error "format arguments require concrete static types"
+                    Error.error ~code:Error_code.Arity "format arguments require concrete static types"
                   else
                     let name = "__lg_format_value_" ^ string_of_int index in
                     let expression = Semantic_ir.Ident name in
@@ -14813,7 +14813,7 @@ let create ~compile_expr =
                     encode (index + 1) ((Semantic_ir.PVar name, value.semantic_expr) :: bindings)
                       (argument :: encoded) rest
             in encode 0 [] [] values
-        | Ok _ -> Error.error "format requires a string followed by statically typed arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "format requires a string followed by statically typed arguments")
     | ("__lg_str" | "__lg_print_str" | "__lg_pr_str") as render_name -> (
         let readable = render_name = "__lg_pr_str" in
         let separator = if render_name = "__lg_str" then "" else " " in
@@ -14910,12 +14910,12 @@ let create ~compile_expr =
                   (typed_ir TString
                      (apply runtime_name args))
             | Ok _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   (render_name ^ " expects printable variadic values")
             | Error _ ->
-                Error.error (render_name ^ " expects a printable sequence"))
-        | Ok [ _; _ ] -> Error.error (render_name ^ " expects a string separator")
-        | Ok _ -> Error.error (render_name ^ " expects 2 arguments"))
+                Error.error ~code:Error_code.Arity (render_name ^ " expects a printable sequence"))
+        | Ok [ _; _ ] -> Error.error ~code:Error_code.Arity (render_name ^ " expects a string separator")
+        | Ok _ -> Error.error ~code:Error_code.Arity (render_name ^ " expects 2 arguments"))
     | "__lg_render_readable_values_with_opts" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -14958,7 +14958,7 @@ let create ~compile_expr =
                                    (Semantic_ir.Ident options_name) );
                              ] ))
                   | _ ->
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         "__lg_render_readable_values_with_opts expects nil or {:print-length int} options"
                 in
                 Result.map
@@ -14973,16 +14973,16 @@ let create ~compile_expr =
                          ]))
                   print_length)
             | Ok _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "__lg_render_readable_values_with_opts expects printable variadic values"
             | Error _ ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   "__lg_render_readable_values_with_opts expects a printable sequence")
         | Ok [ _; _; _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "__lg_render_readable_values_with_opts expects a string separator"
         | Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "__lg_render_readable_values_with_opts expects 3 arguments")
     | "__lg_with-meta" | "__lg_reset-meta!" ->
         compile_metadata_call scope env name arg_forms
@@ -15043,18 +15043,18 @@ let create ~compile_expr =
                                   [ stored_value ] );
                             ]))
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           "internal nullable narrowing expects an optional \
                            value")))
         | Ok _ ->
-            Error.error "internal nullable narrowing expects 1 argument")
+            Error.error ~code:Error_code.Arity "internal nullable narrowing expects 1 argument")
     | "__lg_fn-value" -> (
         match compile_args () with
         | Error _ as error -> error
         | Ok [ value ] when is_function_payload value.ty -> Ok value
         | Ok [ value ] -> (
             match closed_sum_unary_function_constructors env value.ty with
-            | [] -> Error.error "fn? guard does not contain a function payload"
+            | [] -> Error.error ~code:Error_code.Invalid_form "fn? guard does not contain a function payload"
             | (first_constructor, payload_ty) :: rest ->
                 if
                   List.for_all
@@ -15086,9 +15086,9 @@ let create ~compile_expr =
                                       ] ) );
                               ] )))
                 else
-                  Error.error
+                  Error.error ~code:Error_code.Type_mismatch
                     "fn? guard matches incompatible function payload types")
-        | Ok _ -> Error.error "internal fn? narrowing expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "internal fn? narrowing expects 1 argument")
     | "__lg_not-fn-value" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15107,7 +15107,7 @@ let create ~compile_expr =
             (match (constructors, remaining) with
             | [], _ -> Ok value
             | _, [] ->
-                Error.error "fn? false branch has no non-function payload"
+                Error.error ~code:Error_code.Invalid_form "fn? false branch has no non-function payload"
             | _, (first_constructor, payload_ty) :: rest ->
                 if
                   List.for_all
@@ -15139,7 +15139,7 @@ let create ~compile_expr =
                                       ] ) );
                               ] )))
                 else Ok value)
-        | Ok _ -> Error.error "internal fn? narrowing expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "internal fn? narrowing expects 1 argument")
     | ( "__lg_not-keyword-value" | "__lg_not-string-value"
       | "__lg_not-symbol-value" | "__lg_not-int-value" ) as helper -> (
         let excluded_ty, kind =
@@ -15198,7 +15198,7 @@ let create ~compile_expr =
                               ] )))
                 else Ok value)
         | Ok _ ->
-            Error.error "internal scalar predicate narrowing expects 1 argument")
+            Error.error ~code:Error_code.Arity "internal scalar predicate narrowing expects 1 argument")
     | "__lg_instance-value" -> (
         match arg_forms with
         | [ FSymbol type_name; value_form ] -> (
@@ -15248,7 +15248,7 @@ let create ~compile_expr =
                                             ] ) );
                                     ] ))))))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "internal instance narrowing expects a record type and value")
     | "__lg_not-instance-value" -> (
         match arg_forms with
@@ -15305,7 +15305,7 @@ let create ~compile_expr =
                                   ] )))
                     | [] | _ :: _ :: _ -> Ok value)))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "internal negative instance narrowing expects a record type and value")
     | "__lg_symbol-value" -> (
         match compile_args () with
@@ -15369,7 +15369,7 @@ let create ~compile_expr =
                       [ value.semantic_expr ] )))
         | Ok [ _ ] -> Ok (unreachable_narrowed_value TSymbol "symbol")
         | Ok _ ->
-            Error.error "internal symbol narrowing expects 1 argument")
+            Error.error ~code:Error_code.Arity "internal symbol narrowing expects 1 argument")
     | "__lg_string-value" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15402,7 +15402,7 @@ let create ~compile_expr =
                                         "unreachable string branch";
                                     ] ) );
                             ] ))))
-        | Ok _ -> Error.error "internal string narrowing expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "internal string narrowing expects 1 argument")
     | "__lg_number-value" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15450,9 +15450,9 @@ let create ~compile_expr =
                                       ] ) );
                               ] )))
                 else
-                  Error.error
+                  Error.error ~code:Error_code.Semantic
                     "number? guard matches both int and float payloads; define a closed numeric representation")
-        | Ok _ -> Error.error "internal number narrowing expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "internal number narrowing expects 1 argument")
     | "__lg_keyword-value" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15488,12 +15488,12 @@ let create ~compile_expr =
         | Ok [ value ] when Types.equal value.ty TUnknown ->
             Ok (typed_ir TKeyword value.semantic_expr)
         | Ok [ value ] when Types.is_dynamic value.ty ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "keyword? guard narrowing requires a statically typed value; \
                define a closed sum type for alternative value types"
         | Ok [ _ ] -> Ok (unreachable_narrowed_value TKeyword "keyword")
         | Ok _ ->
-            Error.error "internal keyword narrowing expects 1 argument")
+            Error.error ~code:Error_code.Arity "internal keyword narrowing expects 1 argument")
     | "__lg_int-value" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15517,11 +15517,11 @@ let create ~compile_expr =
                         [ value.semantic_expr ];
                     ]))
         | Ok [ value ] when Types.is_dynamic value.ty ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "int? guard narrowing requires a statically typed value; define \
                a closed sum type for alternative value types"
         | Ok [ _ ] -> Ok (unreachable_narrowed_value TInt "int")
-        | Ok _ -> Error.error "internal int narrowing expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "internal int narrowing expects 1 argument")
     | "__lg_max" | "__lg_min" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -15643,9 +15643,9 @@ let create ~compile_expr =
         | Ok [ value ] ->
             Result.map (fun expression -> typed_ir TInt expression)
               (compile_static_hash_capability env value)
-        | Ok _ -> Error.error "hash expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "hash expects 1 argument")
     | "class" | "type" ->
-        Error.error
+        Error.error ~code:Error_code.Unsupported
           "runtime class inspection is not supported; match a closed sum type"
     | "__lg_identical-predicate" -> (
         let identity_argument_type ty =
@@ -15701,10 +15701,10 @@ let create ~compile_expr =
                       constrained_argument_value left,
                       constrained_argument_value right )))
         | Ok [ left; right ] ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ("identical? arguments must have the same type, got "
              ^ Types.source_name left.ty ^ " and " ^ Types.source_name right.ty)
-        | Ok _ -> Error.error "identical? expects 2 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "identical? expects 2 arguments")
     | "__lg_exec-tap-fn" -> (
         match arg_forms with
         | [ thunk_form ] -> (
@@ -15729,10 +15729,10 @@ let create ~compile_expr =
                                   ] );
                           ] )))
             | Ok thunk ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("*exec-tap-fn* expects a zero-argument function, got "
                  ^ Types.source_name thunk.ty))
-        | _ -> Error.error "*exec-tap-fn* expects 1 argument")
+        | _ -> Error.error ~code:Error_code.Arity "*exec-tap-fn* expects 1 argument")
     | ("__lg_add-tap" | "__lg_remove-tap") as tap_operation -> (
         match arg_forms with
         | [ callback_form ] -> (
@@ -15768,7 +15768,7 @@ let create ~compile_expr =
                         ( Semantic_ir.Ident runtime,
                           [ identity; callback.semantic_expr ] ))))
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               (if tap_operation = "__lg_add-tap" then
                  "add-tap expects 1 argument"
                else "remove-tap expects 1 argument"))
@@ -15785,7 +15785,7 @@ let create ~compile_expr =
                      (Semantic_ir.Apply
                         ( Semantic_ir.Ident "Lg_runtime.Runtime_tap.tap",
                           [ value.semantic_expr ] ))))
-        | _ -> Error.error "tap> expects 1 argument")
+        | _ -> Error.error ~code:Error_code.Arity "tap> expects 1 argument")
     | "__lg_re-seq" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15794,7 +15794,7 @@ let create ~compile_expr =
               if Types.equal source.ty TString then Ok source.semantic_expr
               else if Types.is_dynamic source.ty then
                 dynamic_unpack env TString source.semantic_expr
-              else Error.error "re-seq expects a regex and string"
+              else Error.error ~code:Error_code.Arity "re-seq expects a regex and string"
             in
             Result.map
               (fun source ->
@@ -15809,7 +15809,7 @@ let create ~compile_expr =
                              [ expression.semantic_expr; source ] );
                        ] )))
               source
-        | Ok _ -> Error.error "re-seq expects a regex and string")
+        | Ok _ -> Error.error ~code:Error_code.Arity "re-seq expects a regex and string")
     | "__lg_re-matcher" -> (
         match compile_args () with
         | Error _ as error -> error
@@ -15818,7 +15818,7 @@ let create ~compile_expr =
               if Types.equal source.ty TString then Ok source.semantic_expr
               else if Types.is_dynamic source.ty then
                 dynamic_unpack env TString source.semantic_expr
-              else Error.error "re-matcher expects a regex and string"
+              else Error.error ~code:Error_code.Arity "re-matcher expects a regex and string"
             in
             Result.map
               (fun source ->
@@ -15828,7 +15828,7 @@ let create ~compile_expr =
                          "Lg_runtime.Runtime_string.regex_matcher",
                        [ expression.semantic_expr; source ] )))
               source
-        | Ok _ -> Error.error "re-matcher expects a regex and string")
+        | Ok _ -> Error.error ~code:Error_code.Arity "re-matcher expects a regex and string")
     | "__lg_cljs-test-report" -> (
         match arg_forms with
         | [ reporter_form; event_form ] -> (
@@ -15850,7 +15850,7 @@ let create ~compile_expr =
                           Semantic_ir.Unit;
                         ]))
             | (Error _ as error), _ | _, (Error _ as error) -> error)
-        | _ -> Error.error "cljs.test/report expects one report event")
+        | _ -> Error.error ~code:Error_code.Arity "cljs.test/report expects one report event")
     | "__lg_multimethod-methods" -> (
         match arg_forms with
         | [ multifn_form ] ->
@@ -15861,7 +15861,7 @@ let create ~compile_expr =
                      ( Semantic_ir.Ident "Lg_runtime.Runtime_multimethod.methods",
                        [ Semantic_ir.String id ] )))
               (resolve_multimethod_key scope env multifn_form)
-        | _ -> Error.error "methods expects one multimethod")
+        | _ -> Error.error ~code:Error_code.Arity "methods expects one multimethod")
     | "__lg_multimethod-get-method" -> (
         match arg_forms with
         | [ multifn_form; dispatch_form ] -> (
@@ -15878,7 +15878,7 @@ let create ~compile_expr =
                             "Lg_runtime.Runtime_multimethod.get_method",
                           [ Semantic_ir.String id; dispatch.semantic_expr ] )))
             | (Error _ as error), _ | _, (Error _ as error) -> error)
-        | _ -> Error.error "get-method expects a multimethod and dispatch value")
+        | _ -> Error.error ~code:Error_code.Arity "get-method expects a multimethod and dispatch value")
     | "__lg_multimethod-dispatch-fn" -> (
         match arg_forms with
         | [ multifn_form ] ->
@@ -15890,7 +15890,7 @@ let create ~compile_expr =
                          "Lg_runtime.Runtime_multimethod.dispatch_fn",
                        [ Semantic_ir.String id ] )))
               (resolve_multimethod_key scope env multifn_form)
-        | _ -> Error.error "dispatch-fn expects one multimethod")
+        | _ -> Error.error ~code:Error_code.Arity "dispatch-fn expects one multimethod")
     | "__lg_multimethod-remove-method" -> (
         match arg_forms with
         | [ multifn_form; dispatch_form ] -> (
@@ -15908,7 +15908,7 @@ let create ~compile_expr =
                           [ Semantic_ir.String id; dispatch.semantic_expr ] )))
             | (Error _ as error), _ | _, (Error _ as error) -> error)
         | _ ->
-            Error.error "remove-method expects a multimethod and dispatch value")
+            Error.error ~code:Error_code.Arity "remove-method expects a multimethod and dispatch value")
     | "__lg_multimethod-remove-all-methods" -> (
         match arg_forms with
         | [ multifn_form ] ->
@@ -15920,7 +15920,7 @@ let create ~compile_expr =
                          "Lg_runtime.Runtime_multimethod.remove_all_methods",
                        [ Semantic_ir.String id ] )))
               (resolve_multimethod_key scope env multifn_form)
-        | _ -> Error.error "remove-all-methods expects one multimethod")
+        | _ -> Error.error ~code:Error_code.Arity "remove-all-methods expects one multimethod")
     | "__lg_multimethod-default-dispatch-val" -> (
         match arg_forms with
         | [ multifn_form ] ->
@@ -15932,7 +15932,7 @@ let create ~compile_expr =
                          "Lg_runtime.Runtime_multimethod.default_dispatch_val",
                        [ Semantic_ir.String id ] )))
               (resolve_multimethod_key scope env multifn_form)
-        | _ -> Error.error "default-dispatch-val expects one multimethod")
+        | _ -> Error.error ~code:Error_code.Arity "default-dispatch-val expects one multimethod")
     | "__lg_multimethod-prefer-method" -> (
         match arg_forms with
         | [ multifn_form; preferred_form; other_form ] -> (
@@ -15959,7 +15959,7 @@ let create ~compile_expr =
             | _, _, (Error _ as error) ->
                 error)
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "prefer-method expects a multimethod and two dispatch values")
     | "__lg_multimethod-prefers" -> (
         match arg_forms with
@@ -15971,7 +15971,7 @@ let create ~compile_expr =
                      ( Semantic_ir.Ident "Lg_runtime.Runtime_multimethod.prefers",
                        [ Semantic_ir.String id ] )))
               (resolve_multimethod_key scope env multifn_form)
-        | _ -> Error.error "prefers expects one multimethod")
+        | _ -> Error.error ~code:Error_code.Arity "prefers expects one multimethod")
     | ("__lg_re-find" | "__lg_re-matches") as
       regex_operation -> (
         let public_operation =
@@ -16002,7 +16002,7 @@ let create ~compile_expr =
               if Types.equal source.ty TString then Ok source.semantic_expr
               else if Types.is_dynamic source.ty then
                 dynamic_unpack env TString source.semantic_expr
-              else Error.error (public_operation ^ " expects a regex and string")
+              else Error.error ~code:Error_code.Arity (public_operation ^ " expects a regex and string")
             in
             Result.map
               (fun source ->
@@ -16049,7 +16049,7 @@ let create ~compile_expr =
                            [ groups ] )))
               source
         | Ok _ ->
-            Error.error (public_operation ^ " expects a regex and string"))
+            Error.error ~code:Error_code.Arity (public_operation ^ " expects a regex and string"))
     | "__lg_pprint" -> (
         let print_level = print_level_expr scope env in
         match compile_args () with
@@ -16080,8 +16080,8 @@ let create ~compile_expr =
                               Semantic_ir.String "\n";
                             ];
                         ] )))
-        | Ok [ _; _ ] -> Error.error "pprint writer must be Buffer.t"
-        | Ok _ -> Error.error "pprint expects 1 or 2 arguments")
+        | Ok [ _; _ ] -> Error.error ~code:Error_code.Semantic "pprint writer must be Buffer.t"
+        | Ok _ -> Error.error ~code:Error_code.Arity "pprint expects 1 or 2 arguments")
     | "__lg_pr" -> (
         let print_level = print_level_expr scope env in
         match compile_args () with
@@ -16132,7 +16132,7 @@ let create ~compile_expr =
               | Error _ -> apply "Stdlib.flush" [Semantic_ir.Ident "Stdlib.stdout"]
             in
             Ok (typed_ir TUnit output)
-        | _ -> Error.error "flush expects no arguments")
+        | _ -> Error.error ~code:Error_code.Arity "flush expects no arguments")
     | "__lg_print_output" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -16149,8 +16149,8 @@ let create ~compile_expr =
                     (Semantic_ir.Ident "print_string", [ arg.semantic_expr ])
             in
             Ok (typed_ir TUnit output)
-        | Ok [ _ ] -> Error.error "print output expects a string"
-        | Ok _ -> Error.error "print output expects 1 argument")
+        | Ok [ _ ] -> Error.error ~code:Error_code.Arity "print output expects a string"
+        | Ok _ -> Error.error ~code:Error_code.Arity "print output expects 1 argument")
     | "__lg_print_output_line" -> (
         match compile_args () with
         | Error _ as err -> err
@@ -16185,17 +16185,17 @@ let create ~compile_expr =
             in
             Ok (typed_ir TUnit output)
         | Ok (text :: _ :: _ :: _) when not (Types.equal text.ty TString) ->
-            Error.error "print output line expects a string"
+            Error.error ~code:Error_code.Arity "print output line expects a string"
         | Ok [ _; newline; _ ] when not (Types.equal newline.ty TBool) ->
-            Error.error "print output line expects a bool newline flag"
+            Error.error ~code:Error_code.Arity "print output line expects a bool newline flag"
         | Ok [ _; _; flush_on_newline ]
           when not (Types.equal flush_on_newline.ty TBool) ->
-            Error.error "print output line expects a bool flush-on-newline flag"
+            Error.error ~code:Error_code.Arity "print output line expects a bool flush-on-newline flag"
         | Ok [ _; _; _ ] ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "print output line expects string, bool newline flag, and bool \
                flush-on-newline flag"
-        | Ok _ -> Error.error "print output line expects 3 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "print output line expects 3 arguments")
     | "__lg_list" -> compile_list scope env arg_forms
     | "__lg_list-star" -> compile_list_star scope env arg_forms
     | "list-of" -> compile_list_of arg_forms
@@ -16292,7 +16292,7 @@ let create ~compile_expr =
                 Ok
                   (typed_ir (Types.constant_function result.ty)
                      result.semantic_expr))
-        | Ok _ -> Error.error "constantly expects 1 argument"
+        | Ok _ -> Error.error ~code:Error_code.Arity "constantly expects 1 argument"
         | Error _ as error -> error)
     | "__lg_sort" ->
         compile_sequence_transform_call scope env name arg_forms
@@ -16485,27 +16485,27 @@ let create ~compile_expr =
                                             transformed;
                                           ])))
                         | _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Arity
                               "__lg_transformer_sequence expects binary reducing-function arities")
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           "__lg_transformer_sequence expects binary reducing-function arities")
                 | TFn _, Ok _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "__lg_transformer_sequence expects a transducer"
                 | _, Error _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "__lg_transformer_sequence expects a seqable collection"
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "__lg_transformer_sequence expects a transducer")))
-        | _ -> Error.error "__lg_transformer_sequence expects 2 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "__lg_transformer_sequence expects 2 arguments")
     | "__lg_flatten" -> (
         match compile_args () with
         | Error _ as error -> error
         | Ok [ collection ] -> (
             match Collection_capability.to_seq_expr env collection with
-            | Error _ -> Error.error "flatten expects a seqable value"
+            | Error _ -> Error.error ~code:Error_code.Arity "flatten expects a seqable value"
             | Ok (item_ty, sequence) -> (
                 let item_name = "__lg_flatten_item" in
                 let item =
@@ -16521,7 +16521,7 @@ let create ~compile_expr =
                 match
                   if item_is_sequential then
                     Collection_capability.to_seq_expr env item
-                  else Error.error "flatten item is not sequential"
+                  else Error.error ~code:Error_code.Semantic "flatten item is not sequential"
                 with
                 | Ok (inner_ty, inner_sequence) ->
                     let flattened =
@@ -16537,7 +16537,7 @@ let create ~compile_expr =
                          (apply "Lg_runtime.Runtime_seq.memoize"
                             [ flattened ]))
                 | Error _ -> Ok (typed_ir (TSeq item_ty) sequence)))
-        | Ok _ -> Error.error "flatten expects 1 argument")
+        | Ok _ -> Error.error ~code:Error_code.Arity "flatten expects 1 argument")
     | "__lg_memoize" -> (
         let runtime_helper arity =
           "Lg_runtime.Runtime_memoize.memoize" ^ string_of_int arity
@@ -16551,10 +16551,10 @@ let create ~compile_expr =
                   (Semantic_ir.Apply
                      (Semantic_ir.Ident (runtime_helper arity), [ function_expr ]))
               else
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "memoize supports statically typed functions with 0 to 3 \
                    fixed arguments"
-          | _ -> Error.error "memoize expects a function"
+          | _ -> Error.error ~code:Error_code.Arity "memoize expects a function"
         in
         let combine_results results =
           List.fold_right
@@ -16580,7 +16580,7 @@ let create ~compile_expr =
                   arities
                   |> List.mapi (fun index arity ->
                          if Option.is_some arity.rest_param then
-                           Error.error
+                           Error.error ~code:Error_code.Semantic
                              "memoize does not support variadic function \
                               arities"
                          else
@@ -16597,13 +16597,13 @@ let create ~compile_expr =
                   (fun expressions ->
                     typed_ir function_value.ty (Semantic_ir.Tuple expressions))
                   (combine_results memoized_arities)
-            | _ -> Error.error "memoize expects a function")
-        | Ok _ -> Error.error "memoize expects 1 argument")
+            | _ -> Error.error ~code:Error_code.Arity "memoize expects a function")
+        | Ok _ -> Error.error ~code:Error_code.Arity "memoize expects 1 argument")
     | "__lg_reduce_transformed" -> (
         match arg_forms with
         | [ _reducer_form; _initial_form; _collection_form ] ->
             compile_reduce scope env arg_forms
-        | _ -> Error.error "__lg_reduce_transformed expects 3 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "__lg_reduce_transformed expects 3 arguments")
     | "__lg_complete_transformed" -> (
         match arg_forms with
         | [ transformed_form; result_form ] -> (
@@ -16631,15 +16631,15 @@ let create ~compile_expr =
                               (plan_and_emit_argument env
                                  ~expected:parameter_ty result)
                         | _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Arity
                               "__lg_complete_transformed expects a unary completion arity")
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Arity
                           "__lg_complete_transformed expects a unary completion arity")
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       "__lg_complete_transformed expects an overloaded reducing function"))
-        | _ -> Error.error "__lg_complete_transformed expects 2 arguments")
+        | _ -> Error.error ~code:Error_code.Arity "__lg_complete_transformed expects 2 arguments")
     | "__lg_run" -> (
         match arg_forms with
         | [ proc_form; collection_form ] -> (
@@ -16647,7 +16647,7 @@ let create ~compile_expr =
             | Error _ as error -> error
             | Ok collection -> (
                 match Collection_capability.to_seq_expr env collection with
-                | Error _ -> Error.error "run! expects a seqable collection"
+                | Error _ -> Error.error ~code:Error_code.Arity "run! expects a seqable collection"
                 | Ok (element_ty, sequence) ->
                     let expected_proc_ty =
                       TFn ([ element_ty ], Type_solver.fresh ())
@@ -16722,10 +16722,10 @@ let create ~compile_expr =
                                  (Semantic_ir.Sequence
                                     [ reduction; Semantic_ir.Constructor ("None", None) ]))
                         | TFn _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Type_mismatch
                               "run! called with incompatible arguments: callback argument type does not match collection"
-                        | _ -> Error.error "run! expects a unary function")))
-        | _ -> Error.error "run! expects a function and collection")
+                        | _ -> Error.error ~code:Error_code.Arity "run! expects a unary function")))
+        | _ -> Error.error ~code:Error_code.Arity "run! expects a function and collection")
     | "__lg_reduce" -> compile_reduce scope env arg_forms
     | "__lg_apply" -> (
         match arg_forms with
@@ -16762,7 +16762,7 @@ let create ~compile_expr =
         | Ok [ left; right ] ->
             Result.map (fun expression -> typed_ir TInt expression)
               (compile_static_compare_capability env left right)
-        | Ok _ -> Error.error "compare expects 2 arguments")
+        | Ok _ -> Error.error ~code:Error_code.Arity "compare expects 2 arguments")
     | "__lg_fn-to-comparator" -> (
         match arg_forms with
         | [ comparator_form ] -> (
@@ -16830,13 +16830,13 @@ let create ~compile_expr =
                                   ],
                                   body ) )))
                 | Some (_, _, _, return_ty) ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       ("sorted comparator must return int or bool, got "
                      ^ Types.source_name return_ty)
                 | None ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "sorted comparator must be a binary function"))
-        | _ -> Error.error "sorted comparator normalization expects 1 argument")
+        | _ -> Error.error ~code:Error_code.Arity "sorted comparator normalization expects 1 argument")
     | "ordering-compare" -> (
         match compile_compare scope env arg_forms with
         | Error _ as error -> error
@@ -17034,7 +17034,7 @@ let create ~compile_expr =
                           (Error.Host_boundary
                              { callee = function_name; index })
                         ~callee:function_name ~index ~expected argument
-                | _ -> Error.error "internal OCaml argument mismatch"
+                | _ -> Error.error ~code:Error_code.Interop "internal OCaml argument mismatch"
               in
               adapt 1 [] expected_types arguments
             in
@@ -17047,7 +17047,7 @@ let create ~compile_expr =
             | Error _ as err -> err
             | Ok _ -> (
                 match expected_argument_types signature arguments with
-                | None -> Error.error "invalid OCaml argument application"
+                | None -> Error.error ~code:Error_code.Interop "invalid OCaml argument application"
                 | Some expected_types -> (
                     match adapt_arguments expected_types with
                     | Error _ as err -> err
@@ -17228,7 +17228,7 @@ let create ~compile_expr =
     | Ok collections ->
         if List.exists (fun collection -> Types.is_dynamic collection.ty) collections
         then
-          Error.error
+          Error.error ~code:Error_code.Semantic
             "concat requires statically typed collections; define a sum type \
              for heterogeneous elements"
         else (
@@ -17237,7 +17237,7 @@ let create ~compile_expr =
           | collection :: rest -> (
               match Collection_capability.to_seq_expr env collection with
               | Error _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Arity
                     ("concat expects collections, got "
                     ^ Types.source_name collection.ty)
               | Ok (inner, sequence) ->
@@ -17384,7 +17384,7 @@ let create ~compile_expr =
               when List.for_all (fun ty -> Types.equal first ty) rest ->
                 Ok first
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   "metadata-bearing maps require homogeneous static key and value types"
           in
           match
@@ -17458,8 +17458,8 @@ let create ~compile_expr =
                               "Lg_runtime.Runtime_reference.reset_metadata",
                             [ reference.semantic_expr; metadata ] ))))
           | ty when Types.is_dynamic ty ->
-              Error.error "reset-meta! requires a statically typed reference"
-          | _ -> Error.error "reset-meta! expects a reference")
+              Error.error ~code:Error_code.Arity "reset-meta! requires a statically typed reference"
+          | _ -> Error.error ~code:Error_code.Arity "reset-meta! expects a reference")
     in
     match (name, arg_forms) with
     | "__lg_with-meta", [ value_form; metadata_form ] -> (
@@ -17499,7 +17499,7 @@ let create ~compile_expr =
                       FSymbol metadata_name;
                     ]))
         | Ok { ty = TNamed_record _; _ }, Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Semantic
               "with-meta requires the nominal record to implement IWithMeta"
         | Ok value, Ok metadata
           when Option.is_some (Types.dynamic_map_types value.ty) ->
@@ -17516,7 +17516,7 @@ let create ~compile_expr =
           -> (
             match project_protocol_constraint Core_protocols.with_meta_id value with
             | None ->
-                Error.error
+                Error.error ~code:Error_code.Protocol
                   "protocol-constrained with-meta receiver must provide IWithMeta evidence"
             | Some (witness, receiver) ->
                 let metadata_name = "__lg_with_meta_metadata" in
@@ -17592,12 +17592,12 @@ let create ~compile_expr =
                           FSymbol metadata_name;
                         ])))
         | Ok _, Ok _ ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               "with-meta requires a statically typed map implementing IWithMeta")
-    | "__lg_with-meta", _ -> Error.error "__lg_with-meta expects 2 arguments"
+    | "__lg_with-meta", _ -> Error.error ~code:Error_code.Arity "__lg_with-meta expects 2 arguments"
     | "__lg_reset-meta!", [ reference_form; metadata_form ] ->
         compile_reference_metadata_update reference_form metadata_form
-    | "__lg_reset-meta!", _ -> Error.error "__lg_reset-meta! expects 2 arguments"
+    | "__lg_reset-meta!", _ -> Error.error ~code:Error_code.Protocol "__lg_reset-meta! expects 2 arguments"
     | _ -> assert false
   and compile_into scope env target_form source_form =
     let expression_env = Env.with_expected_type None env in
@@ -17751,7 +17751,7 @@ let create ~compile_expr =
                 | _ -> collection
               in
               match Collection_capability.to_seq_expr env collection with
-              | Error _ -> Error.error "remove expects a seqable collection"
+              | Error _ -> Error.error ~code:Error_code.Arity "remove expects a seqable collection"
               | Ok (element_ty, _sequence) ->
                   let element_ty =
                     if Types.equal element_ty TUnknown then target_element
@@ -17829,7 +17829,7 @@ let create ~compile_expr =
     | Error _ as error -> error
     | Ok source when Types.is_dynamic target.ty -> (
         match Collection_capability.to_seq_expr env source with
-        | Error _ -> Error.error "into source must be a collection"
+        | Error _ -> Error.error ~code:Error_code.Semantic "into source must be a collection"
         | Ok (element_ty, sequence) -> (
             let item_name = "__lg_into_item" in
             let item = typed_ir element_ty (Semantic_ir.Ident item_name) in
@@ -17854,7 +17854,7 @@ let create ~compile_expr =
                           [ target.semantic_expr; packed_sequence ] )))))
     | Ok source when Types.is_dynamic source.ty -> (
         match Collection_capability.to_seq_expr env source with
-        | Error _ -> Error.error "into source must be a collection"
+        | Error _ -> Error.error ~code:Error_code.Protocol "into source must be a collection"
         | Ok (element_ty, sequence) ->
             let source =
               typed_ir (TList element_ty)
@@ -17976,7 +17976,7 @@ let create ~compile_expr =
                  ])
         | Error _ -> (
             match Collection_capability.to_seq_expr env source with
-            | Error _ -> Error.error "into source must be a collection"
+            | Error _ -> Error.error ~code:Error_code.Semantic "into source must be a collection"
             | Ok (element_ty, sequence) ->
                 let widen_record_vector target_element =
                   let dynamic = Types.dynamic_constraint TUnknown in
@@ -18054,7 +18054,7 @@ let create ~compile_expr =
                     | None -> false
                   in
                   if not compatible then
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       "into source element type must match target element type"
                   else
                     Result.map
@@ -18108,13 +18108,13 @@ let create ~compile_expr =
         match compile_args_for scope env collection_forms with
         | Error _ as error -> error
         | Ok collections when List.length collections < 2 ->
-            Error.error "__lg_interleave expects at least two collections"
+            Error.error ~code:Error_code.Arity "__lg_interleave expects at least two collections"
         | Ok collections ->
             let rec collect prepared = function
               | [] -> Ok (List.rev prepared)
               | collection :: rest -> (
                   match Collection_capability.to_seq_expr env collection with
-                  | Error _ -> Error.error "interleave expects collections"
+                  | Error _ -> Error.error ~code:Error_code.Arity "interleave expects collections"
                   | Ok (element_type, sequence) ->
                       collect ((element_type, sequence) :: prepared) rest)
             in
@@ -18152,7 +18152,7 @@ let create ~compile_expr =
                               rest)
                   in
                   (match pack_sequences [] prepared with
-                  | Error _ -> Error.error "interleave element types must match"
+                  | Error _ -> Error.error ~code:Error_code.Semantic "interleave element types must match"
                   | Ok sequences ->
                       let sequence_names =
                         List.mapi
@@ -18211,7 +18211,7 @@ let create ~compile_expr =
         | Error _ as error -> error
         | Ok collection -> (
             match Collection_capability.to_seq_expr env collection with
-            | Error _ -> Error.error "sort expects a seqable value"
+            | Error _ -> Error.error ~code:Error_code.Arity "sort expects a seqable value"
             | Ok (inner, sequence) -> (
                 match
                   compile_function_arg scope
@@ -18280,7 +18280,7 @@ let create ~compile_expr =
                                      [ sequence ] );
                                ] )))
                       comparator_expression
-                | Ok _ -> Error.error "sort expects a comparator function")))
+                | Ok _ -> Error.error ~code:Error_code.Arity "sort expects a comparator function")))
     | "__lg_sort", [ collection_form ] -> (
         match compile_expr scope env collection_form with
         | Error _ as error -> error
@@ -18289,7 +18289,7 @@ let create ~compile_expr =
             | Ok _ as result -> result
             | Error _ -> (
                 match Collection_capability.to_seq_expr env collection with
-                | Error _ -> Error.error "sort expects a seqable value"
+                | Error _ -> Error.error ~code:Error_code.Arity "sort expects a seqable value"
                 | Ok (inner, sequence) ->
                     Core_sequence_transform.compile "sort"
                       [
@@ -18317,13 +18317,13 @@ let create ~compile_expr =
           (Types.set_module_name TChar)
     | Ok [ collection ] -> (
         match Collection_capability.to_seq_expr env collection with
-        | Error _ -> Error.error "set expects a seqable value"
+        | Error _ -> Error.error ~code:Error_code.Arity "set expects a seqable value"
         | Ok (inner, sequence) -> (
             let inner =
               Collection_capability.resolve_callback_record env inner
             in
             if Types.is_dynamic inner then
-              Error.error
+              Error.error ~code:Error_code.Semantic
                 "set requires a static element type; define a sum type for a \
                  heterogeneous domain"
             else
@@ -18333,19 +18333,19 @@ let create ~compile_expr =
                     (Semantic_ir.Apply
                        (Semantic_ir.Ident "List.of_seq", [ sequence ]));
                 ]))
-    | Ok _ -> Error.error "set expects 1 arguments"
+    | Ok _ -> Error.error ~code:Error_code.Arity "set expects 1 arguments"
   and compile_cons scope env arg_forms =
     match compile_args_for scope env arg_forms with
     | Error _ as error -> error
     | Ok [ _; _ ] -> compile_static_cons scope env arg_forms
-    | Ok _ -> Error.error "cons expects a value and seqable collection"
+    | Ok _ -> Error.error ~code:Error_code.Arity "cons expects a value and seqable collection"
   and compile_conj scope env arg_forms =
     match
       compile_args_for scope (Env.with_expected_type None env) arg_forms
     with
     | Error _ as error -> error
     | Ok (_ :: _ :: _) -> compile_static_conj scope env arg_forms
-    | Ok _ -> Error.error "conj expects collection and values"
+    | Ok _ -> Error.error ~code:Error_code.Arity "conj expects collection and values"
 
   and compile_get_in_step scope env arg_forms =
     let rec supports_lookup ty =
@@ -18429,7 +18429,7 @@ let create ~compile_expr =
                       Result.map evaluated
                         (compile_expr scope env default_form)
                   | _ -> assert false))
-    | _ -> Error.error "get-in lookup step expects target, key, and optional default"
+    | _ -> Error.error ~code:Error_code.Arity "get-in lookup step expects target, key, and optional default"
 
   and compile_get_in scope env arg_forms =
     let rec is_statically_empty_path expression =
@@ -18494,7 +18494,7 @@ let create ~compile_expr =
               in
               Result.bind path (fun path ->
               match Collection_capability.to_seq_expr env path with
-              | Error _ -> Error.error "get-in path must be seqable"
+              | Error _ -> Error.error ~code:Error_code.Semantic "get-in path must be seqable"
               | Ok (inner, sequence) ->
                   let item_name = "__lg_get_in_key" in
                   let item = typed_ir inner (Semantic_ir.Ident item_name) in
@@ -18569,14 +18569,14 @@ let create ~compile_expr =
           (function
             | Some result -> Ok result
             | None -> compile_dynamic_get_in target path (Some default))
-    | _ -> Error.error "get-in expects target, path, and optional default"
+    | _ -> Error.error ~code:Error_code.Arity "get-in expects target, path, and optional default"
   and compile_assoc_in scope env arg_forms =
     match arg_forms with
     | [ target; FVector keys; value ] ->
         compile_expr scope env (Core_form_expansion.assoc_in target keys value)
     | [ _target; _path; _value ] ->
-        Error.error "assoc-in currently requires a vector path"
-    | _ -> Error.error "assoc-in expects target, path, and value"
+        Error.error ~code:Error_code.Arity "assoc-in currently requires a vector path"
+    | _ -> Error.error ~code:Error_code.Arity "assoc-in expects target, path, and value"
   and compile_update_in scope env arg_forms =
     match arg_forms with
     | target_form :: FVector (_ :: _ as keys) :: function_form :: argument_forms
@@ -18585,11 +18585,11 @@ let create ~compile_expr =
           (Core_form_expansion.update_in target_form keys function_form
              argument_forms)
     | _target_form :: _path_form :: _function_form :: _argument_forms ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           "update-in requires a statically known vector path; define a typed \
            helper for computed paths"
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           "update-in expects target, path, function, and optional arguments"
   and compile_function_arg scope env form =
     let compiled =
@@ -18732,9 +18732,9 @@ let create ~compile_expr =
                 Ok
                   (typed_ir fn.ty (Semantic_ir.Let (bindings, overloaded)))
             | ty ->
-                Error.error
+                Error.error ~code:Error_code.Arity
                   ("bound-fn* expects a function, got " ^ Types.source_name ty))
-    | _ -> Error.error "bound-fn* expects 1 argument"
+    | _ -> Error.error ~code:Error_code.Arity "bound-fn* expects 1 argument"
   and compile_static_complement scope env arg_forms =
     match arg_forms with
     | [ function_form ] ->
@@ -18786,15 +18786,15 @@ let create ~compile_expr =
                      (Semantic_ir.Let
                         ( [ (Semantic_ir.PVar function_name, fn.semantic_expr) ],
                           Semantic_ir.Fun (parameters, body) )))
-            | _ -> Error.error "complement expects a statically typed function")
-    | _ -> Error.error "complement expects 1 argument"
+            | _ -> Error.error ~code:Error_code.Arity "complement expects a statically typed function")
+    | _ -> Error.error ~code:Error_code.Arity "complement expects 1 argument"
   and compile_static_filter_call scope env fn_expression fn_ty predicate_form
       collection_form =
     Result.bind
       (compile_expr scope (Env.with_expected_type None env) collection_form)
       (fun collection ->
         match Collection_capability.to_seq_expr env collection with
-        | Error _ -> Error.error "filter expects a seqable collection"
+        | Error _ -> Error.error ~code:Error_code.Arity "filter expects a seqable collection"
         | Ok (inner, _sequence) ->
             let predicate_ty =
               TFn
@@ -19191,7 +19191,7 @@ let create ~compile_expr =
           | _ -> false
         in
         if fn.multimethod && fn.multimethod_method_types = [] then
-          Error.error (name ^ " has no methods")
+          Error.error ~code:Error_code.Semantic (name ^ " has no methods")
         else if
           is_core_binding "filter"
           && List.length arg_forms = 2
@@ -19225,7 +19225,7 @@ let create ~compile_expr =
                           compile_args ((expected, row, argument) :: acc)
                             parameters rows forms
                         else
-                          Error.error
+                          Error.error ~code:Error_code.Type_mismatch
                             (name ^ " called with incompatible arguments"))
                 | _ -> assert false
               in
@@ -19315,11 +19315,11 @@ let create ~compile_expr =
                                  Semantic_ir.List dynamic_args :: static_args ) )))
                     (collect [] dynamic_results)))
           | TFn (parameter_tys, _) ->
-              Error.error
+              Error.error ~code:Error_code.Unsupported
                 (name ^ " called with unsupported arity "
                ^ string_of_int (List.length arg_forms) ^ "; expected "
                ^ string_of_int (List.length parameter_tys))
-          | _ -> Error.error (name ^ " has an invalid multimethod binding")
+          | _ -> Error.error ~code:Error_code.Invalid_form (name ^ " has an invalid multimethod binding")
         else
         let parameters_from_expected_return parameter_tys return_ty =
           match Env.expected_type env with
@@ -19647,10 +19647,10 @@ let create ~compile_expr =
                                 default.semantic_expr;
                               ] )))
                 | [ _ ] | [ _; _ ] ->
-                    Error.error
+                    Error.error ~code:Error_code.Type_mismatch
                       (name ^ " called with incompatible map lookup arguments")
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       (name ^ " map lookup expects 1 or 2 arguments"))
             | TOverloaded_fn arities -> (
                 let prefer_specific =
@@ -19662,7 +19662,7 @@ let create ~compile_expr =
                     args
                 with
                 | None ->
-                    Error.error
+                    Error.error ~code:Error_code.Unsupported
                       (name ^ " called with unsupported arity "
                      ^ string_of_int (List.length args))
                 | Some (arity_index, arity) -> (
@@ -20428,13 +20428,13 @@ let create ~compile_expr =
                         arity.fixed_params
                     in
                     if not open_set_elements_compatible then
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         (name ^ " expects sets with the same element type")
                     else if Option.is_some invalid_seqable_callback_return then
                       let index, actual_return =
                         Option.get invalid_seqable_callback_return
                       in
-                      Error.error
+                      Error.error ~code:Error_code.Arity
                         (name ^ " argument " ^ string_of_int index
                        ^ ": collection value is not seqable: "
                        ^ Types.source_name actual_return)
@@ -20442,7 +20442,7 @@ let create ~compile_expr =
                       not seqable_elements_compatible
                       && not has_callback_parameter
                     then
-                      Error.error
+                      Error.error ~code:Error_code.Type_mismatch
                         (name
                        ^ " called with incompatible arguments: generic "
                        ^ "type inference failed")
@@ -20491,7 +20491,7 @@ let create ~compile_expr =
                               (Error.Call_argument { callee = name; index })
                             ~callee:name ~index ~expected argument
                       | None ->
-                          Error.error
+                          Error.error ~code:Error_code.Type_mismatch
                             (name
                            ^ " called with incompatible arguments after type inference"))
                     else
@@ -20688,7 +20688,7 @@ let create ~compile_expr =
                                 prepare_arguments (index + 1) (argument :: prepared)
                                   expected_rest arguments)
                         | _ ->
-                            Error.error "internal overloaded argument mismatch"
+                            Error.error ~code:Error_code.Internal "internal overloaded argument mismatch"
                       in
                       match
                          prepare_arguments 0 [] fixed_param_tys fixed_args
@@ -20932,7 +20932,7 @@ let create ~compile_expr =
                     inference_actual_tys
                 with
                 | Error conflict when Type_solver.conflict_is_occurs conflict ->
-                    Error.error
+                    Error.error ~code:Error_code.Semantic
                       (name
                      ^ ": polymorphic recursion requires an explicit signature")
                 | Error _ ->
@@ -20955,7 +20955,7 @@ let create ~compile_expr =
                             (Error.Call_argument { callee = name; index })
                           ~callee:name ~index ~expected argument
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Type_mismatch
                           (name
                          ^ " called with incompatible arguments during type inference: expected ("
                          ^ String.concat ", "
@@ -21899,7 +21899,7 @@ let create ~compile_expr =
                                     plan_and_emit_argument env
                                       ~expected:expected_ty arg
                                 | _ ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Type_mismatch
                                       (name
                                      ^ " called with incompatible arguments"))
                             | _
@@ -22481,7 +22481,7 @@ let create ~compile_expr =
                 in
                 Result.map (typed_ir ret) call))
             | ty when Types.is_dynamic ty ->
-                Error.error
+                Error.error ~code:Error_code.Semantic
                   ("call target must have a static function or callable \
                     collection type; define a typed wrapper or closed sum type; \
                     got "
@@ -22538,7 +22538,7 @@ let create ~compile_expr =
                               prepare (expression :: expressions)
                                 (actual_ty :: actual_tys) expected actual)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Type_mismatch
                             (name ^ " called with incompatible arguments")
                     in
                     Result.map
@@ -22554,14 +22554,14 @@ let create ~compile_expr =
                                arguments )))
                       (prepare [] [] parameter_tys invoke_args)
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Type_mismatch
                       (name ^ " called with incompatible arguments"))
             | ty when Option.is_some (Types.dynamic_map_types ty) -> (
                 match args with
                 | [ _ ] | [ _; _ ] ->
                     compile_static_get scope env (FSymbol name :: arg_forms)
                 | _ ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       (name ^ " expects a key and optional default"))
             | TSet element_ty -> (
                 match args with
@@ -22626,8 +22626,8 @@ let create ~compile_expr =
                               expression)
                           expression)
                 | [ _ ] ->
-                    Error.error (name ^ " called with incompatible arguments")
-                | _ -> Error.error (name ^ " expects 1 arguments"))
+                    Error.error ~code:Error_code.Type_mismatch (name ^ " called with incompatible arguments")
+                | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments"))
             | TFn (parameter_tys, return_ty) ->
                 let contextual_dynamic_lookup expected form argument =
                   Types.is_dynamic argument.ty
@@ -22695,7 +22695,7 @@ let create ~compile_expr =
                               (actual_ty :: actual_tys) expected_rest
                               argument_rest)
                     | _ ->
-                        Error.error
+                        Error.error ~code:Error_code.Type_mismatch
                           (name ^ " called with incompatible arguments")
                   in
                   Result.map
@@ -22729,7 +22729,7 @@ let create ~compile_expr =
                 in
                 (match invalid_seqable_callback with
                 | Some (index, actual_return) ->
-                    Error.error
+                    Error.error ~code:Error_code.Arity
                       (name ^ " argument " ^ string_of_int index
                      ^ ": collection value is not seqable: "
                      ^ Types.source_name actual_return)
@@ -22753,7 +22753,7 @@ let create ~compile_expr =
                             (Error.Call_argument { callee = name; index })
                           ~callee:name ~index ~expected argument
                     | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Type_mismatch
                           (name
                          ^ " called with incompatible arguments: expected ("
                          ^ String.concat ", "
@@ -22764,7 +22764,7 @@ let create ~compile_expr =
                                 (fun argument -> Types.source_name argument.ty)
                                 args)
                          ^ ")")))
-            | _ -> Error.error (name ^ " is not callable")))
+            | _ -> Error.error ~code:Error_code.Semantic (name ^ " is not callable")))
   and compile_protocol_call scope env name arg_forms =
     let contextual_return_ty ty =
       match (ty, Env.expected_type env) with
@@ -22784,10 +22784,10 @@ let create ~compile_expr =
       | _ -> ty
     in
     if Protocol.method_is_ambiguous scope env name then
-      Error.error ("ambiguous protocol method " ^ name ^ "; use Protocol/method")
+      Error.error ~code:Error_code.Protocol ("ambiguous protocol method " ^ name ^ "; use Protocol/method")
     else
       match Protocol.lookup_marker scope env name with
-      | None -> Error.error ("unknown function " ^ name)
+      | None -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)
       | Some marker
         when (match (marker.protocol_id, arg_forms) with
              | ( Some protocol_id,
@@ -22806,7 +22806,7 @@ let create ~compile_expr =
       | Some marker
         when Option.is_none
                (select_binding_arity marker (List.length arg_forms)) ->
-          Error.error
+          Error.error ~code:Error_code.Unsupported
             (name ^ " called with unsupported protocol method arity "
            ^ string_of_int (List.length arg_forms))
       | Some marker -> (
@@ -22836,7 +22836,7 @@ let create ~compile_expr =
                   (fun argument ->
                     compile_protocol_args (argument :: compiled) expected_rest
                       form_rest)
-            | _ -> Error.error (name ^ " called with incompatible arguments")
+            | _ -> Error.error ~code:Error_code.Type_mismatch (name ^ " called with incompatible arguments")
           in
           let validate_protocol_arguments args =
             let mismatch =
@@ -22941,16 +22941,16 @@ let create ~compile_expr =
               match marker.ty with
               | TFn (param_tys, _ret)
                 when List.length param_tys <> List.length args ->
-                  Error.error (name ^ " called with incompatible arguments")
+                  Error.error ~code:Error_code.Type_mismatch (name ^ " called with incompatible arguments")
               | TFn (_, _) -> (
                   match args with
                   | [] ->
-                      Error.error (name ^ " called with incompatible arguments")
+                      Error.error ~code:Error_code.Type_mismatch (name ^ " called with incompatible arguments")
                   | receiver :: _ -> (
                       let method_name = Protocol.method_basename name in
                       match receiver.ty with
                       | receiver_ty when Types.is_dynamic receiver_ty ->
-                          Error.error
+                          Error.error ~code:Error_code.Protocol
                             ("protocol method " ^ name
                            ^ " requires a statically typed receiver")
                       | receiver_ty
@@ -22975,14 +22975,14 @@ let create ~compile_expr =
                                        | _ -> false)
                               in
                               if higher_order_recursive_traversal then
-                                Error.error
+                                Error.error ~code:Error_code.Protocol
                                   "higher-order protocol traversal requires a closed sum type"
                               else
                               match
                                 protocol_witness_expression protocol_id receiver
                               with
                               | None ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Protocol
                                     ("protocol-constrained receiver for " ^ name
                                    ^ " must be a function parameter")
                               | Some witness ->
@@ -23130,7 +23130,7 @@ let create ~compile_expr =
                                               (adapted :: prepared) expected
                                               actual)
                                     | _ ->
-                                        Error.error
+                                        Error.error ~code:Error_code.Protocol
                                           "protocol witness argument arity mismatch"
                                   in
                                   let receiver_argument =
@@ -23184,7 +23184,7 @@ let create ~compile_expr =
                                    supported receiver constructors"
                                 else ""
                               in
-                              Error.error
+                              Error.error ~code:Error_code.Protocol
                                 ("no protocol implementation for " ^ name
                                ^ " and " ^ source_name receiver.ty
                                ^ closed_sum_hint))
@@ -23223,10 +23223,10 @@ let create ~compile_expr =
                               select_protocol_payload payload_ty payload )
                           with
                           | None, _ ->
-                              Error.error
+                              Error.error ~code:Error_code.Unresolved
                                 ("unknown protocol method " ^ method_name)
                           | Some _, None ->
-                              Error.error
+                              Error.error ~code:Error_code.Protocol
                                 ("reify does not implement protocol method "
                                ^ name)
                           | Some position, Some (payload_ty, payload) ->
@@ -23338,7 +23338,7 @@ let create ~compile_expr =
                                         prepare (expression :: prepared)
                                           expected_rest argument_rest)
                                 | _ ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Protocol
                                       "protocol method argument count mismatch"
                               in
                               Result.map
@@ -23432,7 +23432,7 @@ let create ~compile_expr =
                                           (expression :: prepared)
                                           expected_rest argument_rest)
                                 | _ ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Protocol
                                       "protocol method argument count mismatch"
                               in
                               let compile_constructor = function
@@ -23491,11 +23491,11 @@ let create ~compile_expr =
                                                    parameter_tys
                                                    branch_arguments)
                                           | TFn _ ->
-                                              Error.error
+                                              Error.error ~code:Error_code.Type_mismatch
                                                 (name
                                                ^ " called with incompatible arguments")
                                           | _ ->
-                                              Error.error
+                                              Error.error ~code:Error_code.Protocol
                                                 (name ^ " is not callable"))
                                     in
                                     Result.map
@@ -23518,7 +23518,7 @@ let create ~compile_expr =
                                                ^ name);
                                             ] ) )
                                 | _, _ ->
-                                    Error.error
+                                    Error.error ~code:Error_code.Protocol
                                       "protocol dispatch requires unary closed-sum constructors"
                               in
                               let rec compile_constructors compiled = function
@@ -23544,7 +23544,7 @@ let create ~compile_expr =
                                      supported receiver constructors"
                                   else ""
                                 in
-                                Error.error
+                                Error.error ~code:Error_code.Protocol
                                   ("no protocol implementation for " ^ name
                                  ^ " and " ^ source_name receiver.ty
                                  ^ closed_sum_hint)
@@ -23672,7 +23672,7 @@ let create ~compile_expr =
                                             prepare (argument :: prepared)
                                               expected_rest argument_rest)
                                     | _ ->
-                                        Error.error
+                                        Error.error ~code:Error_code.Semantic
                                           "protocol method argument count \
                                            mismatch"
                                   in
@@ -23785,7 +23785,7 @@ let create ~compile_expr =
                                                       impl.ocaml_name,
                                                     arguments ))))
                               | TFn _ ->
-                                  Error.error
+                                  Error.error ~code:Error_code.Semantic
                                     (name
                                    ^ " called with incompatible arguments: \
                                       expected ("
@@ -23801,8 +23801,8 @@ let create ~compile_expr =
                                             Types.source_name argument.ty)
                                           args)
                                    ^ ")")
-                              | _ -> Error.error (name ^ " is not callable"))))))
-              | _ -> Error.error (name ^ " is not callable"))))
+                              | _ -> Error.error ~code:Error_code.Semantic (name ^ " is not callable"))))))
+              | _ -> Error.error ~code:Error_code.Semantic (name ^ " is not callable"))))
   and compile_args_for scope env arg_forms =
     let rec loop acc = function
       | [] -> Ok (List.rev acc)

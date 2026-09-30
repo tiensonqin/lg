@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- destructuring_rejects_unsupported_let_sources.cljc
+-- COMPILATION ERROR [LG2008] -- destructuring_rejects_unsupported_let_sources.cljc
 
 map destructuring expects a map
 

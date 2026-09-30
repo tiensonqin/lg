@@ -94,22 +94,22 @@ let parse_sequence_pattern forms =
             sequence_as_name = (if ignore_name name then as_name else Some name);
           }
     | FKeyword ":as" :: _ ->
-        Error.error "sequential destructuring :as must be last"
+        Error.error ~code:Error_code.Destructure "sequential destructuring :as must be last"
     | FSymbol "&" :: FSymbol name :: rest ->
         if Option.is_some rest_name then
-          Error.error "sequential destructuring & can appear only once"
+          Error.error ~code:Error_code.Destructure "sequential destructuring & can appear only once"
         else
           loop items
             (if ignore_name name then rest_name else Some name)
             as_name rest
     | FSymbol "&" :: _ ->
-        Error.error "sequential destructuring & must be followed by a symbol"
+        Error.error ~code:Error_code.Destructure "sequential destructuring & must be followed by a symbol"
     | ((FSymbol _ | FVector _ | FMap _) as pattern) :: rest
       when Option.is_none rest_name ->
         loop (pattern :: items) rest_name as_name rest
     | _ :: _ when Option.is_some rest_name ->
-        Error.error "sequential destructuring only supports :as after & rest"
-    | _ :: _ -> Error.error "unsupported sequential destructuring form"
+        Error.error ~code:Error_code.Destructure "sequential destructuring only supports :as after & rest"
+    | _ :: _ -> Error.error ~code:Error_code.Unsupported "unsupported sequential destructuring form"
   in
   loop [] None None forms
 
@@ -256,11 +256,11 @@ let parse_param_specs = function
               :: acc)
               rest
         | _ ->
-            Error.error
+            Error.error ~code:Error_code.Destructure
               "function parameters must be symbols or destructuring patterns"
       in
       loop 0 [] params
-  | _ -> Error.error "function parameters must be a vector"
+  | _ -> Error.error ~code:Error_code.Destructure "function parameters must be a vector"
 
 let parse_map_pattern pairs =
   let default_for defaults name = List.assoc_opt name defaults in
@@ -280,9 +280,9 @@ let parse_map_pattern pairs =
                        :: bindings)
                      acc
                | FSymbol _ -> acc
-               | _ -> Error.error "map destructuring :keys expects symbols")
+               | _ -> Error.error ~code:Error_code.Destructure "map destructuring :keys expects symbols")
              (Ok [])
-    | _ -> Error.error "map destructuring :keys expects a vector"
+    | _ -> Error.error ~code:Error_code.Destructure "map destructuring :keys expects a vector"
   in
   let parse_defaults = function
     | FMap pairs ->
@@ -293,9 +293,9 @@ let parse_map_pattern pairs =
                    Result.map (fun defaults -> (name, value) :: defaults) acc
                | FSymbol _, _ -> acc
                | _ ->
-                   Error.error "map destructuring :or defaults must use symbols")
+                   Error.error ~code:Error_code.Destructure "map destructuring :or defaults must use symbols")
              (Ok [])
-    | _ -> Error.error "map destructuring :or expects a map"
+    | _ -> Error.error ~code:Error_code.Destructure "map destructuring :or expects a map"
   in
   let apply_defaults defaults fields =
     fields
@@ -335,14 +335,14 @@ let parse_map_pattern pairs =
           loop
             ({ binding_pattern; keyword; default_form = None } :: fields)
             as_name defaults rest
-    | _ :: _ -> Error.error "unsupported map destructuring form"
+    | _ :: _ -> Error.error ~code:Error_code.Unsupported "unsupported map destructuring form"
   in
   loop [] None [] pairs
 
 let field_type fields keyword =
   match find_field keyword fields with
   | Some field -> Ok field
-  | None -> Error.error ("cannot destructure missing field " ^ keyword)
+  | None -> Error.error ~code:Error_code.Destructure ("cannot destructure missing field " ^ keyword)
 
 let literal_default = function
   | FInt value ->
@@ -350,7 +350,7 @@ let literal_default = function
   | FString value -> Ok (typed_ir TString (Semantic_ir.String value))
   | FBool value -> Ok (typed_ir TBool (Semantic_ir.Bool value))
   | FKeyword keyword -> Ok (typed_ir TKeyword (Semantic_ir.String keyword))
-  | _ -> Error.error "map destructuring :or defaults must be scalar literals"
+  | _ -> Error.error ~code:Error_code.Destructure "map destructuring :or defaults must be scalar literals"
 
 let rec infer_map_type pattern lookup_local_ty =
   parse_map_pattern pattern
@@ -427,7 +427,7 @@ and infer_pattern_type pattern lookup_local_ty =
       Type_annotation.of_param_annotation annotation
   | FMap pairs -> infer_map_type pairs lookup_local_ty
   | FVector forms -> infer_sequence_type forms lookup_local_ty
-  | _ -> Error.error "unsupported destructuring pattern"
+  | _ -> Error.error ~code:Error_code.Unsupported "unsupported destructuring pattern"
 
 let rec pattern_type_hints pattern ty =
   match (pattern, ty) with
@@ -504,7 +504,7 @@ let apply_default compile_default default_form (value : typed_expr) =
             not
               (Types.assignable ~policy:Host_boundary ~expected:payload_ty
                  ~actual:default.ty)
-          then Error.error "map destructuring default has incompatible type"
+          then Error.error ~code:Error_code.Destructure "map destructuring default has incompatible type"
           else
             Ok
               (typed_ir result_ty
@@ -532,7 +532,7 @@ let rec bind_map ?compile_default ~env (target : typed_expr) pairs =
             | Error _ -> (
                 match default_form with
                 | None ->
-                    Error.error ("cannot destructure missing field " ^ keyword)
+                    Error.error ~code:Error_code.Destructure ("cannot destructure missing field " ^ keyword)
                 | Some form -> (
                     match literal_default form with
                     | Error _ as err -> err
@@ -599,7 +599,7 @@ let rec bind_map ?compile_default ~env (target : typed_expr) pairs =
             | Error _ -> (
                 match default_form with
                 | None ->
-                    Error.error ("cannot destructure missing field " ^ keyword)
+                    Error.error ~code:Error_code.Destructure ("cannot destructure missing field " ^ keyword)
                 | Some form -> (
                     match literal_default form with
                     | Error _ as err -> err
@@ -672,7 +672,7 @@ let rec bind_map ?compile_default ~env (target : typed_expr) pairs =
                 )
           in
           bind_fields [] parsed.field_bindings)
-  | _ -> Error.error "map destructuring expects a map"
+  | _ -> Error.error ~code:Error_code.Destructure "map destructuring expects a map"
 
 and bind_sequence ?compile_default env (target : typed_expr) forms =
   let rec erased_sequence_storage ty =
@@ -811,9 +811,9 @@ and bind_sequence ?compile_default env (target : typed_expr) forms =
     | Error _ as err -> err
     | Ok pattern ->
         if Option.is_some pattern.rest_name then
-          Error.error "tuple destructuring does not support & rest"
+          Error.error ~code:Error_code.Destructure "tuple destructuring does not support & rest"
         else if List.length pattern.item_patterns > List.length element_tys then
-          Error.error "tuple destructuring has too many elements"
+          Error.error ~code:Error_code.Destructure "tuple destructuring has too many elements"
         else
           let tuple_item_at index =
             let element_ty = List.nth element_tys index in
@@ -899,7 +899,7 @@ and bind_sequence ?compile_default env (target : typed_expr) forms =
       with
       | (Error _ as err), _ -> err
       | _, Error _ ->
-          Error.error
+          Error.error ~code:Error_code.Destructure
             ("sequential destructuring expects a seqable value, got "
            ^ Types.source_name target.ty)
       | Ok pattern, Ok (inner, sequence) ->
@@ -975,6 +975,6 @@ and bind_pattern ?compile_default ~env (target : typed_expr) pattern =
       bind_pattern ?compile_default ~env target pattern
   | FMap pairs -> bind_map ?compile_default ~env target pairs
   | FVector forms -> bind_sequence ?compile_default env target forms
-  | _ -> Error.error "unsupported destructuring pattern"
+  | _ -> Error.error ~code:Error_code.Unsupported "unsupported destructuring pattern"
   in
   Result.map (attach_pattern_identities pattern) bindings

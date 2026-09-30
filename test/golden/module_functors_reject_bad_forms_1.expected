@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- module_functors_reject_bad_forms_1.cljc
+-- COMPILATION ERROR [LG2001] -- module_functors_reject_bad_forms_1.cljc
 
 module-functor expects a name, [parameter signature ...], and body
 

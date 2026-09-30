@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- arithmetic_rejects_non_int_arguments.cljc
+-- COMPILATION ERROR [LG2001] -- arithmetic_rejects_non_int_arguments.cljc
 
 expected int arguments for +
 

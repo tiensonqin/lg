@@ -313,7 +313,7 @@ and transparent_manifest_alias name =
                 Lg_compiler_support.Ocaml_value.lookup_type_manifest
                   ~include_dirs name
               with
-              | Error message -> Error.error message
+              | Error message -> Error.error ~code:Error_code.Interop message
               | Ok (Lg_compiler_support.Ocaml_value.Variant _ as compiler_type) ->
                   variant_stack := canonical_name :: !variant_stack;
                   Fun.protect
@@ -383,7 +383,7 @@ let value_signature name =
   | None ->
       let signature =
         match Lg_compiler_support.Ocaml_value.lookup ~include_dirs name with
-        | Error message -> Error.error message
+        | Error message -> Error.error ~code:Error_code.Interop message
         | Ok compiler_type -> Ok (signature_of_compiler_type compiler_type)
       in
       Lookup_cache.add cache key signature;
@@ -400,7 +400,7 @@ let constructor_signature name =
         match
           Lg_compiler_support.Ocaml_value.lookup_constructor ~include_dirs name
         with
-        | Error message -> Error.error message
+        | Error message -> Error.error ~code:Error_code.Interop message
         | Ok constructor ->
             Ok
               {
@@ -423,7 +423,7 @@ let type_manifest name =
         match
           Lg_compiler_support.Ocaml_value.lookup_type_manifest ~include_dirs name
         with
-        | Error message -> Error.error message
+        | Error message -> Error.error ~code:Error_code.Interop message
         | Ok compiler_type -> Ok (of_compiler_type compiler_type)
       in
       Lookup_cache.add cache key manifest;
@@ -448,7 +448,7 @@ let record_type name =
   | None ->
       let record =
         match Lg_compiler_support.Ocaml_value.lookup_record ~include_dirs name with
-        | Error message -> Error.error message
+        | Error message -> Error.error ~code:Error_code.Interop message
         | Ok record ->
             let fields =
               List.map
@@ -470,8 +470,8 @@ let field_type type_name field_name =
   | Ok (TNamed_record record) -> (
       match List.find_opt (fun (field : Types.field) -> field.ocaml_name = field_name) record.fields with
       | Some field -> Ok field.ty
-      | None -> Error.error ("unknown field " ^ field_name ^ " in " ^ type_name))
-  | Ok _ -> Error.error ("OCaml type " ^ type_name ^ " is not a record")
+      | None -> Error.error ~code:Error_code.Unresolved ("unknown field " ^ field_name ^ " in " ^ type_name))
+  | Ok _ -> Error.error ~code:Error_code.Interop ("OCaml type " ^ type_name ^ " is not a record")
   | Error _ as error -> error
 
 let parameter_label_name = function
@@ -487,7 +487,7 @@ let parse_argument_forms forms =
   let rec parse acc = function
     | [] -> Ok (List.rev acc)
     | Ast.FKeyword label :: [] ->
-        Error.error ("OCaml argument label " ^ label ^ " requires a value")
+        Error.error ~code:Error_code.Interop ("OCaml argument label " ^ label ^ " requires a value")
     | Ast.FKeyword label :: value :: rest ->
         let label = String.sub label 1 (String.length label - 1) in
         parse ((Some label, value) :: acc) rest
@@ -541,7 +541,7 @@ let result_after_application signature arguments =
     | [] -> Ok ()
     | label :: rest ->
         if List.mem label seen then
-          Error.error ("duplicate OCaml argument label :" ^ label)
+          Error.error ~code:Error_code.Duplicate ("duplicate OCaml argument label :" ^ label)
         else reject_duplicate (label :: seen) rest
   in
   let known_label label =
@@ -555,7 +555,7 @@ let result_after_application signature arguments =
       match
         List.find_opt (fun label -> not (known_label label)) named_labels
       with
-      | Some label -> Error.error ("unknown OCaml argument label :" ^ label)
+      | Some label -> Error.error ~code:Error_code.Unresolved ("unknown OCaml argument label :" ^ label)
       | None -> (
           let consumed_named =
             arguments
@@ -581,7 +581,7 @@ let result_after_application signature arguments =
             | (Some _, _) :: rest -> consume_positionals consumed remaining rest
             | (None, actual_ty) :: rest ->
                 let rec consume prefix = function
-                  | [] -> Error.error "too many positional OCaml arguments"
+                  | [] -> Error.error ~code:Error_code.Interop "too many positional OCaml arguments"
                   | { label = Optional _; _ } :: parameters ->
                       consume prefix parameters
                   | ({ label = Labelled _; _ } as parameter) :: parameters ->

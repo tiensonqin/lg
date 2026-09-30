@@ -5,17 +5,17 @@ let accepts_int ty =
 
 let expect_int_args name args =
   if List.for_all (fun arg -> accepts_int arg.ty) args then Ok ()
-  else Error.error ("expected int arguments for " ^ name)
+  else Error.error ~code:Error_code.Arity ("expected int arguments for " ^ name)
 
 let one_arg name args =
   match args with
   | [ arg ] -> Ok arg
-  | _ -> Error.error (name ^ " expects 1 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
 
 let two_args name args =
   match args with
   | [ left; right ] -> Ok (left, right)
-  | _ -> Error.error (name ^ " expects 2 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 2 arguments")
 
 let int_unary name args build_code =
   match one_arg name args with
@@ -77,7 +77,7 @@ let identifier_body_expr name arg =
                    ("Some", Some (Semantic_ir.PVar "value")),
                  normalize (Semantic_ir.Ident "value") );
              ] ))
-  | _ -> Error.error (name ^ " expects string, keyword, or symbol")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects string, keyword, or symbol")
 
 let substring_after_last_slash body =
   string_sub (Semantic_ir.Ident body)
@@ -175,7 +175,7 @@ let compile_name target name args =
           match identifier_body_expr name arg with
           | Error _ as err -> err
           | Ok body -> Ok (typed_ir TString (identifier_name_expr body)))
-      | _ -> Error.error "name expects keyword, string, or symbol")
+      | _ -> Error.error ~code:Error_code.Arity "name expects keyword, string, or symbol")
 
 let compile_keyword _name args =
   match args with
@@ -190,8 +190,8 @@ let compile_keyword _name args =
                      [ arg.semantic_expr ])))
       | TString | TSymbol | TUnknown ->
           Ok (typed_ir TKeyword (keyword_one_arg_expr arg.semantic_expr))
-      | _ -> Error.error "keyword expects keyword, string, or symbol")
-  | _ -> Error.error "keyword expects 1 argument"
+      | _ -> Error.error ~code:Error_code.Arity "keyword expects keyword, string, or symbol")
+  | _ -> Error.error ~code:Error_code.Arity "keyword expects 1 argument"
 
 let compile_namespace target name args =
   match one_arg name args with
@@ -222,15 +222,15 @@ let compile_namespace target name args =
                 (TOcaml_app ("option", [ TString ]))
                 (identifier_namespace_expr body))
             (identifier_body_expr name arg)
-      | _ -> Error.error "namespace expects keyword or symbol")
+      | _ -> Error.error ~code:Error_code.Arity "namespace expects keyword or symbol")
 
 let compile_symbol name args =
   match args with
   | [ arg ] -> (
       match identifier_body_expr name arg with
-      | Error _ -> Error.error "symbol expects string, keyword, or symbol"
+      | Error _ -> Error.error ~code:Error_code.Arity "symbol expects string, keyword, or symbol"
       | Ok expr -> Ok (typed_ir TSymbol expr))
-  | _ -> Error.error "symbol expects 1 argument"
+  | _ -> Error.error ~code:Error_code.Arity "symbol expects 1 argument"
 
 let compile_identifier_parts name return_ty prefix args =
   match args with
@@ -244,9 +244,9 @@ let compile_identifier_parts name return_ty prefix args =
            (optional_identifier_expr ~prefix namespace_arg.semantic_expr
               name_arg.semantic_expr))
   | [ _; _ ] ->
-      Error.error
+      Error.error ~code:Error_code.Arity
         (name ^ " expects an optional string namespace and string name")
-  | _ -> Error.error (name ^ " expects 2 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 2 arguments")
 
 let compile ~target builtin args =
   let name = Builtin_id.scalar_source_name builtin in

@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- typed_function_parameters_reject_bad_bodies.cljc
+-- COMPILATION ERROR [LG2001] -- typed_function_parameters_reject_bad_bodies.cljc
 
 expected int arguments for +
 

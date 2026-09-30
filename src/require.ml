@@ -163,7 +163,7 @@ let ensure_namespace env module_name =
     namespace_bindings env module_name = []
     && Env.namespace_macros module_name env = []
   then
-    Error.error ("cannot require unknown namespace " ^ module_name)
+    Error.error ~code:Error_code.Unresolved ("cannot require unknown namespace " ^ module_name)
   else Ok env
 
 let add_lg_alias_bindings env module_name alias =
@@ -184,7 +184,7 @@ let add_lg_alias_bindings env module_name alias =
   let macros = Env.namespace_macros module_name env in
   let inline_macros = Env.namespace_inline_macros module_name env in
   if source_bindings = [] && macros = [] && inline_macros = [] then
-    Error.error ("cannot require unknown namespace " ^ module_name)
+    Error.error ~code:Error_code.Unresolved ("cannot require unknown namespace " ^ module_name)
   else
       let env =
         bindings
@@ -232,7 +232,7 @@ let add_lg_refer_bindings env scope module_name names =
           Option.is_none value && Option.is_none record
           && Option.is_none macro && Option.is_none inline_macro
         then
-          Error.error
+          Error.error ~code:Error_code.Unresolved
             ("cannot refer unknown symbol " ^ module_name ^ "/" ^ name)
         else
           let alias = Names.scoped_key scope name in
@@ -341,20 +341,20 @@ let parse_entries entries =
         let rec loop acc = function
           | [] -> Ok (List.rev acc)
           | FSymbol name :: rest -> loop (name :: acc) rest
-          | _ -> Error.error "require :refer expects a vector of symbols"
+          | _ -> Error.error ~code:Error_code.Arity "require :refer expects a vector of symbols"
         in
         loop [] names
-    | _ -> Error.error "require :refer expects a vector of symbols"
+    | _ -> Error.error ~code:Error_code.Arity "require :refer expects a vector of symbols"
   in
   let parse_require_entry = function
     | FSymbol module_name when is_dynamic_runtime_module module_name ->
-        Error.error
+        Error.error ~code:Error_code.Namespace
           "the universal dynamic runtime is not available to LG source; \
            define a closed sum type"
     | FSymbol module_name -> Ok [ Load { module_name } ]
     | FVector (FSymbol module_name :: _)
       when is_dynamic_runtime_module module_name ->
-        Error.error
+        Error.error ~code:Error_code.Namespace
           "the universal dynamic runtime is not available to LG source; \
            define a closed sum type"
     | FVector [ FSymbol module_name ]
@@ -364,7 +364,7 @@ let parse_entries entries =
             (String.length module_name - String.length package_prefix)
         in
         if Ocaml_package.valid_name package then Ok [ Package package ]
-        else Error.error ("invalid OCaml package name " ^ package)
+        else Error.error ~code:Error_code.Interop ("invalid OCaml package name " ^ package)
     | FVector [ FSymbol module_name ] -> Ok [ Load { module_name } ]
     | FVector (FSymbol combined_name :: options)
       when String.starts_with ~prefix:"ocaml." combined_name
@@ -379,12 +379,12 @@ let parse_entries entries =
               (String.length combined_name - separator - 1)
         in
         if not (Ocaml_package.valid_name package) then
-          Error.error ("invalid OCaml package name " ^ package)
+          Error.error ~code:Error_code.Interop ("invalid OCaml package name " ^ package)
         else
           let rec parse_options acc = function
             | [] ->
                 if acc = [] then
-                  Error.error "require entry requires :as or :refer"
+                  Error.error ~code:Error_code.Macro "require entry requires :as or :refer"
                 else Ok (Package package :: List.rev acc)
             | FKeyword ":as" :: FSymbol alias :: rest ->
                 parse_options (Alias { module_name; alias } :: acc) rest
@@ -394,23 +394,23 @@ let parse_entries entries =
                 | Ok names ->
                     parse_options (Refer { module_name; names } :: acc) rest)
             | _ ->
-                Error.error
+                Error.error ~code:Error_code.Namespace
                   "require entries must use :as alias or :refer [symbols]"
           in
           parse_options [] options
     | FVector (FSymbol module_name :: options) ->
         let rec parse_options acc = function
-          | [] -> if acc = [] then Error.error "require entry requires :as or :refer" else Ok acc
+          | [] -> if acc = [] then Error.error ~code:Error_code.Macro "require entry requires :as or :refer" else Ok acc
           | FKeyword ":as" :: FSymbol alias :: rest ->
               parse_options (Alias { module_name; alias } :: acc) rest
           | FKeyword (":refer" | ":refer-macros") :: names :: rest -> (
               match parse_refer_names names with
               | Error _ as err -> err
               | Ok names -> parse_options (Refer { module_name; names } :: acc) rest)
-          | _ -> Error.error "require entries must use :as alias or :refer [symbols]"
+          | _ -> Error.error ~code:Error_code.Namespace "require entries must use :as alias or :refer [symbols]"
         in
         parse_options [] options |> Result.map List.rev
-    | _ -> Error.error "require entries must start with a module symbol"
+    | _ -> Error.error ~code:Error_code.Namespace "require entries must start with a module symbol"
   in
   let rec loop acc = function
     | [] -> Ok (List.rev acc)

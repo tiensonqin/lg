@@ -315,7 +315,7 @@ let query_cache = Hashtbl.create 8
 
 let query package =
   if not (valid_name package) then
-    Error.error ("invalid OCaml package name " ^ package)
+    Error.error ~code:Error_code.Interop ("invalid OCaml package name " ^ package)
   else
     let report_timings = Sys.getenv_opt "LG_COMPILE_TIMINGS" = Some "1" in
     let started_at = if report_timings then Unix.gettimeofday () else 0.0 in
@@ -365,7 +365,7 @@ let query package =
               (match Unix.close_process_full (stdout, stdin, stderr) with
               | WEXITED 0 -> Ok (unique_directories directories)
               | WEXITED _ | WSIGNALED _ | WSTOPPED _ ->
-                  Error.error ("OCaml package " ^ package ^ " was not found"))
+                  Error.error ~code:Error_code.Interop ("OCaml package " ^ package ^ " was not found"))
         in
         Hashtbl.replace query_cache cache_key result;
         finish result

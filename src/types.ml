@@ -1432,7 +1432,7 @@ and set_module_name = function
         (fun _ -> "Lg_runtime.Runtime_poly_set")
         (set_module_name inner)
   | TNamed_record record -> Ok record.set_module_name
-  | ty -> Error.error ("sets require a generated comparator for " ^ source_name ty)
+  | ty -> Error.error ~code:Error_code.Semantic ("sets require a generated comparator for " ^ source_name ty)
 
 let record_fields = function
   | TRecord fields -> Some fields

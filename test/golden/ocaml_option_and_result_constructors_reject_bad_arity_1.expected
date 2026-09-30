@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- ocaml_option_and_result_constructors_reject_bad_arity_1.cljc
+-- COMPILATION ERROR [LG2001] -- ocaml_option_and_result_constructors_reject_bad_arity_1.cljc
 
 Some expects 1 arguments
 

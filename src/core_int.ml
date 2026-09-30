@@ -54,14 +54,14 @@ let fold_function function_name first rest =
 
 let expect_int_args name args =
   if List.for_all (fun arg -> accepts_int arg.ty) args then Ok ()
-  else Error.error ("expected int arguments for " ^ name)
+  else Error.error ~code:Error_code.Arity ("expected int arguments for " ^ name)
 
 let compile_operator ~target name args =
   match (name, args) with
   | "+", [] -> Ok (typed_ir TInt (int 0))
   | "*", [] -> Ok (typed_ir TInt (int 1))
-  | "/", [] -> Error.error "/ expects at least 1 arguments"
-  | _, [] -> Error.error (name ^ " expects at least 1 arguments")
+  | "/", [] -> Error.error ~code:Error_code.Arity "/ expects at least 1 arguments"
+  | _, [] -> Error.error ~code:Error_code.Arity (name ^ " expects at least 1 arguments")
   | _, [ arg ] when name = "-" && target = Target.Melange ->
       Ok
         (typed_ir TInt
@@ -98,8 +98,8 @@ let compile_unary name args build_expr =
   match args with
   | [ arg ] ->
       if accepts_int arg.ty then Ok (typed_ir TInt (build_expr (int_expression arg)))
-      else Error.error ("expected int arguments for " ^ name)
-  | _ -> Error.error (name ^ " expects 1 arguments")
+      else Error.error ~code:Error_code.Arity ("expected int arguments for " ^ name)
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
 
 let compile_binary name args =
   match args with
@@ -125,14 +125,14 @@ let compile_binary name args =
           | _ -> int_expression left
         in
         Ok (typed_ir TInt expression)
-      else Error.error ("expected int arguments for " ^ name)
-  | _ -> Error.error (name ^ " expects 2 arguments")
+      else Error.error ~code:Error_code.Arity ("expected int arguments for " ^ name)
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 2 arguments")
 
 let compile_min_max name args =
   let is_max = name = "max" || name = "__lg_max" in
   let display_name = if is_max then "max" else "min" in
   match args with
-  | [] -> Error.error (display_name ^ " expects at least 1 arguments")
+  | [] -> Error.error ~code:Error_code.Arity (display_name ^ " expects at least 1 arguments")
   | _ ->
       if List.for_all (fun arg -> accepts_int arg.ty) args then
         let fn =
@@ -151,4 +151,4 @@ let compile_min_max name args =
                   (int_expression first) rest)
         in
         Ok (typed_ir TInt expression)
-      else Error.error ("expected int arguments for " ^ display_name)
+      else Error.error ~code:Error_code.Arity ("expected int arguments for " ^ display_name)

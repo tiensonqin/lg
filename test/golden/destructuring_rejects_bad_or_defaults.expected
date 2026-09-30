@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- destructuring_rejects_bad_or_defaults.cljc
+-- COMPILATION ERROR [LG2008] -- destructuring_rejects_bad_or_defaults.cljc
 
 map destructuring :or expects a map
 

@@ -112,10 +112,10 @@ let create ~compile_expr =
                   expression;
                 ] ))
           (pack_edn_expression inner (Semantic_ir.Ident value_name))
-    | _ -> Error.error "value cannot be represented as closed EDN metadata"
+    | _ -> Error.error ~code:Error_code.Semantic "value cannot be represented as closed EDN metadata"
   in
   let non_concrete_compare_error () =
-    Error.error
+    Error.error ~code:Error_code.Semantic
       "compare expects one concrete comparable type; define a closed sum type \
        and match its cases explicitly for a heterogeneous domain"
   in
@@ -147,7 +147,7 @@ let create ~compile_expr =
                  && Option.is_some (Types.seqable_constraint_info right.ty) ->
               non_concrete_compare_error ()
           | None ->
-            Error.error
+            Error.error ~code:Error_code.Arity
               ("compare arguments must have the same type: "
            ^ Types.source_name left.ty ^ " and " ^ Types.source_name right.ty)
           | Some (left, right, ty) -> (
@@ -174,7 +174,7 @@ let create ~compile_expr =
                     (typed_ir TInt
                        (apply ocaml_name [ left; right ]))
               | Some _ ->
-                  Error.error
+                  Error.error ~code:Error_code.Invalid_form
                     "IComparable/-compare has an invalid signature"
               | None when not (comparable_type ty) ->
                   non_concrete_compare_error ()
@@ -193,7 +193,7 @@ let create ~compile_expr =
                     (typed_ir TInt
                        (apply "Stdlib.compare" [ left; right ])))
             )
-      | Ok _ -> Error.error "compare expects 2 arguments"
+      | Ok _ -> Error.error ~code:Error_code.Arity "compare expects 2 arguments"
     and compile_hash_set scope env arg_forms =
       match arg_forms with
       | [] -> (
@@ -222,7 +222,7 @@ let create ~compile_expr =
                arg_forms
            with
           | Error _ as err -> err
-          | Ok [] -> Error.error "hash-set expects elements"
+          | Ok [] -> Error.error ~code:Error_code.Arity "hash-set expects elements"
           | Ok exprs ->
               let compile_values element_ty coerce_value =
                 Result.bind (set_module_name env element_ty)
@@ -279,7 +279,7 @@ let create ~compile_expr =
       match arg_forms with
       | [ FKeyword keyword ] -> (
           match Type_annotation.of_keyword keyword with
-          | Error _ -> Error.error ("unknown set element type " ^ keyword)
+          | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown set element type " ^ keyword)
           | Ok element_ty ->
               let set_module =
                 match element_ty with
@@ -295,7 +295,7 @@ let create ~compile_expr =
                     | Some { kind = Type_registry.Variant; _ } ->
                         Ok "Lg_runtime.Runtime_poly_set"
                     | Some _ | None ->
-                        Error.error
+                        Error.error ~code:Error_code.Semantic
                           ("sets require a generated comparator for "
                          ^ Types.source_name element_ty))
                 | _ -> set_module_name env element_ty
@@ -304,7 +304,7 @@ let create ~compile_expr =
               |> Result.map (fun set_module ->
                 typed_ir (TSet element_ty)
                   (Semantic_ir.Ident (set_module ^ ".empty"))))
-      | _ -> Error.error "set-of expects one type keyword"
+      | _ -> Error.error ~code:Error_code.Arity "set-of expects one type keyword"
     and compile_disj scope env arg_forms =
       match arg_forms with
       | collection_form :: value_forms -> (
@@ -331,12 +331,12 @@ let create ~compile_expr =
                                                 [ value; expression ] ))
                                            rest))
                           else
-                            Error.error
+                            Error.error ~code:Error_code.Semantic
                               "disj value type must match set element type")
                   in
                   remove_values collection.semantic_expr value_forms
-              | _ -> Error.error "disj expects a set"))
-      | [] -> Error.error "disj expects a set"
+              | _ -> Error.error ~code:Error_code.Arity "disj expects a set"))
+      | [] -> Error.error ~code:Error_code.Arity "disj expects a set"
   in
   {
     compile_compare;

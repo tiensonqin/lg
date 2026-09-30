@@ -3,7 +3,7 @@ open Types
 let one_arg name args =
   match args with
   | [ arg ] -> Ok arg
-  | _ -> Error.error (name ^ " expects 1 arguments")
+  | _ -> Error.error ~code:Error_code.Arity (name ^ " expects 1 arguments")
 
 let evaluated_argument arg =
   Semantic_ir.evaluate_for_effect arg.semantic_expr
@@ -74,4 +74,4 @@ let compile ~target name args =
                  Semantic_ir.Int 1 ))
       | "__lg_char-predicate" -> static_bool (Types.equal arg.ty TChar)
       | "__lg_regex-predicate" -> static_bool (Types.equal arg.ty TRegex)
-      | _ -> Error.error ("unknown function " ^ name)
+      | _ -> Error.error ~code:Error_code.Unresolved ("unknown function " ^ name)

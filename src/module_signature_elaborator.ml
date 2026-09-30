@@ -43,7 +43,7 @@ let compile ?location scope env next_type signature_name item_forms =
                 in
                 parse_constraints (constraint_ :: acc) rest))
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           "signature constraint expects with-type or substitute-type, a type \
            name, optional parameters, and a type"
   in
@@ -53,7 +53,7 @@ let compile ?location scope env next_type signature_name item_forms =
         [ FSymbol "val"; (FSymbol value_name as name_form); FKeyword keyword ]
       :: rest -> (
         match Type_annotation.of_keyword keyword with
-        | Error _ -> Error.error ("unknown signature type " ^ keyword)
+        | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown signature type " ^ keyword)
         | Ok value_type ->
             parse
               (Signature_value
@@ -69,7 +69,7 @@ let compile ?location scope env next_type signature_name item_forms =
         [ FSymbol "type"; (FSymbol type_name as name_form); FKeyword keyword ]
       :: rest -> (
         match Type_annotation.of_keyword keyword with
-        | Error _ -> Error.error ("unknown signature type " ^ keyword)
+        | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown signature type " ^ keyword)
         | Ok manifest ->
             parse
               (Signature_type
@@ -127,7 +127,7 @@ let compile ?location scope env next_type signature_name item_forms =
               :: items)
               rest)
     | FList (FSymbol "include" :: _) :: _ ->
-        Error.error "module-signature include expects one module type"
+        Error.error ~code:Error_code.Unresolved "module-signature include expects one module type"
     | FList
         [
           FSymbol "type";
@@ -146,7 +146,7 @@ let compile ?location scope env next_type signature_name item_forms =
               when String.starts_with ~prefix:"unknown type parameter "
                      err.message ->
                 Error err
-            | Error _ -> Error.error ("unknown signature type " ^ keyword)
+            | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown signature type " ^ keyword)
             | Ok manifest ->
                 parse
                   (Signature_type
@@ -179,13 +179,13 @@ let compile ?location scope env next_type signature_name item_forms =
               :: items)
               rest)
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Semantic
           "module-signature items must be val, type, module, or include \
            declarations"
   in
   match parse [] item_forms with
   | Error _ as err -> err
-  | Ok [] -> Error.error "module-signature expects at least one signature item"
+  | Ok [] -> Error.error ~code:Error_code.Arity "module-signature expects at least one signature item"
   | Ok items -> (
       let signature_id =
         Signature_id.create

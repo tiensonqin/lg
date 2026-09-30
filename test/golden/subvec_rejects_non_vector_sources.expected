@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- subvec_rejects_non_vector_sources.cljc
+-- COMPILATION ERROR [LG2001] -- subvec_rejects_non_vector_sources.cljc
 
 subvec expects a vector
 

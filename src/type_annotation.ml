@@ -2,7 +2,7 @@ open Ast
 open Types
 
 let reject_dynamic_type () =
-  Error.error
+  Error.error ~code:Error_code.Semantic
     "dynamic is not a source type; define a closed sum type containing the \
      supported values"
 
@@ -53,25 +53,25 @@ let matching_type_application source =
 let validate_ocaml_type_application name args =
   match (name, args) with
   | "tuple", _ :: _ :: _ -> Ok ()
-  | "tuple", _ -> Error.error "tuple expects at least two type arguments"
+  | "tuple", _ -> Error.error ~code:Error_code.Arity "tuple expects at least two type arguments"
   | "option", [ _ ] -> Ok ()
-  | "option", _ -> Error.error "option expects one type argument"
+  | "option", _ -> Error.error ~code:Error_code.Arity "option expects one type argument"
   | "weak", [ _ ] -> Ok ()
-  | "weak", _ -> Error.error "weak expects one type argument"
+  | "weak", _ -> Error.error ~code:Error_code.Arity "weak expects one type argument"
   | "result", [ _; _ ] -> Ok ()
-  | "result", _ -> Error.error "result expects two type arguments"
+  | "result", _ -> Error.error ~code:Error_code.Arity "result expects two type arguments"
   | "map", [ _; _ ] -> Ok ()
-  | "map", _ -> Error.error "map expects two type arguments"
+  | "map", _ -> Error.error ~code:Error_code.Arity "map expects two type arguments"
   | "fn", _ :: _ -> Ok ()
-  | "fn", [] -> Error.error "fn expects a return type"
+  | "fn", [] -> Error.error ~code:Error_code.Arity "fn expects a return type"
   | "variadic-fn", _ :: _ :: _ -> Ok ()
   | "variadic-fn", _ ->
-      Error.error "variadic-fn expects a rest type and return type"
+      Error.error ~code:Error_code.Arity "variadic-fn expects a rest type and return type"
   | "overload", _ :: _ -> Ok ()
-  | "overload", _ -> Error.error "overload expects at least two function types"
+  | "overload", _ -> Error.error ~code:Error_code.Protocol "overload expects at least two function types"
   | "reify", [ _; _ ] -> Ok ()
-  | "reify", _ -> Error.error "reify expects a protocol and method type"
-  | _, [] -> Error.error "OCaml type application expects at least one argument"
+  | "reify", _ -> Error.error ~code:Error_code.Protocol "reify expects a protocol and method type"
+  | _, [] -> Error.error ~code:Error_code.Interop "OCaml type application expects at least one argument"
   | _ -> Ok ()
 
 let string_contains_substring source substring =
@@ -102,12 +102,12 @@ let transparent_ocaml_alias = function
 
 let rec parse_ocaml_type source =
   let source = String.trim source in
-  if source = "" then Error.error "empty OCaml type"
+  if source = "" then Error.error ~code:Error_code.Interop "empty OCaml type"
   else
     match matching_type_application source with
     | None ->
         if String.contains source '<' || String.contains source '>' then
-          Error.error "malformed OCaml type application"
+          Error.error ~code:Error_code.Interop "malformed OCaml type application"
         else if source = "ordering" then Ok (TOcaml "int")
         else if source = "int" then Ok TInt
         else if source = "int64" then Ok (TOcaml "int64")
@@ -151,7 +151,7 @@ let rec parse_ocaml_type source =
           String.sub source (open_index + 1)
             (String.length source - open_index - 2)
         in
-        if name = "" then Error.error "missing OCaml type constructor"
+        if name = "" then Error.error ~code:Error_code.Interop "missing OCaml type constructor"
         else if List.mem name ["variant"; "variant-open"; "variant-upper"] then
           let bound = match name with "variant" -> Exact_row | "variant-open" -> Lower_row | _ -> Upper_row in
           let rec parse_tags tags = function
@@ -163,14 +163,14 @@ let rec parse_ocaml_type source =
                       (String.sub source 0 index,
                        Result.map Option.some (parse_ocaml_type (String.sub source (index + 1) (String.length source - index - 1)))) in
                 if not (Variant_row.valid_tag tag) then
-                  Error.error "invalid polymorphic variant tag"
-                else if List.mem_assoc tag tags then Error.error "duplicate polymorphic variant tag"
+                  Error.error ~code:Error_code.Invalid_form "invalid polymorphic variant tag"
+                else if List.mem_assoc tag tags then Error.error ~code:Error_code.Duplicate "duplicate polymorphic variant tag"
                 else Result.bind payload (fun payload -> parse_tags ((tag, payload) :: tags) rest) in
           parse_tags [] (split_top_level_type_args inner)
         else
           let arg_sources = split_top_level_type_args inner in
           if List.exists (( = ) "") arg_sources then
-            Error.error "empty OCaml type argument"
+            Error.error ~code:Error_code.Interop "empty OCaml type argument"
           else
             let rec parse_args acc = function
               | [] -> Ok (List.rev acc)
@@ -188,7 +188,7 @@ let rec parse_ocaml_type source =
                     if name = "module" then
                       match arg_sources with
                       | [ signature ] -> Ok (Types.module_package_type (Names.module_path_to_ocaml signature))
-                      | _ -> Error.error "module expects one module signature"
+                      | _ -> Error.error ~code:Error_code.Interop "module expects one module signature"
                     else if name = "option" then
                       match args with
                       | [ inner ] -> Ok (TNullable inner)
@@ -197,49 +197,49 @@ let rec parse_ocaml_type source =
                     else if name = "callback" then
                       match args with
                       | [ inner ] -> Ok (TOcaml_app ("Lg_ffi.Callback.t", [inner]))
-                      | _ -> Error.error "callback expects one function type argument"
+                      | _ -> Error.error ~code:Error_code.Interop "callback expects one function type argument"
                     else if name = "owned-pointer" then
                       match args with
                       | [ inner ] -> Ok (TOcaml_app ("Lg_ffi.Owned_pointer.t", [inner]))
-                      | _ -> Error.error "owned-pointer expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "owned-pointer expects one type argument"
                     else if name = "pointer" then
                       match args with
                       | [ inner ] -> Ok (TOcaml_app ("Ctypes.ptr", [inner]))
-                      | _ -> Error.error "pointer expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "pointer expects one type argument"
                     else if name = "array" then
                       match args with
                       | [ inner ] -> Ok (TArray inner)
-                      | _ -> Error.error "array expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "array expects one type argument"
                     else if name = "vector" then
                       match args with
                       | [ inner ] -> Ok (TVector inner)
-                      | _ -> Error.error "vector expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "vector expects one type argument"
                     else if name = "list" then
                       match args with
                       | [ inner ] -> Ok (TList inner)
-                      | _ -> Error.error "list expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "list expects one type argument"
                     else if name = "set" then
                       match args with
                       | [ inner ] -> Ok (TSet inner)
-                      | _ -> Error.error "set expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "set expects one type argument"
                     else if name = "seq" then
                       match args with
                       | [ inner ] -> Ok (TSeq inner)
-                      | _ -> Error.error "seq expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "seq expects one type argument"
                     else if
                       name = Types.maybe_reduced_callback_type_name
                     then
                       match args with
                       | [ inner ] -> Ok (Types.reduced inner)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "reducing-function result expects one type argument"
                     else if name = "reducing-callback-result" then
                       match args with
                       | [ inner ] ->
                           Ok (Types.maybe_reduced_callback_result inner)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "reducing-callback-result expects one type argument"
                     else if name = "seqable" then
                       match args with
@@ -248,21 +248,21 @@ let rec parse_ocaml_type source =
                           Ok
                             (Types.seqable_constraint_with_value inner storage)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "seqable expects one or two type arguments"
                     else if name = "sorted" then
                       match args with
                       | [ entry; key; storage ] ->
                           Ok (Types.sorted_constraint entry key storage)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "sorted expects entry, key, and storage type arguments"
                     else if name = "map-entry" then
                       match args with
                       | [ key; value; storage ] ->
                           Ok (Types.map_entry_constraint key value storage)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "map-entry expects key, value, and storage type arguments"
                     else if name = "optional-seqable" then
                       match args with
@@ -273,40 +273,40 @@ let rec parse_ocaml_type source =
                           Ok
                             (Types.optional_seqable_constraint inner storage)
                       | _ ->
-                          Error.error
+                          Error.error ~code:Error_code.Arity
                             "optional-seqable expects one or two type arguments"
                     else if name = "truthy" then
                       match args with
                       | [ inner ] -> Ok (Types.truthy_constraint inner)
-                      | _ -> Error.error "truthy expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "truthy expects one type argument"
                     else if name = "printable" then
                       match args with
                       | [ inner ] -> Ok (Types.printable_constraint inner)
-                      | _ -> Error.error "printable expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "printable expects one type argument"
                     else if name = "hashable" then
                       match args with
                       | [ inner ] -> Ok (Types.hashable_constraint inner)
-                      | _ -> Error.error "hashable expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "hashable expects one type argument"
                     else if name = "comparable" then
                       match args with
                       | [ inner ] -> Ok (Types.comparable_constraint inner)
-                      | _ -> Error.error "comparable expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "comparable expects one type argument"
                     else if name = "array-index" then
                       match args with
                       | [ inner ] -> Ok (Types.array_index_constraint inner)
-                      | _ -> Error.error "array-index expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "array-index expects one type argument"
                     else if name = "map" then
                       match args with
                       | [ key; value ] -> Ok (Types.dynamic_map key value)
-                      | _ -> Error.error "map expects two type arguments"
+                      | _ -> Error.error ~code:Error_code.Arity "map expects two type arguments"
                     else if name = "ref" then
                       match args with
                       | [ inner ] -> Ok (TRef inner)
-                      | _ -> Error.error "ref expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "ref expects one type argument"
                     else if name = "weak" then
                       match args with
                       | [ inner ] -> Ok (Types.weak_type inner)
-                      | _ -> Error.error "weak expects one type argument"
+                      | _ -> Error.error ~code:Error_code.Arity "weak expects one type argument"
                     else if name = "fn" then
                       match List.rev args with
                       | return_ty :: reversed_params ->
@@ -336,7 +336,7 @@ let rec parse_ocaml_type source =
                         | TOverloaded_fn nested :: rest ->
                             arities (List.rev_append nested acc) rest
                         | _ :: _ ->
-                            Error.error
+                            Error.error ~code:Error_code.Protocol
                               "overload arguments must all be function types"
                       in
                       arities [] args
@@ -349,7 +349,7 @@ let rec parse_ocaml_type source =
                             || String.contains protocol_name '<'
                             || String.contains protocol_name '>'
                           then
-                            Error.error
+                            Error.error ~code:Error_code.Protocol
                               "reify protocol must be a qualified protocol name"
                           else
                             let protocol_id =
@@ -393,21 +393,21 @@ let of_keyword = function
   | ":map" -> Ok (Types.dynamic_map TUnknown TUnknown)
   | ":dynamic" -> reject_dynamic_type ()
   | ":transient-vector" ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         "transient-vector requires concrete element types; untyped transient \
          collections are not supported"
   | ":transient-map" ->
-      Error.error
+      Error.error ~code:Error_code.Semantic
         "transient-map requires concrete key and value types; untyped transient \
          collections are not supported"
-  | ":nil" -> Error.error "nil is not a valid type annotation"
+  | ":nil" -> Error.error ~code:Error_code.Interop "nil is not a valid type annotation"
   | keyword when String.starts_with ~prefix:":ocaml/" keyword ->
-      Error.error "the :ocaml/ type prefix is not supported"
+      Error.error ~code:Error_code.Unsupported "the :ocaml/ type prefix is not supported"
   | keyword when String.starts_with ~prefix:":param/" keyword ->
-      Error.error "the :param/ type prefix is not supported"
+      Error.error ~code:Error_code.Unsupported "the :param/ type prefix is not supported"
   | keyword when String.starts_with ~prefix:":" keyword ->
       String.sub keyword 1 (String.length keyword - 1) |> parse_ocaml_type
-  | keyword -> Error.error ("unknown vector element type " ^ keyword)
+  | keyword -> Error.error ~code:Error_code.Unresolved ("unknown vector element type " ^ keyword)
 
 let rec resolve_type_parameters parameters = function
   | TPoly_variant row ->
@@ -422,7 +422,7 @@ let rec resolve_type_parameters parameters = function
   | TOcaml name
     when parameters <> [] && String.length name = 1
          && Char.lowercase_ascii name.[0] = name.[0] ->
-      Error.error ("unknown type parameter " ^ name)
+      Error.error ~code:Error_code.Unresolved ("unknown type parameter " ^ name)
   | TOcaml_app (name, args) ->
       let rec resolve_args acc = function
         | [] -> Ok (TOcaml_app (name, List.rev acc))
@@ -571,8 +571,8 @@ let of_param_annotation annotation =
            || String.starts_with ~prefix:"^:result<" annotation
            || String.starts_with ~prefix:"^:tuple<" annotation
            || String.contains annotation '<' ->
-        Error.error ("invalid type annotation " ^ annotation)
-    | Error _ -> Error.error ("unknown parameter type " ^ annotation)
+        Error.error ~code:Error_code.Invalid_form ("invalid type annotation " ^ annotation)
+    | Error _ -> Error.error ~code:Error_code.Unresolved ("unknown parameter type " ^ annotation)
   else if String.starts_with ~prefix:"^" annotation && String.length annotation > 1
   then
     let type_name =
@@ -583,13 +583,13 @@ let of_param_annotation annotation =
     | "string" -> Ok TString
     | "Object" | "java.lang.Object" | "Number" | "java.lang.Number"
     | "Comparable" | "java.lang.Comparable" | "Boolean" | "String" ->
-        Error.error
+        Error.error ~code:Error_code.Unsupported
           "Java interop is not supported; use static LG types and functions"
     | type_name
       when String.starts_with ~prefix:"java." type_name
            || String.starts_with ~prefix:"javax." type_name
            || String.starts_with ~prefix:"clojure.lang." type_name ->
-        Error.error
+        Error.error ~code:Error_code.Unsupported
           "Java interop is not supported; use static LG types and functions"
     | "boolean" -> Ok TBool
     | "double" | "float" -> Ok TFloat
@@ -602,7 +602,7 @@ let of_param_annotation annotation =
         | Some host_type -> Ok (TOcaml host_type)
         | None when String.contains type_name '.' -> Ok (TOcaml type_name)
         | None -> Ok (TOcaml ("__lg_record:" ^ type_name))))
-  else Error.error "function parameters must be symbols"
+  else Error.error ~code:Error_code.Semantic "function parameters must be symbols"
 
 let parse_params = function
   | FVector params ->
@@ -614,7 +614,7 @@ let parse_params = function
             | Error _ as err -> err
             | Ok ty -> loop ((name, ty) :: acc) rest)
         | FSymbol name :: rest -> loop ((name, TUnknown) :: acc) rest
-        | _ -> Error.error "function parameters must be symbols"
+        | _ -> Error.error ~code:Error_code.Semantic "function parameters must be symbols"
       in
       loop [] params
-  | _ -> Error.error "function parameters must be a vector"
+  | _ -> Error.error ~code:Error_code.Semantic "function parameters must be a vector"

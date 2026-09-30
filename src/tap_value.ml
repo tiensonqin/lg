@@ -46,10 +46,10 @@ let compile_callback ~compile_expr ~pack_argument scope env form =
           (callback_argument ~pack_argument parameter_ty
              (Semantic_ir.Ident parameter_name))
     | TFn (parameters, _) ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           ("tap callbacks expect one argument, got "
            ^ string_of_int (List.length parameters))
     | _ ->
-        Error.error
+        Error.error ~code:Error_code.Arity
           ("tap expects a one-argument function, got "
            ^ Types.source_name callback.ty))

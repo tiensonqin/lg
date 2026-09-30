@@ -1,4 +1,4 @@
--- COMPILATION ERROR [LG2000] -- ocaml_option_and_result_constructors_reject_bad_arity_2.cljc
+-- COMPILATION ERROR [LG2001] -- ocaml_option_and_result_constructors_reject_bad_arity_2.cljc
 
 None expects 0 arguments
 

@@ -16,7 +16,7 @@ let usage () =
      --run-files <input.cljc>... | \
      --run-files-from <state> <implementation.ml> <input.cljc>... | repl \
      [--state <lg_stdlib_native.state>] | mobile build [options] [paths...] | \
-     test [paths...] | --lsp [--state <saved-state>]. \
+     test [paths...] | --explain [<error-code>] | --lsp [--state <saved-state>]. \
      Batch commands default to all .clj, .cljc, .cljs, .lgi, and paired .mli files in the \
      current directory.";
   exit 2
@@ -396,7 +396,7 @@ type saved_compilation_state = {
 
 let compiler_error message =
   Error
-    ({ Lg.Compiler.code = "LG9000";
+    ({ Lg.Compiler.code = Lg.Error_code.code Lg.Error_code.Infrastructure;
        phase = `Infrastructure;
        title = "INFRASTRUCTURE ERROR";
        message;
@@ -823,6 +823,7 @@ type mode =
       input_paths : string list;
     }
   | Test of { input_paths : string list }
+  | Explain of { error_code : string option }
   | Lsp of { state_path : string option }
 
 let extract_compilation_options args =
@@ -860,6 +861,9 @@ let parse_args argv =
     | [ _program; "--lsp" ] -> Lsp { state_path = None }
     | [ _program; "--lsp"; "--state"; state_path ] ->
         Lsp { state_path = Some state_path }
+    | [ _program; "--explain" ] -> Explain { error_code = None }
+    | [ _program; "--explain"; error_code ] ->
+        Explain { error_code = Some error_code }
     | _program :: "test" :: input_paths -> Test { input_paths }
     | [ _program; "--interface"; input ] ->
         Interface { input_path = input; output_path = None }
@@ -2538,6 +2542,28 @@ let run_repl argv =
   then Unix.execvp executable arguments
   else Unix.execv executable arguments
 
+let explain_error_code error_code =
+  match error_code with
+  | None ->
+      print_endline "Stable diagnostic codes (see docs/errors/):";
+      List.iter
+        (fun code ->
+          Printf.printf "  %s  %s\n" (Lg.Error_code.code code)
+            (Lg.Error_code.summary code))
+        Lg.Error_code.all
+  | Some text -> (
+      match Lg.Error_code.of_string text with
+      | Some code -> (
+          Printf.printf "%s: %s\n\n" (Lg.Error_code.code code)
+            (Lg.Error_code.summary code);
+          match Lg.Error_code.doc code with
+          | Some doc -> print_string doc
+          | None -> ())
+      | None ->
+          Printf.eprintf "unknown error code %S; run `lg --explain` to list codes\n"
+            text;
+          exit 2)
+
 let () =
   if Array.length Sys.argv > 1 && Sys.argv.(1) = "mobile" then
     run_mobile Sys.argv;
@@ -2733,4 +2759,5 @@ let () =
             (concatenate_compilation_outputs
                [ read_file implementation_path; ocaml_source ]))
   | Test { input_paths } -> run_tests ?reader_target target input_paths
+  | Explain { error_code } -> explain_error_code error_code
   | Lsp { state_path } -> run_lsp state_path
