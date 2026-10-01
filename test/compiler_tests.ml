@@ -6275,14 +6275,14 @@ let test_datascript_entity_attrs_keep_tx_value_payloads () =
 (defn ^:Transit_core.Json.value transit-of-value [db value]
   (match value
     (ds/Nil) (transit/Null)
-    (ds/Int number) (transit/Int number)
+    (ds/Int64 number) (transit/Int (int64/to-int number))
     (ds/Float number) (transit/Float number)
     (ds/String text) (transit/String text)
     (ds/Symbol symbol) (transit/Symbol symbol)
     (ds/Bool flag) (transit/Bool flag)
     (ds/Keyword keyword) (transit/Keyword keyword)
     (ds/Uuid uuid) (transit/Uuid uuid)
-    (ds/Instant instant) (transit/Date (int64/of-int instant))
+    (ds/Instant instant) (transit/Date instant)
     (ds/Regex pattern) (transit/Tagged "regex" (transit/String pattern))
     (ds/Ref eid) (transit-of-entity-ref db (stable-entity-ref db (ds/Entity_id eid)))
     (ds/List values)
