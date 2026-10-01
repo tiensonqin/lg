@@ -67,7 +67,8 @@ type t = {
 
 let analyze ~filename source =
   match
-    Compiler_session.run (fun () -> Toolchain.analyze ~filename source)
+    Compiler_session.run (fun () ->
+        Toolchain.analyze ~filename ~snapshot_reuse:true source)
   with
   | Error _ as err -> err
   | Ok compiler -> (
@@ -81,7 +82,8 @@ let analyze ~filename source =
 let analyze_from_state ?(target = Target.default) ~filename state source =
   match
     Compiler_session.run (fun () ->
-        Toolchain.analyze_from_state ~target ~filename state source)
+        Toolchain.analyze_from_state ~target ~filename ~snapshot_reuse:true
+          state source)
   with
   | Error _ as err -> err
   | Ok compiler -> (
@@ -139,7 +141,7 @@ let analyze_workspace_with_errors sources =
   analyze_workspace_with_errors_using
     (fun sources ->
       Compiler_session.run (fun () ->
-          Toolchain.analyze_workspace_with_errors sources))
+          Toolchain.analyze_workspace_with_errors ~snapshot_reuse:true sources))
     sources
 
 let analyze_workspace_with_errors_from_state ?(target = Target.default) state
@@ -148,7 +150,7 @@ let analyze_workspace_with_errors_from_state ?(target = Target.default) state
     (fun sources ->
       Compiler_session.run (fun () ->
           Toolchain.analyze_workspace_with_errors_from_state ~target
-            ~check_incremental_ocaml:false state sources))
+            ~check_incremental_ocaml:false ~snapshot_reuse:true state sources))
     sources
 
 let analyze_workspace sources =

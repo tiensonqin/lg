@@ -952,7 +952,17 @@ let predeclare_adjacent_defrecords scope env pending =
                 env)
         env names
 
-let compile_forms_incremental (state : Compiler_state.t) forms =
+type incremental_boundary = {
+  boundary_scope : string;
+  boundary_env : Compiler_environment.t;
+  boundary_next_type : int;
+  boundary_items : (int * Lowered.compiled_item) list;
+  boundary_unresolved_names : string list;
+  boundary_info_entries : Info_tree.entry list;
+}
+
+let compile_indexed ~on_commit ~predeclare ~items_state scope env next_type
+    items unresolved_names indexed_forms =
   let report_timings = Trace.enabled "compile.timing" in
   let finish scope env next_type items =
     let items =
@@ -962,8 +972,13 @@ let compile_forms_incremental (state : Compiler_state.t) forms =
     in
     Ok (scope, env, next_type, items)
   in
-  let rec compile_pending scope env next_type items unresolved_names pending =
-    let env = predeclare_adjacent_defrecords scope env pending in
+  let last_info_mark = ref (Info_tree.mark ()) in
+  let rec compile_pending ?(predeclare = true) scope env next_type items
+      unresolved_names pending =
+    let env =
+      if predeclare then predeclare_adjacent_defrecords scope env pending
+      else env
+    in
     let rec loop scope env next_type items unresolved_names deferred first_error
         made_progress = function
       | [] ->
@@ -1023,14 +1038,26 @@ let compile_forms_incremental (state : Compiler_state.t) forms =
             let unresolved_names =
               remove_resolved_names unresolved_names form
             in
-            loop scope env next_type ((index, item) :: items) unresolved_names
+            let items = (index, item) :: items in
+            let info_mark = Info_tree.mark () in
+            on_commit index
+              {
+                boundary_scope = scope;
+                boundary_env = env;
+                boundary_next_type = next_type;
+                boundary_items = items;
+                boundary_unresolved_names = unresolved_names;
+                boundary_info_entries = Info_tree.entries_since !last_info_mark;
+              };
+            last_info_mark := info_mark;
+            loop scope env next_type items unresolved_names
               deferred first_error true rest)
     in
     loop scope env next_type items unresolved_names [] None false pending
   in
-  let indexed_forms = List.mapi (fun index form -> (index, form)) forms in
   match
-    compile_pending state.scope state.env state.next_type [] [] indexed_forms
+    compile_pending ~predeclare scope env next_type items unresolved_names
+      indexed_forms
   with
   | Error _ as err -> err
   | Ok (scope, env, next_type, new_items) ->
@@ -1044,11 +1071,27 @@ let compile_forms_incremental (state : Compiler_state.t) forms =
           Compiler_state.scope;
           Compiler_state.env;
           next_type;
-          items = state.items;
+          items = items_state;
           shared_values = [];
         }
       in
       Ok (next_state, new_items)
+
+let compile_forms_incremental ?(on_commit = fun _ _ -> ())
+    (state : Compiler_state.t) forms =
+  let indexed_forms = List.mapi (fun index form -> (index, form)) forms in
+  compile_indexed ~on_commit ~predeclare:true ~items_state:state.items
+    state.scope state.env state.next_type [] [] indexed_forms
+
+let resume_incremental ~boundary ~predeclare ~start_index
+    ?(on_commit = fun _ _ -> ()) ~state_items forms =
+  let indexed_forms =
+    List.mapi (fun index form -> (start_index + index, form)) forms
+  in
+  compile_indexed ~on_commit ~predeclare ~items_state:state_items
+    boundary.boundary_scope boundary.boundary_env
+    boundary.boundary_next_type boundary.boundary_items
+    boundary.boundary_unresolved_names indexed_forms
 
 let compile_forms forms =
   match compile_forms_incremental empty_state forms with
