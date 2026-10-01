@@ -1415,7 +1415,7 @@ let argument_type_mismatch_error ~context ~callee ~index ~expected argument =
     | Conditional_branch | Record_property _ | Annotation | Host_boundary _ ->
         ""
   in
-  Error.error ~code:Error_code.Arity ~title:"ARGUMENT TYPE MISMATCH"
+  Error.error ~code:Error_code.Semantic ~title:"ARGUMENT TYPE MISMATCH"
     ?location:(semantic_expression_location argument.semantic_expr)
     ~type_mismatch:
       (Error.type_mismatch ~context

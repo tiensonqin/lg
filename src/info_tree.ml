@@ -35,6 +35,22 @@ let reset () = Domain.DLS.get entries_ref := []
 
 let snapshot () = List.rev !(Domain.DLS.get entries_ref)
 
+let mark () = !(Domain.DLS.get entries_ref)
+
+let entries_since mark =
+  let rec take recorded = function
+    | tail when tail == mark -> recorded
+    | entry :: tail -> take (entry :: recorded) tail
+    | [] -> recorded
+  in
+  take [] !(Domain.DLS.get entries_ref)
+
+let seed entries =
+  let stored = Domain.DLS.get entries_ref in
+  stored := List.rev entries @ !stored
+
+let truncate mark = Domain.DLS.get entries_ref := mark
+
 let contains ~offset (location : Location.t) =
   (not location.loc_ghost)
   && location.loc_start.Lexing.pos_cnum <= offset

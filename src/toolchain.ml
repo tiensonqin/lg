@@ -2033,7 +2033,117 @@ let stabilize_typecheck ?compile_evidence ?compile_evidence_subset ~compile
         continue 15 2 first_declarations first_protocols first_state
           (changed_declaration_names initial_declarations first_declarations))
 
-let typecheck (parsed : parser_result) =
+type incremental_file_snapshot = {
+  forms_digests : Digest.t list;
+  boundaries : (int * Elaborator.incremental_boundary) list;
+  head_defrecord_run : int;
+  incoming_state : Compiler_state.t;
+  empty_prefix : bool;
+  target : Target.t;
+}
+
+let incremental_file_snapshots :
+    (string, incremental_file_snapshot) Hashtbl.t =
+  Hashtbl.create 8
+
+let leading_defrecord_run forms =
+  let rec count taken = function
+    | Ast.FList (Ast.FSymbol "defrecord" :: Ast.FSymbol _ :: _) :: rest ->
+        count (taken + 1) rest
+    | _ -> taken
+  in
+  count 0 forms
+
+let form_digest (form : Ast.form) =
+  Digest.string (Marshal.to_string form [])
+
+(* Reuse the recorded per-form boundary states of an earlier compilation of
+   the same file when the unchanged top-level prefix was committed in source
+   order and every predeclared record type lies inside that prefix. *)
+let compile_forms_with_snapshots ~snapshot_reuse ~filename ~target
+    ~incoming_state ~empty_prefix state forms =
+  if not snapshot_reuse then
+    Typecheck.compile_forms_incremental state forms
+  else
+    let recorded = ref [] in
+    let on_commit index boundary =
+      recorded := (index, boundary) :: !recorded
+    in
+    let digests = List.map form_digest forms in
+    let save_snapshot ~boundaries =
+      Hashtbl.replace incremental_file_snapshots filename
+        {
+          forms_digests = digests;
+          boundaries;
+          head_defrecord_run = leading_defrecord_run forms;
+          incoming_state;
+          empty_prefix;
+          target;
+        }
+    in
+    let compile_fresh () =
+      match Typecheck.compile_forms_incremental ~on_commit state forms with
+      | Ok _ as ok ->
+          save_snapshot ~boundaries:(List.rev !recorded);
+          ok
+      | Error _ as err -> err
+    in
+    match Hashtbl.find_opt incremental_file_snapshots filename with
+    | Some cached
+      when cached.incoming_state == incoming_state
+           && cached.empty_prefix = empty_prefix
+           && cached.target = target -> (
+        let rec common_prefix count old_digest new_digest =
+          match (old_digest, new_digest) with
+          | old :: old_rest, current :: rest when Digest.equal old current ->
+              common_prefix (count + 1) old_rest rest
+          | _ -> count
+        in
+        let prefix = common_prefix 0 cached.forms_digests digests in
+        let sequential_prefix =
+          let rec sequential index = function
+            | _ when index >= prefix -> true
+            | (committed, _) :: rest when committed = index ->
+                sequential (index + 1) rest
+            | _ -> false
+          in
+          sequential 0 cached.boundaries
+        in
+        match
+          if prefix > 0 && cached.head_defrecord_run <= prefix
+             && sequential_prefix
+          then List.nth_opt cached.boundaries (prefix - 1)
+          else None
+        with
+        | None -> compile_fresh ()
+        | Some (_, boundary) -> (
+            let suffix = List.drop prefix forms in
+            let predeclare = leading_defrecord_run forms > prefix in
+            let seed_mark = Info_tree.mark () in
+            cached.boundaries
+            |> List.filteri (fun position _ -> position < prefix)
+            |> List.concat_map
+                 (fun (_, (boundary : Elaborator.incremental_boundary)) ->
+                   boundary.boundary_info_entries)
+            |> Info_tree.seed;
+            match
+              Elaborator.resume_incremental ~boundary ~predeclare
+                ~start_index:prefix ~on_commit ~state_items:state.items suffix
+            with
+            | Error _ ->
+                Info_tree.truncate seed_mark;
+                compile_fresh ()
+            | Ok _ as ok ->
+                save_snapshot
+                  ~boundaries:
+                    (List.filteri
+                       (fun position _ -> position < prefix)
+                       cached.boundaries
+                    @ List.rev !recorded);
+                ok))
+    | _ -> compile_fresh ()
+
+let typecheck ?(snapshot_reuse = false) (parsed : parser_result) =
   let parsed = stabilize_dependencies parsed in
   match prepare_packages parsed.target parsed.ast with
   | Error _ as err -> err
@@ -2042,10 +2152,18 @@ let typecheck (parsed : parser_result) =
         Compiler_state.with_target parsed.target Typecheck.empty_state
       in
       let compilation_ast = recursive_definition_ast parsed.ast in
+      let reuse_consumed = ref false in
       let compile state =
+        let snapshot_reuse =
+          snapshot_reuse && not !reuse_consumed
+        in
+        reuse_consumed := true;
         Source_context.with_source_unit parsed.source_unit (fun () ->
             Source_context.with_locations parsed.form_locations (fun () ->
-                Typecheck.compile_forms_incremental state compilation_ast))
+                compile_forms_with_snapshots ~snapshot_reuse
+                  ~filename:parsed.filename ~target:parsed.target
+                  ~incoming_state:Typecheck.empty_state ~empty_prefix:true
+                  state compilation_ast))
       in
       let signed_names =
         initial_state.env |> Compiler_environment.signatures
@@ -2101,7 +2219,8 @@ let typecheck (parsed : parser_result) =
               typecheck_state;
             } )
 
-let typecheck_lg_incremental state (parsed : parser_result) =
+let typecheck_lg_incremental ?(snapshot_reuse = false) state
+    (parsed : parser_result) =
   let external_signature_dependencies =
     state.typecheck_state.env |> Compiler_environment.signatures
     |> Signature_overlay.value_type_dependencies
@@ -2125,11 +2244,19 @@ let typecheck_lg_incremental state (parsed : parser_result) =
         }
       in
       let compilation_ast = recursive_definition_ast parsed.ast in
+      let reuse_consumed = ref false in
       let compile typecheck_state =
+        let snapshot_reuse =
+          snapshot_reuse && not !reuse_consumed
+        in
+        reuse_consumed := true;
         Source_context.with_source_unit parsed.source_unit (fun () ->
             Source_context.with_locations parsed.form_locations (fun () ->
-                Typecheck.compile_forms_incremental typecheck_state
-                  compilation_ast))
+                compile_forms_with_snapshots ~snapshot_reuse
+                  ~filename:parsed.filename ~target:parsed.target
+                  ~incoming_state:state.typecheck_state
+                  ~empty_prefix:(state.located_items = [])
+                  typecheck_state compilation_ast))
       in
       let signed_names =
         initial_state.env |> Compiler_environment.signatures
@@ -2214,7 +2341,8 @@ let interface_definition_forms state forms =
   in
   collect state [] forms
 
-let typecheck_incremental state (parsed : parser_result) =
+let typecheck_incremental ?(snapshot_reuse = false) state
+    (parsed : parser_result) =
   let stem = Ocaml_interface.source_stem parsed.filename in
   match parsed.parsed_as with
   | `Mli signature ->
@@ -2227,9 +2355,9 @@ let typecheck_incremental state (parsed : parser_result) =
                      typecheck_state = state.typecheck_state })
   | `Lg ->
       if Filename.check_suffix parsed.filename ".lgi" then
-        typecheck_lg_incremental state parsed
+        typecheck_lg_incremental ~snapshot_reuse state parsed
       else match List.assoc_opt stem state.pending_interfaces with
-      | None -> typecheck_lg_incremental state parsed
+      | None -> typecheck_lg_incremental ~snapshot_reuse state parsed
       | Some signature ->
           let scope = List.find_map (function
             | Ast.FList [Ast.FSymbol "namespace-scope"; Ast.FSymbol scope] -> Some scope
@@ -2244,7 +2372,7 @@ let typecheck_incremental state (parsed : parser_result) =
               let interface = { parsed with ast; locations; form_locations } in
               let state = { state with pending_interfaces =
                 List.remove_assoc stem state.pending_interfaces } in
-              Result.bind (typecheck_lg_incremental state interface)
+              Result.bind (typecheck_lg_incremental ~snapshot_reuse state interface)
                 (fun (state, interface_typed) ->
                   let state = match type_module with
                     | None -> state
@@ -2258,7 +2386,7 @@ let typecheck_incremental state (parsed : parser_result) =
                       ast = interface_typed.ast @ typed.ast;
                       items = interface_typed.items @ typed.items;
                       locations = interface_typed.locations @ typed.locations }))
-                    (typecheck_lg_incremental state parsed))))
+                    (typecheck_lg_incremental ~snapshot_reuse state parsed))))
 
 let prepare_source ?(target = Target.default) ?reader_target
     ?(filename = "<string>") source =
@@ -2283,12 +2411,13 @@ let required_ocaml_packages ?(target = Target.default) ?(filename = "<string>")
 
 let prepared_source_required_packages prepared = prepared.required_packages
 
-let analyze ?(target = Target.default) ?(filename = "<string>") source =
+let analyze ?(target = Target.default) ?(filename = "<string>")
+    ?(snapshot_reuse = false) source =
   Info_tree.reset ();
   match Lg_frontend.implementation ~target ~filename source with
   | Error _ as err -> err
   | Ok parsed -> (
-      match typecheck parsed with
+      match typecheck ~snapshot_reuse parsed with
       | Error _ as err -> err
       | Ok typed -> (
           match Ocaml_parsetree_backend.implementation typed with
@@ -2397,7 +2526,8 @@ let order_workspace_from_state ?(target = Target.default) ?reader_target
       order initial_state [] (group_sources sources))
 
 let analyze_workspace_with_errors_from_state ?(target = Target.default)
-    ?(check_incremental_ocaml = true) initial_state sources =
+    ?(check_incremental_ocaml = true) ?(snapshot_reuse = false) initial_state
+    sources =
   Info_tree.reset ();
   let sources = List.stable_sort (fun (left, _) (right, _) ->
       Bool.compare (not (Ocaml_interface.is_interface left))
@@ -2423,7 +2553,7 @@ let analyze_workspace_with_errors_from_state ?(target = Target.default)
         let rec try_pending deferred errors = function
           | [] -> Ok (state, List.rev compiled, List.rev errors)
           | (filename, parsed) :: rest -> (
-              match typecheck_incremental state parsed with
+              match typecheck_incremental ~snapshot_reuse state parsed with
               | Error error ->
                   try_pending
                     ((filename, parsed) :: deferred)
@@ -2488,13 +2618,15 @@ let analyze_workspace_with_errors_from_state ?(target = Target.default)
                         filenames,
                       parse_errors @ compile_errors ))))
 
-let analyze_workspace_with_errors ?(target = Target.default) sources =
-  analyze_workspace_with_errors_from_state ~target empty_state sources
+let analyze_workspace_with_errors ?(target = Target.default)
+    ?(snapshot_reuse = false) sources =
+  analyze_workspace_with_errors_from_state ~target ~snapshot_reuse empty_state
+    sources
 
 let analyze_from_state ?(target = Target.default) ?(filename = "<string>")
-    state source =
+    ?(snapshot_reuse = false) state source =
   match
-    analyze_workspace_with_errors_from_state ~target state
+    analyze_workspace_with_errors_from_state ~target ~snapshot_reuse state
       [ (filename, source) ]
   with
   | Error _ as err -> err
@@ -2508,8 +2640,9 @@ let interface_from_state ?(target = Target.default) ?(filename = "<string>")
   analyze_from_state ~target ~filename state source
   |> Result.map interface_of_analysis
 
-let analyze_workspace ?(target = Target.default) sources =
-  match analyze_workspace_with_errors ~target sources with
+let analyze_workspace ?(target = Target.default) ?(snapshot_reuse = false)
+    sources =
+  match analyze_workspace_with_errors ~target ~snapshot_reuse sources with
   | Error _ as err -> err
   | Ok ([], (_, error) :: _) -> Error error
   | Ok ([], []) -> Error.error ~code:Error_code.Semantic "workspace contains no analyzable lg files"
