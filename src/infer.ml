@@ -255,7 +255,7 @@ let instantiate_builtin_ty name = Hashtbl.find builtin_table name ()
 let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
-  let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = [] } in
+  let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = []; iface_only = false } in
   let ctx = { modl = m; globals; env = [] } in
   List.iter (infer_top ctx) forms;
   m

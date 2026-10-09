@@ -117,6 +117,14 @@ let parse_lgi path : (string * Typ.scheme * bool list) list =
       | _ -> None)
     forms
 
+let find_lgi ~roots ns =
+  let cands =
+    List.concat_map
+      (fun r -> List.map (fun base -> Filename.concat r (base ^ ".lgi")) (ns_to_paths ns))
+      roots
+  in
+  List.find_opt Sys.file_exists cands
+
 let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
     (entries : (string * Typ.scheme * bool list) list) : unit =
   match Hashtbl.find_opt globals m.mname with
@@ -160,7 +168,13 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
         (fun rn ->
           match find_module_file ~roots:roots' rn with
           | Some f -> load f
-          | None -> raise (Compile_error (no_loc, "cannot find module " ^ rn)))
+          | None ->
+            (* interface-only dependency: an .lgi satisfies a require for
+               check/modes (interface-first workflow); emit still needs
+               the .lg *)
+            (match find_lgi ~roots:roots' rn with
+             | Some lf -> load_lgi rn lf
+             | None -> raise (Compile_error (no_loc, "cannot find module " ^ rn))))
         reqs;
       let mname =
         match ns0 with
@@ -178,6 +192,29 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
       let lf = lgi_path file in
       (if Sys.file_exists lf then apply_lgi ~globals ~m (parse_lgi lf));
       order := m :: !order
+    end
+  and load_lgi rn lf =
+    (* an .lgi standing in for a module: register its entries as the
+       module's globals and mark it interface-only *)
+    if not (Hashtbl.mem visited lf) then begin
+      Hashtbl.add visited lf ();
+      let entries = parse_lgi lf in
+      let tbl =
+        match Hashtbl.find_opt globals rn with
+        | Some t -> t
+        | None -> let t = Hashtbl.create 16 in Hashtbl.replace globals rn t; t
+      in
+      List.iter
+        (fun (n, sch, esc) ->
+          Hashtbl.replace tbl n { Infer.gsch = sch; gvar = false; gexp = true };
+          if esc <> [] then
+            Hashtbl.replace Modes.global_escapes
+              (Infer.ocaml_mod_of_ns rn ^ "." ^ n) esc)
+        entries;
+      order :=
+        { Ast.mname = rn; ocaml_name = Infer.ocaml_mod_of_ns rn; mpath = lf;
+          requires = []; defs = []; effects = []; iface_only = true }
+        :: !order
     end
   in
   load path;

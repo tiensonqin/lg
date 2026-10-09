@@ -74,6 +74,8 @@ let () =
              if code <> 0 then (Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!"; raise (Exit code))
            | _ -> Printf.printf "wrote %s\n" out_ml))
      with
+     | Failure msg -> Printf.eprintf "lg: %s
+%!" msg; exit 1
      | Lgc.Compiler.Compile_error (l, msg) ->
        Printf.eprintf "%s:%d:%d: %s\n" l.Lgc.Syntax.file l.Lgc.Syntax.line l.Lgc.Syntax.col msg;
        exit 1

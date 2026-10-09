@@ -83,4 +83,5 @@ type modl = {
   mutable requires : (string * string) list;  (* alias -> lg2 ns *)
   mutable defs : topdef list;
   mutable effects : expr list;                (* top-level non-def forms, run at init *)
+  iface_only : bool;                          (* satisfied by an .lgi with no .lg *)
 }
