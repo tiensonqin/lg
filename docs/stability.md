@@ -374,7 +374,7 @@ Argued from the code:
    certified surface and lets the stdlib grow in MINORs. Keep frozen only
    the ones the emitter de-sugars into (`first`/`nth`/`get`/`kw-get`,
    `count`, `=`, printers, atom ops, `Some`/`None`/`option`).
-4. **`get-in`/`assoc-in`/`select-keys` on dyn maps** — the nest-map
+4. **`get-in`/`assoc-in`/`update-in`/`select-keys` on dyn maps** — the nest-map
    bridging in emit.ml (~80 lines: `nest_map_of`, `box_nest`,
    `dyn_map_*`, `Lg_rt.dyn_map_of_nest_map`) is the heaviest machinery
    for the narrowest use, and it forces `(map keyword any)` widening.

@@ -261,16 +261,26 @@ All of docs/v2.md landed (detail lives there):
   (unique-owner chains of conj/assoc/dissoc/pop/update/into/disj) emit
   `Lg_rt` growable builders + one freeze instead of persistent copies.
 - **OxCaml emit** — `--backend=oxcaml` is verified end-to-end against a
-  real OxCaml (flambda2) switch (test/oxcaml_smoke.sh, 28/28 programs
-  compile and run). The conservative lowering: `local_` annotates
-  primitive-typed params of top-level defns whose uses stay in
-  local-accepting positions (arithmetic builtins, self-recursion, `if`
-  conditions) — functions referenced as values are never annotated
-  because higher-order callees expect global-param callbacks. `stack_` /
-  `unique_` / binding `local_` stay comments: `stack_` only wraps direct
-  allocation sites (never a `Vec.of_list` call) and no clj-core API
-  declares `@ local` params yet, `unique_` has no expression syntax in
-  OxCaml 5.2 and persistent collections are aliased not unique.
+  real OxCaml (flambda2) switch (test/oxcaml_smoke.sh — OCaml
+  5.4.0+ox). The lowering, in three tiers. Tier 1: `(param @ local)` on
+  params whose uses stay in borrow-safe positions (arithmetic, seq
+  strict-consumers, other `local_` params, self-recursion); functions
+  referenced as values are never annotated (higher-order callees expect
+  global-param callbacks). Tier 2: `let x @ local` on binders whose
+  every use is a borrow — strict consumers (`count`/`nth`/`keys`/`dorun`
+  …) select `Seq.*_local`/`Vec.*` variants by argument mode, and lazy
+  producers (`map`/`filter`/`take`/`rest` …) pick their `*_local`
+  twins when the call's own mode is Local, so a `count` of a filtered
+  vec allocates nothing on the heap. Tier 3: `stack_` on direct
+  allocation sites only (list/vec/map/set literals, tuples, `Some`,
+  cons). Memoizers (`distinct`/`cycle`), forced realizers
+  (`into`/`merge`/`split-at`/`zipmap`/`frequencies`/`group-by`), and
+  structure-sharers (`Vec.take`/`slice`/`split_*`) keep Shared by
+  design. `unique_` has no expression syntax in OxCaml 5.4 and
+  persistent collections are aliased not unique. Tiers 2+3 require the
+  clj-core/rrbvec `ox` branches (`@ local` params on non-retaining
+  readers + `Seq.*_local` twins); `test/oxlocal.lg` exercises the full
+  chain.
 - **`--strict`** — heterogeneous literals require `^any`-family
   annotation; every `any` in a program is one the author wrote.
 - **Named `fn` self-recursion, `case`, `defrecord` (map-backed ctor +
