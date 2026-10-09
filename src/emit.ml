@@ -557,15 +557,16 @@ and coll_kind t =
 (* the collection arg as an OCaml list expr *)
 and as_list e =
   let a = arg_str e in
+  let loc = !oxcaml && e.emode = Ast.Local in
   match repr e.ety with
   | TAny -> "(Lg_rt.dyn_to_list " ^ a ^ ")"
   | _ ->
     (match coll_kind e.ety with
      | `Vec -> "(Clj_core.Vec.to_list " ^ a ^ ")"
      | `Set -> "(Clj_core.Set.to_list " ^ a ^ ")"
-     | `Map -> "(List.of_seq (Clj_core.Map.seq " ^ a ^ "))"
+     | `Map -> if loc then "(Clj_core.Seq.to_list_local (Clj_core.Map.to_seq_local " ^ a ^ "))" else "(List.of_seq (Clj_core.Map.seq " ^ a ^ "))"
      | `Str -> "(Lg_rt.string_chars " ^ a ^ ")"
-     | `Seq -> "(Clj_core.Seq.to_list " ^ a ^ ")"
+     | `Seq -> if loc then "(Clj_core.Seq.to_list_local " ^ a ^ ")" else "(Clj_core.Seq.to_list " ^ a ^ ")"
      | `List -> a)
 
 (* the collection arg as a lazy OCaml seq — when the seq need only be
@@ -783,6 +784,8 @@ and emit_builtin_call ?(call_local = false) b ret name args =
   let call_local = call_local && !oxcaml in
   (* lazy seq producers pick `Seq.<name>_local` when the result need only
      be local — its params are `@ local` so args may be local too *)
+  let sloc i = !oxcaml && (List.nth args i).emode = Ast.Local in
+  let sconsi i g l = if sloc i then l else g in
   let sfn n =
     if call_local then
       (match Hashtbl.find_opt Modes.local_seq_fns n with
@@ -893,10 +896,10 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "hash-set" ->
      let el = match repr ret with TSet e -> e | _ -> TUnit in
      buf_add b ("(Clj_core.Set.of_list [" ^ String.concat "; " (List.map (fun e -> if is_any el && not (is_any e.ety) then box_of e else arg_str e) args) ^ "])")
-   | "first" -> buf_add b ("(Clj_core.Seq.first " ^ as_seq (List.nth args 0) ^ ")")
+   | "first" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.first" "Clj_core.Seq.first_local" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "next" -> buf_add b ("(" ^ sfn "next" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "rest" -> buf_add b ("(" ^ sfn "rest" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "seq" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if Clj_core.Seq.is_empty s then None else Some s)")
+   | "seq" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if " ^ sconsi 0 "Clj_core.Seq.is_empty" "Clj_core.Seq.is_empty_local" ^ " s then None else " ^ (if call_local then "(stack_ (Some s))" else "Some s") ^ ")")
    | "exit" -> buf_add b ("(Stdlib.exit " ^ conv TInt (t 0) (a 0) ^ ")")
    (* io / system builtins: native emits inline channel/Sys/Unix code;
       melange routes through the emitted Lg_node JS bridge *)
@@ -1005,7 +1008,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | `List -> buf_add b ("(List.length " ^ a 0 ^ ")")
       | `Set -> buf_add b ("(Clj_core.Set.count " ^ a 0 ^ ")")
       | `Map -> buf_add b ("(Clj_core.Map.count " ^ a 0 ^ ")")
-      | `Seq -> buf_add b ("(Clj_core.Seq.count " ^ a 0 ^ ")")
+      | `Seq -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.count" "Clj_core.Seq.count_local" ^ " " ^ a 0 ^ ")")
       | `Str -> buf_add b ("(String.length " ^ a 0 ^ ")"))
    | "empty?" ->
      (match coll with
@@ -1013,7 +1016,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | `List -> buf_add b ("(" ^ a 0 ^ " = [])")
       | `Set -> buf_add b ("(Clj_core.Set.is_empty " ^ a 0 ^ ")")
       | `Map -> buf_add b ("(Clj_core.Map.is_empty " ^ a 0 ^ ")")
-      | `Seq -> buf_add b ("(Clj_core.Seq.is_empty " ^ a 0 ^ ")")
+      | `Seq -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.is_empty" "Clj_core.Seq.is_empty_local" ^ " " ^ a 0 ^ ")")
       | `Str -> buf_add b ("(String.length " ^ a 0 ^ " = 0)"))
    | "map?" ->
      (match repr (t 0) with
@@ -1026,7 +1029,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | `List -> buf_add b ("(List.mem " ^ a 1 ^ " " ^ a 0 ^ ")")
       | `Set -> buf_add b ("(Clj_core.Set.contains_ " ^ a 0 ^ " " ^ a 1 ^ ")")
       | `Map -> buf_add b ("(Clj_core.Map.contains_ " ^ a 0 ^ " " ^ a 1 ^ ")")
-      | `Seq -> buf_add b ("(Clj_core.Seq.mem " ^ a 1 ^ " " ^ a 0 ^ ")")
+      | `Seq -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.mem" "Clj_core.Seq.mem_local" ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
       | `Str -> buf_add b "(failwith \"contains? on string\")")
    | "get" when (match repr (t 0) with TAny -> true | _ -> false) ->
      let mstr = dyn_map_arg (List.nth args 0) in
@@ -1133,11 +1136,11 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "keys" ->
      buf_add b
        (if is_any (t 0) then "(List.of_seq (Clj_core.Map.keys (Lg_rt.as_map " ^ a 0 ^ ")))"
-        else "(List.of_seq (Clj_core.Map.keys " ^ a 0 ^ "))")
+        else "(List.of_seq (" ^ sconsi 0 "Clj_core.Map.keys" "Clj_core.Map.keys_local" ^ " " ^ a 0 ^ "))")
    | "vals" ->
      buf_add b
        (if is_any (t 0) then "(Lg_rt.dyn_vals (Lg_rt.as_map " ^ a 0 ^ "))"
-        else "(List.of_seq (Clj_core.Map.vals " ^ a 0 ^ "))")
+        else "(List.of_seq (" ^ sconsi 0 "Clj_core.Map.vals" "Clj_core.Map.vals_local" ^ " " ^ a 0 ^ "))")
    | "merge" ->
      buf_add b
        (if is_any (t 0) then
@@ -1195,7 +1198,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
                    | `Set -> "_ -> List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " (Clj_core.Set.to_list " ^ a 2 ^ ")"
                    | `Map -> "_ -> Clj_core.Map.fold (fun acc k v -> " ^ a 0 ^ " acc (k, v)) " ^ a 1 ^ " " ^ a 2
                    | `Str -> "_ -> List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " (Lg_rt.string_chars " ^ a 2 ^ ")"
-                   | `Seq -> "_ -> Clj_core.Seq.reduce " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2
+                   | `Seq -> "_ -> " ^ sconsi 2 "Clj_core.Seq.reduce" "Clj_core.Seq.reduce_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2
                    | `List -> "_ -> List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2)
                 ^ ")")
    | "mapv" ->
@@ -1333,10 +1336,10 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "split-with" -> buf_add b ("(let (x, y) = (Clj_core.Seq.split_with " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ") in (Clj_core.Vec.of_list [x; y]))")
    | "reductions" -> buf_add b ("(" ^ sfn "reductions" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ as_seq (List.nth args 2) ^ ")")
    | "dedupe" -> buf_add b ("(" ^ sfn "dedupe" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "not-empty" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if Clj_core.Seq.is_empty s then None else Some s)")
+   | "not-empty" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if " ^ sconsi 0 "Clj_core.Seq.is_empty" "Clj_core.Seq.is_empty_local" ^ " s then None else " ^ (if call_local then "(stack_ (Some s))" else "Some s") ^ ")")
    | "lazy-seq" -> buf_add b ("(" ^ sfn "lazy-seq" ^ " (fun () -> " ^ as_seq (List.nth args 0) ^ "))")
-   | "doall" -> buf_add b ("(Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ")")
-   | "dorun" -> buf_add b ("(Clj_core.Seq.iter (fun _ -> ()) " ^ as_seq (List.nth args 0) ^ ")")
+   | "doall" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.to_list" "Clj_core.Seq.to_list_local" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "dorun" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.iter" "Clj_core.Seq.iter_local" ^ " (fun _ -> ()) " ^ as_seq (List.nth args 0) ^ ")")
    | "concat" -> buf_add b ("(" ^ sfn "concat" ^ " (" ^ (if call_local then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list") ^ " [" ^ String.concat "; " (List.map as_seq args) ^ "]))")
    | "apply" -> buf_add b (emit_apply args)
    | "atom" ->
@@ -1416,11 +1419,11 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      in
      buf_add b ("(" ^ sfn "mapcat" ^ " (fun x -> " ^ coerce ^ " (" ^ a 0 ^ " x)) " ^ as_seq (List.nth args 1) ^ ")")
    | "interpose" -> buf_add b ("(" ^ sfn "interpose" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "reverse" -> buf_add b ("(Clj_core.Seq.reverse " ^ as_seq (List.nth args 0) ^ ")")
+   | "reverse" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.reverse" "Clj_core.Seq.reverse_local" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "distinct" -> buf_add b ("(" ^ sfn "distinct" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "second" -> buf_add b ("(Clj_core.Seq.second " ^ as_seq (List.nth args 0) ^ ")")
-   | "last" -> buf_add b ("(match List.rev (Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ") with [] -> None | x :: _ -> Some x)")
-   | "butlast" -> buf_add b ("(match List.rev (Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ") with [] -> Clj_core.Seq.empty | _ :: t -> Clj_core.Seq.of_list (List.rev t))")
+   | "second" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.second" "Clj_core.Seq.second_local" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "last" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.last" "Clj_core.Seq.last_local" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "butlast" -> buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.drop_last" "Clj_core.Seq.drop_last_local" ^ " 1 " ^ as_seq (List.nth args 0) ^ ")")
    | "min" ->
      buf_add b
        (if is_any (t 0) || is_any (t 1) then
@@ -1431,13 +1434,13 @@ and emit_builtin_call ?(call_local = false) b ret name args =
        (if is_any (t 0) || is_any (t 1) then
           conv ret TAny ("(Lg_rt.dyn_max " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ ")")
         else "(Stdlib.max " ^ a 0 ^ " " ^ a 1 ^ ")")
-   | "every?" -> buf_add b ("(Clj_core.Seq.every_ " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "some" -> buf_add b ("(Clj_core.Seq.exists " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "every?" -> buf_add b ("(" ^ sconsi 1 "Clj_core.Seq.every_" "Clj_core.Seq.every_local" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "some" -> buf_add b ("(" ^ sconsi 1 "Clj_core.Seq.exists" "Clj_core.Seq.exists_local" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "zipmap" -> buf_add b ("(Clj_core.Map.of_list (List.combine " ^ as_list (List.nth args 0) ^ " " ^ as_list (List.nth args 1) ^ "))")
    | "sort" ->
      if List.length args = 2 then buf_add b ("(Clj_core.Seq.sort ~cmp:" ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
      else buf_add b ("(Clj_core.Seq.sort " ^ as_seq (List.nth args 0) ^ ")")
-   | "sort-by" -> buf_add b ("(Clj_core.Seq.sort ~cmp:(fun x y -> Stdlib.compare (" ^ a 0 ^ " x) (" ^ a 0 ^ " y)) " ^ as_seq (List.nth args 1) ^ ")")
+   | "sort-by" -> buf_add b ("(" ^ sconsi 1 "Clj_core.Seq.sort" "Clj_core.Seq.sort_local" ^ " ~cmp:(fun x y -> Stdlib.compare (" ^ a 0 ^ " x) (" ^ a 0 ^ " y)) " ^ as_seq (List.nth args 1) ^ ")")
    | "group-by" -> buf_add b ("(Lg_rt.group_by " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
    | "frequencies" -> buf_add b ("(Lg_rt.frequencies " ^ as_list (List.nth args 0) ^ ")")
    | "swap!" -> buf_add b ("(Clj_core.Atom.swap_bang " ^ a 0 ^ " " ^ a 1 ^ ")")

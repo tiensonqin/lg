@@ -105,17 +105,12 @@ let () =
          initial accumulator flows into the result so it is NOT a borrow *)
       "reduce", Only [ 0; 2 ]; "fold", Only [ 0; 2 ];
       "every?", Only [ 0; 1 ]; "some", Only [ 0; 1 ];
-      "mapv", Only [ 0; 1 ]; "filterv", Only [ 0; 1 ];
+      "mapv", Only [ 0 ]; "filterv", Only [ 0 ];
       (* `into`/`vec`/`set` realize — the source is consumed, the
          destination is retained *)
-      "into", Only [ 1 ]; "vec", Only [ 0 ]; "set", Only [ 0 ];
-      "sort", Only [ 0; 1 ]; "sort-by", Only [ 0; 1 ]; "reverse", Only [ 0 ];
-      "group-by", Only [ 0; 1 ]; "frequencies", Only [ 0 ];
-      "zipmap", Only [ 0; 1 ]; "take-last", Only [ 1 ];
-      "butlast", Only [ 0 ];
+      "vec", Only [ 0 ]; "set", Only [ 0 ];
       "merge", Only [ 1 ];
-      "doall", Only [ 0 ]; "dorun", Only [ 0 ];
-      "split-at", Only [ 1 ]; "split-with", Only [ 1 ];
+      "dorun", Only [ 0 ];
       "keys", Only [ 0 ]; "vals", Only [ 0 ];
       "re-seq", Only [ 0; 1 ]; "re-split", Only [ 0; 1 ];
       "re-find", Only [ 0 ]; "re-matches", Only [ 0 ];
@@ -138,10 +133,12 @@ let () =
       "take-nth", Lazy; "rest", Lazy; "next", Lazy; "cons", Lazy;
       "concat", Lazy; "interleave", Lazy; "interpose", Lazy;
       "partition", Lazy; "partition-all", Lazy; "nthrest", Lazy;
-      "reductions", Lazy; "dedupe", Lazy; "distinct", Lazy;
-      "lazy-seq", Lazy; "cycle", Lazy; "iterate", Lazy; "repeat", Lazy;
-      "repeatedly", Lazy; "range", Lazy;
+      "reductions", Lazy; "dedupe", Lazy;
+      "lazy-seq", Lazy; "range", Lazy;
       "drop-last", Lazy; "not-empty", Lazy; "seq", Lazy;
+      (* element-flow: arg is local iff the result is *)
+      "take-last", Lazy; "butlast", Lazy; "sort", Lazy; "sort-by", Lazy;
+      "reverse", Lazy; "doall", Lazy;
       (* collection constructors: elements are stored in the result — they
          escape exactly as far as the result does *)
       "list", Lazy; "vector", Lazy; "hash-map", Lazy; "hash-set", Lazy ]
@@ -168,8 +165,8 @@ let () =
       "partition", "Clj_core.Seq.partition_local";
       "partition-all", "Clj_core.Seq.partition_all_local";
       "nthrest", "Clj_core.Seq.nthrest_local"; "reductions", "Clj_core.Seq.reductions_local";
-      "dedupe", "Clj_core.Seq.dedupe_local"; "distinct", "Clj_core.Seq.distinct_local";
-      "cycle", "Clj_core.Seq.cycle_local"; "iterate", "Clj_core.Seq.iterate_local";
+      "dedupe", "Clj_core.Seq.dedupe_local";
+      "iterate", "Clj_core.Seq.iterate_local";
       "repeat", "Clj_core.Seq.repeat_local"; "repeatedly", "Clj_core.Seq.repeatedly_local";
       "range", "Clj_core.Seq.range_local";
       "drop-last", "Clj_core.Seq.drop_last_local";
