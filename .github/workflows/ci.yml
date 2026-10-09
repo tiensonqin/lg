@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCaml 5.5.0
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.5.0"
+          opam-repositories: |
+            default: https://github.com/ocaml/opam-repository.git
+
+      - name: Pin clj-core deps
+        run: |
+          opam pin add -yn rrbvec git+https://github.com/logseq/rrbvec.git#main
+          opam pin add -yn clj-core git+https://github.com/logseq/clj-core.git#main
+
+      - name: Install OCaml deps
+        run: opam install -y ocamlfind dune clj-core ctypes ctypes-foreign melange
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build lg
+        run: opam exec -- dune build
+
+      - name: Run test suite
+        run: opam exec -- ./test.sh
+
+      - name: Emit matrix (infer-accepted programs must emit well-typed OCaml)
+        run: opam exec -- python3 test/emit_matrix.py
