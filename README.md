@@ -132,10 +132,14 @@ unresolved), E2xx reader.
     backend lowers `Local`/`Owned` to real `@local`/`unique` mode
     annotations, re-checked by the OxCaml typechecker.
 - **`.lgi` interface files (mli-style).** A per-module sidecar lists each
-  exported definition's type and per-parameter `:escapes` modes. What a
-  `.lgi` lists is the module's export surface (unlisted = private);
-  consumers can `check`/`modes` against an interface without the `.lg`
-  implementation. `lg lgi` regenerates additively.
+  exported definition's type and per-parameter `:escapes` modes, plus
+  `defvariant`/`extern-type` declarations. What a `.lgi` lists is the
+  module's export surface (unlisted = private); consumers can
+  `check`/`modes` against an interface without the `.lg` implementation
+  — including calling and `match`-ing its variant constructors
+  (`v/node …` patterns). `lg lgi` merges with the existing file:
+  hand-written entries win, `(private n)` entries survive, and
+  `lg lgi --all` regenerates every module in the require closure.
 - **Implicit parameters (modular-implicit-style).** Trailing
   `^:implicit` / `^{:implicit T}` params are resolved by type at call
   sites and elaborated to ordinary OCaml arguments — dictionary passing

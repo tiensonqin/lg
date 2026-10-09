@@ -240,8 +240,15 @@ structures — never hand-rolled collections, never vendored copies, never
 All of docs/v2.md landed (detail lives there):
 
 - **`.lgi` interface files** — mli-style sidecars: mode signatures
-  (`:escapes`), export control (listed = public), interface-only module
-  consumption for check/modes; `lg lgi` regenerates additively.
+  (`:escapes`), export control (listed = public, `(private n)` = explicitly
+  hidden), `defvariant`/`extern-type`/`ffi`/`implicit` declarations, and
+  interface-only module consumption for check/modes. Variant ctors listed
+  in a `.lgi` are callable and `match`-able from consumers (qualified
+  `ns/ctor` patterns resolve against the ctor's emitting module).
+  `lg lgi` merges with the existing file — hand-written entries win,
+  `(private n)` entries survive regeneration; `--all` covers the whole
+  require closure. Macros cannot be expressed in `.lgi` (they need the
+  module's source at expansion time).
 - **Implicit parameters** — `^:implicit`/`^{:implicit T}` trailing
   params resolved by type at call sites and elaborated to ordinary
   OCaml arguments; `(:require [ns :implicits true])` merges a module's

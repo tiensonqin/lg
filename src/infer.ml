@@ -389,9 +389,21 @@ let instantiate_builtin_ty name = Hashtbl.find builtin_table name ()
 
 let last xs = List.nth xs (List.length xs - 1)
 
+(* cross-module variant registry: every defvariant (in a .lg or declared
+   in an .lgi) registers here, so a requiring module sees the dependency's
+   constructors for match exhaustiveness and emit *)
+let all_variants : (string, vctor) Hashtbl.t = Hashtbl.create 16
+let all_vtypes : (string, string list) Hashtbl.t = Hashtbl.create 8
+
+let register_variant_mod ocaml_mod c sch nfields =
+  Hashtbl.replace all_variants c { vc_ocaml = ocaml_mod ^ "." ^ String.capitalize_ascii (munge c); vc_scheme = sch; vc_nfields = nfields }
+
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; tops = []; effects = []; iface_only = false; uses_ctypes = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants = Hashtbl.create 16; vtypes = Hashtbl.create 8 } in
+  let variants = Hashtbl.create 16 and vtypes = Hashtbl.create 8 in
+  Hashtbl.iter (Hashtbl.replace variants) all_variants;
+  Hashtbl.iter (Hashtbl.replace vtypes) all_vtypes;
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -460,12 +472,15 @@ and infer_top ctx f =
       (fun (c, flds) ->
         let ftys = List.map snd flds in
         let cty = (match ftys with [] -> ret | _ -> TFun (ftys, ret)) in
-        let ocaml_c = ctx.modl.ocaml_name ^ "." ^ String.capitalize_ascii (munge c) in
         let sch = generalize [] cty in
         register_global ctx c sch false;
-        Hashtbl.replace ctx.variants c { vc_ocaml = ocaml_c; vc_scheme = sch; vc_nfields = List.length ftys })
+        let vc = { vc_ocaml = ctx.modl.ocaml_name ^ "." ^ String.capitalize_ascii (munge c); vc_scheme = sch; vc_nfields = List.length ftys } in
+        Hashtbl.replace ctx.variants c vc;
+        Hashtbl.replace all_variants c vc)
       parsed;
-    Hashtbl.replace ctx.vtypes vname (List.map fst parsed);
+    let cnames = List.map fst parsed in
+    Hashtbl.replace ctx.vtypes vname cnames;
+    Hashtbl.replace all_vtypes vname cnames;
     ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed) ]
   | List (l, Atom (_, Symbol "ffi") :: _) ->
     ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]
@@ -1005,6 +1020,20 @@ and infer_expr ctx f : expr =
      | _ -> e)
   | List (l, items) -> infer_call ctx l items
 
+(* variant ctor lookup: bare names consult the module's registry; an
+   `ns/ctor` pattern resolves the alias to a module and matches on the
+   ctor's emitted OCaml name (<Mod>.<Ctor>) *)
+and find_variant ctx c =
+  match String.index_opt c '/' with
+  | None -> Hashtbl.find_opt ctx.variants c
+  | Some i ->
+    let ns = String.sub c 0 i and n = String.sub c (i + 1) (String.length c - i - 1) in
+    let target = match List.assoc_opt ns ctx.modl.requires with Some f -> f | None -> ns in
+    let want = ocaml_mod_of_ns target ^ "." ^ String.capitalize_ascii (munge n) in
+    Hashtbl.fold
+      (fun _ vc acc -> match acc with Some _ -> acc | None -> if vc.vc_ocaml = want then Some vc else acc)
+      ctx.variants None
+
 and infer_symbol ctx l s : expr =
   (* hygiene: a marked symbol (x__h7) resolves as a local binder under its
      marked name only; if that misses, the *unmarked* name resolves globals
@@ -1454,17 +1483,23 @@ and infer_match ctx l scrut clauses =
     mk l TBool (ECall (ce, [ se; le ]))
   in
   let seen = Hashtbl.create 8 in
+  (* ctor name for exhaustiveness bookkeeping, ignoring an ns/ qualifier *)
+  let ctor_key c =
+    match String.index_opt c '/' with
+    | Some i -> String.sub c (i + 1) (String.length c - i - 1)
+    | None -> c
+  in
   let note pat =
     match pat with
     | Atom (_, Symbol "_") -> Hashtbl.replace seen "_" ()
     | Atom (_, Symbol "None") -> Hashtbl.replace seen "None" ()
     | Atom (_, Symbol "Some") -> Hashtbl.replace seen "Some" ()
-    | Atom (_, Symbol c) when Hashtbl.mem ctx.variants c -> Hashtbl.replace seen c ()
+    | Atom (_, Symbol c) when find_variant ctx c <> None -> Hashtbl.replace seen (ctor_key c) ()
     | Atom (_, Symbol _) -> Hashtbl.replace seen "*" ()
     | Atom (_, Bool bv) -> Hashtbl.replace seen (string_of_bool bv) ()
     | Atom _ -> Hashtbl.replace seen "lit" ()
     | List (_, Atom (_, Symbol "Some") :: _) -> Hashtbl.replace seen "Some" ()
-    | List (_, Atom (_, Symbol c) :: _) when Hashtbl.mem ctx.variants c -> Hashtbl.replace seen c ()
+    | List (_, Atom (_, Symbol c) :: _) when find_variant ctx c <> None -> Hashtbl.replace seen (ctor_key c) ()
     | _ -> Hashtbl.replace seen "lit" ()
   in
   let rec analyze = function
@@ -1492,9 +1527,9 @@ and infer_match ctx l scrut clauses =
               let te = infer_expr ctx body_f in
               (te, fun te' _ -> te')
             | Atom (_, Symbol c)
-                when (match Hashtbl.find_opt ctx.variants c with
+                when (match find_variant ctx c with
                       | Some v -> v.vc_nfields = 0 | None -> false) ->
-              let vc = Hashtbl.find ctx.variants c in
+              let vc = Option.get (find_variant ctx c) in
               let it = instantiate vc.vc_scheme in
               unify (atom_loc pat) se.ety it;
               let saved = ctx.env and saved_imp = ctx.implicits in
@@ -1507,8 +1542,8 @@ and infer_match ctx l scrut clauses =
               let te = infer_expr ctx body_f in
               ctx.env <- saved; ctx.implicits <- saved_imp;
               (te, fun te' _ -> mk l ret (ELet (pairs, te')))
-            | List (_, Atom (_, Symbol c) :: pats) when Hashtbl.mem ctx.variants c ->
-              let vc = Hashtbl.find ctx.variants c in
+            | List (_, Atom (_, Symbol c) :: pats) when find_variant ctx c <> None ->
+              let vc = Option.get (find_variant ctx c) in
               let it = instantiate vc.vc_scheme in
               let ftys, rty = (match repr it with TFun (ts, r) -> (ts, r) | _ -> assert false) in
               unify (atom_loc pat) se.ety rty;

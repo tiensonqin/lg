@@ -19,11 +19,14 @@ let () =
   let cmd = ref None in
   let file = ref None in
   let backend = ref "ocaml" in
+  let all_mods = ref false in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
     ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml"; "melange"; "wasm" ], (fun s -> backend := s)),
        "<ocaml|oxcaml|melange> emit mode annotations for OxCaml, or JS via melange")
+    ; ("--all", Arg.Set all_mods,
+       " lg lgi: generate .lgi for every module in the require closure")
     ; ("--strict", Arg.Set Lgc.Infer.strict,
        " heterogeneous literals require an explicit ^any annotation") ]
   in
@@ -149,10 +152,17 @@ let () =
           Printf.printf "ok (%d module%s)\n" (List.length mods)
             (if List.length mods = 1 then "" else "s")
         | Some "lgi" ->
-          let entry = List.hd (List.rev mods) in
-          Lgc.Compiler.write_lgi entry;
-          Printf.printf "wrote %s
-" (Lgc.Compiler.lgi_path entry.mpath)
+          let targets =
+            if !all_mods then List.filter (fun (m : Lgc.Ast.modl) -> not m.iface_only) mods
+            else [ List.hd (List.rev mods) ]
+          in
+          List.iter
+            (fun (m : Lgc.Ast.modl) ->
+              if m.iface_only then ()
+              else (Lgc.Compiler.write_lgi m;
+                    Printf.printf "wrote %s
+" (Lgc.Compiler.lgi_path m.mpath)))
+            targets
         | Some "modes" ->
           let l, o, s = Lgc.Compiler.mode_stats mods in
           let total = l + o + s in
