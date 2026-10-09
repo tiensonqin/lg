@@ -1,0 +1,18 @@
+;; owned update chains lower to mutable builders (emitted result identical)
+(def v (conj (conj (conj [1] 2) 3) 4))
+(println v)
+(def m (assoc (assoc {:a 1} :b 2) :c 3))
+(println (get m :b))
+(let [w [10 20]] (println (conj (into w [30 40]) 50)))
+(def m2 (dissoc (assoc {:x 1 :y 2} :z 3) :x))
+(println (get m2 :z))
+(println (get m2 :x))
+;; a binder used twice is shared — persistent path keeps it intact
+(let [s [1 2]] (println (str (conj s 9) " / " s)))
+(def st (conj (conj #{1} 2) 3))
+(println (contains? st 2))
+;; pop/update through a builder
+(def v2 (pop (conj [1 2] 3)))
+(println v2)
+(def m3 (update (assoc {:a 0} :a 5) :a (fn [^int x] (+ x 1))))
+(println (get m3 :a))

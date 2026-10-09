@@ -10,6 +10,9 @@ open Infer
    the wrapped dictionary type *)
 let repr t = Typ.dimp t
 
+let uid_ctr = ref 0
+let fresh_uid () = incr uid_ctr; !uid_ctr
+
 let sanitize s = munge s
 
 let buf_add = Buffer.add_string
@@ -281,7 +284,188 @@ and as_list e =
   | `Str -> "(Lg_rt.string_chars " ^ a ^ ")"
   | `List -> a
 
+(* ---- FBIP: unique-owner update chains -> mutable builder + one freeze ----
+   A spine of conj/assoc/into/pop/dissoc/disj/update calls rooted at a fresh
+   literal (or a once-used binder of a literal) is unique-owned: emit one
+   mutable builder instead of n intermediate persistent values. *)
+
+and owned_root e =
+  match e.desc with
+  | EVecLit _ | EMapLit _ | ESetLit _ -> true
+  | ELocal bd -> bd.bused <= 1 && bd.bmode = Ast.Local && bd.blit
+  | _ -> false
+
+and coll_spine e : (expr * cop list) option =
+  match e.desc with
+  | ECall ({ desc = EBuiltin n; _ }, args) -> chain_step n args
+  | _ -> None
+
+and chain_step n args : (expr * cop list) option =
+  match n, args with
+  | _, c :: _ ->
+    let step mk =
+      let root_ops =
+        match coll_spine c with
+        | Some _ as r -> r
+        | None -> if owned_root c then Some (c, []) else None
+      in
+      match root_ops, mk (repr c.ety) with
+      | Some (r, ops), Some more -> Some (r, ops @ more)
+      | _ -> None
+    in
+    (match n, args with
+     | "conj", _ :: xs when xs <> [] ->
+       step (function
+         | TVec _ -> Some (List.map (fun x -> CPush x) xs)
+         | TMap _ -> Some (List.map (fun x -> CPair x) xs)
+         | TSet _ -> Some (List.map (fun x -> CAdd x) xs)
+         | _ -> None)
+     | "assoc", _ :: i :: x :: rest ->
+       step (function
+         | TVec _ when rest = [] -> Some [ CSet (i, x) ]
+         | TMap _ when List.length rest mod 2 = 0 ->
+           let rec ps = function a :: b :: t -> (a, b) :: ps t | [] -> [] | _ -> [] in
+           Some (List.map (fun (k, v) -> CPut (k, v)) ((i, x) :: ps rest))
+         | TMap _ -> None
+         | _ -> None)
+     | "dissoc", _ :: ks when ks <> [] ->
+       step (function TMap _ -> Some (List.map (fun k -> CDrop k) ks) | _ -> None)
+     | "pop", [ _ ] -> step (function TVec _ -> Some [ CPop ] | _ -> None)
+     | "update", [ _; i; f ] ->
+       step (function TVec _ -> Some [ CUpd (i, f) ] | TMap _ -> Some [ CUpdMap (i, f) ] | _ -> None)
+     | "into", [ _; xs ] ->
+       (match repr xs.ety with
+        | TMap _ -> step (function TMap _ -> Some [ CMExt xs ] | _ -> None)
+        | TVec _ | TList _ | TSet _ ->
+          step (function TVec _ -> Some [ CExt xs ] | TSet _ -> Some [ CSExt xs ] | _ -> None)
+        | _ -> None)
+     | "disj", _ :: xs when xs <> [] ->
+       step (function TSet _ -> Some (List.map (fun x -> CDel x) xs) | _ -> None)
+     | _ -> None)
+  | _ -> None
+
+and emit_owned_chain b name args : bool =
+  match chain_step name args with
+  | None -> false
+  | Some (root, ops) ->
+    (match repr root.ety with
+     | TVec el -> emit_vbuilder b root el ops; true
+     | TMap (k, v) -> emit_mbuilder b root k v ops; true
+     | TSet el -> emit_sbuilder b root el ops; true
+     | _ -> false)
+
+and vroot b root =
+  match root.desc with
+  | EVecLit es ->
+    let el = match repr root.ety with TVec a -> a | _ -> TAny in
+    buf_add b "(Lg_rt.vb_of_arr [|";
+    List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
+    buf_add b "|])"
+  | _ -> buf_add b "(Lg_rt.vb_of_vec "; emit_expr b root; buf_add b ")"
+
+and mroot b root kt vt =
+  match root.desc with
+  | EMapLit kes ->
+    buf_add b "(Lg_rt.mb_of_list [";
+    List.iteri
+      (fun i (k, v) ->
+        if i > 0 then buf_add b "; ";
+        buf_add b "("; emit_elem b kt k; buf_add b ", "; emit_elem b vt v; buf_add b ")")
+      kes;
+    buf_add b "])"
+  | _ -> buf_add b "(Lg_rt.mb_of_map "; emit_expr b root; buf_add b ")"
+
+and sroot b root =
+  match root.desc with
+  | ESetLit es ->
+    let el = match repr root.ety with TSet a -> a | _ -> TAny in
+    buf_add b "(Lg_rt.sb_of_list [";
+    List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
+    buf_add b "])"
+  | _ -> buf_add b "(Lg_rt.sb_of_set "; emit_expr b root; buf_add b ")"
+
+(* element of a source collection, reboxed when the target elem is `any` *)
+and ext_elem el sel emit_x =
+  if is_any el && not (is_any sel) then
+    let b2 = Buffer.create 16 in
+    buf_add b2 (box_deep sel emit_x);
+    Buffer.contents b2
+  else emit_x
+
+and emit_vop b bn el op =
+  let ax e = arg_str e in
+  let elem e = let b2 = Buffer.create 16 in emit_elem b2 el e; Buffer.contents b2 in
+  match op with
+  | CPush x -> buf_add b ("Lg_rt.vb_push " ^ bn ^ " " ^ elem x ^ "; ")
+  | CSet (i, x) -> buf_add b ("Lg_rt.vb_set " ^ bn ^ " " ^ ax i ^ " " ^ elem x ^ "; ")
+  | CUpd (i, f) -> buf_add b ("Lg_rt.vb_update " ^ bn ^ " " ^ ax i ^ " " ^ ax f ^ "; ")
+  | CPop -> buf_add b ("Lg_rt.vb_pop " ^ bn ^ "; ")
+  | CExt xs ->
+    let it, sel =
+      match repr xs.ety with
+      | TVec sel -> ("Clj_core.Vec.iter", sel)
+      | TList sel -> ("Clj_core.List.iter", sel)
+      | TSet sel -> ("Clj_core.Set.iter", sel)
+      | _ -> ("", TUnit)
+    in
+    buf_add b ("(" ^ it ^ " (fun x -> Lg_rt.vb_push " ^ bn ^ " " ^ ext_elem el sel "x" ^ ") " ^ ax xs ^ "); ")
+  | _ -> ()
+
+and emit_mop b bn kt vt op =
+  let ax e = arg_str e in
+  let ke e = let b2 = Buffer.create 16 in emit_elem b2 kt e; Buffer.contents b2 in
+  let ve e = let b2 = Buffer.create 16 in emit_elem b2 vt e; Buffer.contents b2 in
+  match op with
+  | CPut (k, v) -> buf_add b ("Lg_rt.mb_assoc " ^ bn ^ " " ^ ke k ^ " " ^ ve v ^ "; ")
+  | CDrop k -> buf_add b ("Lg_rt.mb_dissoc " ^ bn ^ " " ^ ke k ^ "; ")
+  | CUpdMap (k, f) -> buf_add b ("Lg_rt.mb_update " ^ bn ^ " " ^ ke k ^ " " ^ ax f ^ "; ")
+  | CPair kv -> buf_add b ("Lg_rt.mb_assoc_pair " ^ bn ^ " " ^ ax kv ^ "; ")
+  | CMExt m2 ->
+    (match repr m2.ety with
+     | TMap (sk, sv) ->
+       buf_add b
+         ("(Clj_core.Map.iter (fun k v -> Lg_rt.mb_assoc " ^ bn ^ " "
+          ^ ext_elem kt sk "k" ^ " " ^ ext_elem vt sv "v" ^ ") " ^ ax m2 ^ "); ")
+     | _ -> ())
+  | _ -> ()
+
+and emit_sop b bn el op =
+  let ax e = arg_str e in
+  let elem e = let b2 = Buffer.create 16 in emit_elem b2 el e; Buffer.contents b2 in
+  match op with
+  | CAdd x -> buf_add b ("Lg_rt.sb_add " ^ bn ^ " " ^ elem x ^ "; ")
+  | CDel x -> buf_add b ("Lg_rt.sb_disj " ^ bn ^ " " ^ elem x ^ "; ")
+  | CSExt xs ->
+    let it, sel =
+      match repr xs.ety with
+      | TVec sel -> ("Clj_core.Vec.iter", sel)
+      | TList sel -> ("Clj_core.List.iter", sel)
+      | TSet sel -> ("Clj_core.Set.iter", sel)
+      | _ -> ("", TUnit)
+    in
+    buf_add b ("(" ^ it ^ " (fun x -> Lg_rt.sb_add " ^ bn ^ " " ^ ext_elem el sel "x" ^ ") " ^ ax xs ^ "); ")
+  | _ -> ()
+
+and emit_vbuilder b root el ops =
+  let bn = "vb__" ^ string_of_int (fresh_uid ()) in
+  buf_add b ("(let " ^ bn ^ " = "); vroot b root; buf_add b " in ";
+  List.iter (emit_vop b bn el) ops;
+  buf_add b ("Lg_rt.vb_freeze " ^ bn ^ ")")
+
+and emit_mbuilder b root kt vt ops =
+  let bn = "mb__" ^ string_of_int (fresh_uid ()) in
+  buf_add b ("(let " ^ bn ^ " = "); mroot b root kt vt; buf_add b " in ";
+  List.iter (emit_mop b bn kt vt) ops;
+  buf_add b ("Lg_rt.mb_freeze " ^ bn ^ ")")
+
+and emit_sbuilder b root el ops =
+  let bn = "sb__" ^ string_of_int (fresh_uid ()) in
+  buf_add b ("(let " ^ bn ^ " = "); sroot b root; buf_add b " in ";
+  List.iter (emit_sop b bn el) ops;
+  buf_add b ("Lg_rt.sb_freeze " ^ bn ^ ")")
+
 and emit_builtin_call b ret name args =
+  if not (emit_owned_chain b name args) then begin
   let a n = arg_str (List.nth args n) in
   let t n = (List.nth args n).ety in
   let coll = if args = [] then `List else coll_kind (t 0) in
@@ -617,6 +801,8 @@ and emit_builtin_call b ret name args =
    | "some?" -> buf_add b ("(" ^ a 0 ^ " <> None)")
    | "none?" -> buf_add b ("(" ^ a 0 ^ " = None)")
    | _ -> buf_add b ("(failwith \"unhandled builtin " ^ name ^ "\")"))
+
+  end
 
 and emit_apply args =
   let f = arg_str (List.nth args 0) and xs = arg_str (List.nth args 1) in

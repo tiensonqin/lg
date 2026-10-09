@@ -751,6 +751,7 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
   let bind_one b rhs =
     (match ta with Some t -> unify l rhs.ety t; b.bty <- t | None -> ());
     b.bty <- rhs.ety;
+    b.blit <- is_lit rhs;
     [(b, rhs)]
   in
   let bind_sym s rhs =

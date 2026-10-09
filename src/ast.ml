@@ -14,6 +14,7 @@ type binder = {
   mutable bty : ty;
   mutable bmode : mode;      (* inferred later by Modes *)
   mutable bused : int;       (* use count; set by Modes *)
+  mutable blit : bool;       (* bound init was a fresh collection literal *)
 }
 
 type func = {
@@ -62,7 +63,12 @@ and edesc =
   | EDynMap of expr * binder * expr * expr (* match on `any`: DMap b -> t | _ -> e *)
 
 let binder_id = ref 0
-let fresh_binder name = incr binder_id; { bname = name; bid = !binder_id; bty = TUnit; bmode = Shared; bused = 0 }
+let fresh_binder name = incr binder_id; { bname = name; bid = !binder_id; bty = TUnit; bmode = Shared; bused = 0; blit = false }
+
+let is_lit e =
+  match e.desc with
+  | EVecLit _ | EListLit _ | EMapLit _ | ESetLit _ | ETuple _ -> true
+  | _ -> false
 
 let mk loc ty desc = { loc; ety = ty; emode = Shared; desc }
 
@@ -86,3 +92,9 @@ type modl = {
   mutable effects : expr list;                (* top-level non-def forms, run at init *)
   iface_only : bool;                          (* satisfied by an .lgi with no .lg *)
 }
+
+(* chainable update ops for FBIP builder lowering (emit.ml) *)
+type cop =
+  | CPush of expr | CSet of expr * expr | CUpd of expr * expr | CPop | CExt of expr
+  | CPut of expr * expr | CDrop of expr | CUpdMap of expr * expr | CPair of expr | CMExt of expr
+  | CAdd of expr | CDel of expr | CSExt of expr

@@ -166,3 +166,57 @@ let group_by f xs =
     (Clj_core.Map.of_list []) xs
 
 let dyn_truthy = function DBool b -> b | DUnit -> false | DOpt None -> false | _ -> true
+
+(* ---- transient-style builders (FBIP lowering of owned update chains) ----
+   The emitter lowers unique-owner conj/assoc/into/... spines to a mutable
+   buffer + a single freeze, instead of n intermediate persistent values. *)
+
+type 'a vbuilder = { mutable vbuf : 'a array; mutable vlen : int }
+
+let vb_new () = { vbuf = [||]; vlen = 0 }
+let vb_of_arr a = { vbuf = a; vlen = Array.length a }
+let vb_of_vec v = vb_of_arr (Clj_core.Vec.to_array v)
+
+let vb_push b x =
+  if b.vlen >= Array.length b.vbuf then begin
+    let nb = Array.make (max 8 (2 * (b.vlen + 1))) x in
+    Array.blit b.vbuf 0 nb 0 b.vlen;
+    b.vbuf <- nb
+  end;
+  b.vbuf.(b.vlen) <- x;
+  b.vlen <- b.vlen + 1
+
+let vb_set b i x = if i >= 0 && i < b.vlen then b.vbuf.(i) <- x
+let vb_update b i f = if i >= 0 && i < b.vlen then b.vbuf.(i) <- f b.vbuf.(i)
+let vb_pop b = if b.vlen > 0 then b.vlen <- b.vlen - 1
+let vb_extend_vec b v = Clj_core.Vec.iter (vb_push b) v
+let vb_extend_list b l = Clj_core.List.iter (vb_push b) l
+let vb_extend_set b s = Clj_core.Set.iter (vb_push b) s
+let vb_freeze b = Clj_core.Vec.of_array (Array.sub b.vbuf 0 b.vlen)
+
+type ('k, 'v) mbuilder = ('k, 'v) Hashtbl.t
+
+let mb_new () = Hashtbl.create 16
+let mb_of_list ps = let h = mb_new () in List.iter (fun (k, v) -> Hashtbl.replace h k v) ps; h
+let mb_of_map m = let h = mb_new () in Clj_core.Map.iter (Hashtbl.replace h) m; h
+let mb_assoc b k v = Hashtbl.replace b k v
+let mb_dissoc b k = Hashtbl.remove b k
+let mb_update b k f = match Hashtbl.find_opt b k with Some v -> Hashtbl.replace b k (f v) | None -> ()
+let mb_extend_map b m = Clj_core.Map.iter (mb_assoc b) m
+let mb_assoc_pair b kv =
+  match Clj_core.Vec.to_list kv with
+  | [ k; v ] -> Hashtbl.replace b k v
+  | _ -> failwith "conj: map entry must be [k v]"
+let mb_freeze b = Clj_core.Map.of_list (Hashtbl.fold (fun k v acc -> (k, v) :: acc) b [])
+
+type 'a sbuilder = ('a, unit) Hashtbl.t
+
+let sb_new () = Hashtbl.create 16
+let sb_of_list xs = let h = sb_new () in List.iter (fun x -> Hashtbl.replace h x ()) xs; h
+let sb_of_set s = let h = sb_new () in Clj_core.Set.iter (fun x -> Hashtbl.replace h x ()) s; h
+let sb_add b x = Hashtbl.replace b x ()
+let sb_disj b x = Hashtbl.remove b x
+let sb_extend_vec b v = Clj_core.Vec.iter (sb_add b) v
+let sb_extend_list b l = Clj_core.List.iter (sb_add b) l
+let sb_extend_set b s = Clj_core.Set.iter (sb_add b) s
+let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b [])
