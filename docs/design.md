@@ -231,8 +231,9 @@ structures — never hand-rolled collections, never vendored copies, never
   maybe-absent values (`Some`/`None`, `if-let`, `when-let`, `match`) —
   and `Result`-style data when a reason must travel. OCaml exceptions
   still surface for runtime-checked contract failures (`^T` unboxes,
-  missing-key `update`, `contains?` on a non-coll): those are bugs,
-  not control flow, and they stay uncatchable from lg.
+  missing-key `update` (the 4-arg `(update m k f default)` inserts
+  `default` instead of failing), `contains?` on a non-coll): those
+  are bugs, not control flow, and they stay uncatchable from lg.
 - **Keep `dyn` confined.** `any` only enters via explicit `^any` and
   mixed-type literals; it never propagates through unification, and
   every use at the boundary is a checked unbox. A future `--strict`

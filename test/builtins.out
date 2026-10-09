@@ -2,6 +2,7 @@ comp 7
 juxt [11 9]
 partial 21
 update {:a 2, :b 2}
+update-missing {:a 1, :b 2, :z 0} {:a 1, :b 2, :z 5}
 get-in 5
 assoc-in {:x {:w 9, :y 1}}
 mapcat (1 1 2 2)

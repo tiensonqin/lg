@@ -1306,8 +1306,12 @@ and emit_builtin_call b ret name args =
      let vt = match repr (t 0) with TMap (_, v) -> v | _ -> TAny in
      let uv = conv pf vt "uv__" in
      let res = conv vt rf ("(" ^ a 2 ^ " " ^ uv ^ ")") in
+     let miss =
+       if List.length args = 4 then conv vt (t 3) (a 3)
+       else "failwith \"update: missing key\""
+     in
      buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
-                ^ " with Some uv__ -> " ^ res ^ " | None -> failwith \"update: missing key\"))")
+                ^ " with Some uv__ -> " ^ res ^ " | None -> " ^ miss ^ "))")
    | "get-in" | "assoc-in" ->
      let ks_arg = List.nth args 1 in
      (* clj-core's get_in/assoc_in walk 'k keys of the nest map — dyn here —

@@ -2331,11 +2331,12 @@ and infer_special ctx l name ce arg_es =
      | TVar _ -> unify l ks (TList kk)
      | _ -> type_error l "select-keys: key list must be a seqable collection");
     mk l (TMap (kk, v)) (ECall (ce, arg_es))
-  | "update", [ m; k; f ] ->
+  | "update", [ m; k; f ] | "update", [ m; k; f; _ ] ->
     let kk = fresh_var () and v = fresh_var () in
     unify l m (TMap (kk, v));
     unify l k kk;
     unify l f (TFun ([ v ], v));
+    (match arg_es with [ _; _; _; d ] -> unify l d.ety v | _ -> ());
     mk l (TMap (kk, v)) (ECall (ce, arg_es))
   | "get-in", [ m; ks ] ->
     unify l m (TMap (TKeyword, TAny));

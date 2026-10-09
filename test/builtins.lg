@@ -8,6 +8,7 @@
 ;; update / get-in / assoc-in
 (def m {:a 1 :b 2})
 (println (str "update " (update m :a inc)))
+(println (str "update-missing " (update m :z inc 0) " " (update m :z (fn [x] (+ x 10)) 5)))
 (def deep {:x {:y {:z 5}}})
 (println (str "get-in " (get-in deep [:x :y :z])))
 (println (str "assoc-in " (assoc-in {:x {:y 1}} [:x :w] 9)))
