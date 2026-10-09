@@ -227,13 +227,66 @@ let () =
                else "clj-core,rrbvec,unix,str"
              in
              let extra = try Sys.getenv "LG_EXTRA_LINK" with Not_found -> "" in
+             (* incremental compile: one OCaml unit per lg module under
+                <exe-dir>/.lg-obj — a unit rebuilds only when its own
+                emitted source or a dependency's unit hash changed, so
+                untouched modules (and the Lg_rt runtime) link from
+                cache *)
+             let objdir = Filename.concat (Filename.dirname exe) ".lg-obj" in
+             (try Unix.mkdir objdir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+             let units = Lgc.Emit.emit_units mods in
+             let opt = Sys.command "ocamlfind ocamlopt -version >/dev/null 2>&1" = 0 in
+             let comp = if opt then "ocamlopt" else "ocamlc" in
+             let obj_ext = if opt then ".cmx" else ".cmo" in
+             let read_file p =
+               try
+                 let ic = open_in_bin p in
+                 let n = in_channel_length ic in
+                 let s = really_input_string ic n in
+                 close_in ic; s
+               with _ -> ""
+             in
+             let uhashes = Hashtbl.create 16 in
+             List.iter
+               (fun (fname, src, deps) ->
+                 let uh =
+                   Digest.to_hex
+                     (Digest.string
+                        (src ^ String.concat ""
+                           (List.filter_map (Hashtbl.find_opt uhashes) deps)))
+                 in
+                 Hashtbl.replace uhashes fname uh;
+                 let stamp = Filename.concat objdir (fname ^ ".stamp") in
+                 let obj = Filename.concat objdir (fname ^ obj_ext) in
+                 if String.trim (read_file stamp) <> uh || not (Sys.file_exists obj) then begin
+                   let mlp = Filename.concat objdir (fname ^ ".ml") in
+                   if read_file mlp <> src then begin
+                     let oc = open_out mlp in
+                     output_string oc src; close_out oc
+                   end;
+                   let rc =
+                     Sys.command
+                       (Printf.sprintf "cd %s && ocamlfind %s -package %s -c %s"
+                          (Filename.quote objdir) comp pkgs
+                          (Filename.quote (fname ^ ".ml")))
+                   in
+                   if rc <> 0 then (Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!"; raise (Exit rc));
+                   let oc = open_out stamp in
+                   output_string oc (uh ^ "\n"); close_out oc
+                 end)
+               units;
+             let objs =
+               String.concat " "
+                 (List.map
+                    (fun (f, _, _) -> Filename.quote (Filename.concat objdir (f ^ obj_ext)))
+                    units)
+             in
              let cmdline =
-               Printf.sprintf "ocamlfind ocamlopt -package %s -linkpkg %s %s -o %s 2>/dev/null || ocamlfind ocamlc -package %s -linkpkg %s %s -o %s"
-                 pkgs (Filename.quote out_ml) extra (Filename.quote exe)
-                 pkgs (Filename.quote out_ml) extra (Filename.quote exe)
+               Printf.sprintf "ocamlfind %s -package %s -linkpkg %s %s -o %s"
+                 comp pkgs objs extra (Filename.quote exe)
              in
              let code = Sys.command cmdline in
-             if code <> 0 then (Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!"; raise (Exit code))
+             if code <> 0 then (Printf.eprintf "lg: ocaml link failed\n%!"; raise (Exit code))
            | _ -> Printf.printf "wrote %s\n" out_ml))
      with
      | Failure msg -> Printf.eprintf "lg: %s

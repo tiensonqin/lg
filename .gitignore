@@ -10,3 +10,4 @@ _build/
 *.js
 .DS_Store
 dist/
+.lg-obj/

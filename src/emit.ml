@@ -998,14 +998,15 @@ and emit_builtin_call b ret name args =
      (match coll with
       | `Vec ->
         let el = match repr (t 0) with TVec e -> e | _ -> TUnit in
-        let v = if is_any el then box_of (List.nth args 2) else a 2 in
+        let e = List.nth args 2 in
+        let v = conv el e.ety (arg_str e) in
         buf_add b ("(Clj_core.Vec.assoc " ^ a 0 ^ " " ^ a 1 ^ " " ^ v ^ ")")
       | `Map ->
-        let vt = match repr (t 0) with TMap (_, v) -> v | _ -> TUnit in
-        let va i = let e = List.nth args i in if is_any vt && not (is_any e.ety) then box_of e else a i in
+        let kt, vt = match repr (t 0) with TMap (k, v) -> (k, v) | _ -> (TUnit, TUnit) in
+        let cv t i = let e = List.nth args i in conv t e.ety (arg_str e) in
         let rec go acc i =
           if i + 1 >= List.length args then acc
-          else go ("(Clj_core.Map.assoc " ^ acc ^ " " ^ a i ^ " " ^ va (i + 1) ^ ")") (i + 2)
+          else go ("(Clj_core.Map.assoc " ^ acc ^ " " ^ cv kt i ^ " " ^ cv vt (i + 1) ^ ")") (i + 2)
         in
         buf_add b (go (a 0) 1)
       | _ -> buf_add b "(failwith \"assoc\")")
@@ -1457,7 +1458,7 @@ let rec ocaml_ty t =
   | TSymbol -> "Clj_core.Symbol.t"
   | TOption u -> paren_ty (ocaml_ty u) ^ " option"
   | TVec u -> paren_ty (ocaml_ty u) ^ " Clj_core.Vec.t"
-  | TList u -> paren_ty (ocaml_ty u) ^ " Clj_core.List.t"
+  | TList u -> paren_ty (ocaml_ty u) ^ " list"
   | TSeq u -> paren_ty (ocaml_ty u) ^ " Clj_core.Seq.t"
   | TSet u -> paren_ty (ocaml_ty u) ^ " Clj_core.Set.t"
   | TMap (k, v) -> "(" ^ ocaml_ty k ^ ", " ^ ocaml_ty v ^ ") Clj_core.Map.t"
@@ -1466,7 +1467,8 @@ let rec ocaml_ty t =
   | TCon (n, ts) -> "(" ^ String.concat ", " (List.map ocaml_ty ts) ^ ") " ^ munge n
   | TVar v -> "'a" ^ string_of_int v.id
   | TFun (a, r) ->
-    "(" ^ String.concat " -> " (List.map ocaml_ty a @ [ ocaml_ty r ]) ^ ")"
+    let dom = match a with [] -> [ "unit" ] | _ -> List.map ocaml_ty a in
+    "(" ^ String.concat " -> " (dom @ [ ocaml_ty r ]) ^ ")"
   | t -> failwith ("emit: type has no OCaml FFI mapping: " ^ Typ.string_of_lg_ty t)
 
 and paren_ty s = if String.contains s ' ' then "(" ^ s ^ ")" else s
@@ -1523,6 +1525,17 @@ let emit_ffi b l name args ret sel lib =
     buf_add b (Printf.sprintf "let %s = %s
 " (munge name) rhs)
 
+(* a bare compilation unit rejects weak type variables where a module
+   struct tolerates them (e.g. `(atom (Map.of_list []))`); ascribing the
+   closed scheme pins the type *)
+let closed_asc d =
+  if d.tis_fn then None
+  else
+    (try
+       let s = ocaml_ty d.tsch.sty in
+       if String.contains s '\'' then None else Some s
+     with _ -> None)
+
 let emit_topdef b (d : topdef) =
   buf_add b "let ";
   (match d.tmode with Local -> buf_add b "(* @local *) " | Owned -> buf_add b "(* @owned *) " | Shared -> ());
@@ -1530,7 +1543,9 @@ let emit_topdef b (d : topdef) =
   buf_add b rec_flag;
   buf_add b (munge d.tname);
   buf_add b " = ";
-  emit_expr b d.texpr;
+  (match closed_asc d with
+   | Some t -> buf_add b "("; emit_expr b d.texpr; buf_add b (" : " ^ t ^ ")")
+   | None -> emit_expr b d.texpr);
   buf_add b "\n"
 
 (* Consecutive defs named `x__a<N>` are one multi-arity fn; emit them as a
@@ -1590,7 +1605,9 @@ let emit_def_group b ds =
           if i > 0 then buf_add b " and ";
           buf_add b (munge d.tname);
           buf_add b " = ";
-          emit_expr b d.texpr
+          (match closed_asc d with
+           | Some t -> buf_add b "("; emit_expr b d.texpr; buf_add b (" : " ^ t ^ ")")
+           | None -> emit_expr b d.texpr)
         | _ -> assert false)
       ds;
     buf_add b "\n"
@@ -1690,9 +1707,8 @@ let fn_groups (ds : topdef list) : (bool * topdef list) list =
   in
   take [] sccs
 
-let emit_module b (m : modl) =
+let emit_module_body b (m : modl) =
   cur_mod := m.ocaml_name;
-  buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");
   let rec groups acc = function
     | [] -> List.rev acc
     | TDef d :: rest when d.tis_fn ->
@@ -1719,7 +1735,11 @@ let emit_module b (m : modl) =
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
   in
   List.iter (emit_def_group b) (groups [] m.tops);
-  List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects;
+  List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects
+
+let emit_module b (m : modl) =
+  buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");
+  emit_module_body b m;
   buf_add b "end\n\n"
 
 (* Melange-only node bridge: Node APIs are touched lazily (require() is
@@ -1823,3 +1843,37 @@ let emit_program (mods : modl list) : string =
   if !melange then buf_add b lg_node_src;
   List.iter (emit_module b) mods;
   Buffer.contents b
+
+(* per-module compilation units for incremental builds: each lg module is
+   emitted as a bare OCaml unit file — cross-module references like
+   `Test.foo` resolve to the Test.cmi of the unit compiled before it.
+   Returns (unit file basename, source, dep unit basenames) in dependency
+   order; the first entry is always the Lg_rt runtime unit. *)
+let emit_units (mods : modl list) : (string * string * string list) list =
+  (match List.find_opt (fun m -> m.iface_only) mods with
+   | Some m ->
+     failwith ("module " ^ m.mname ^ " has only an .lgi interface — provide a .lg to emit/build")
+   | None -> ());
+  List.iter
+    (fun m ->
+      List.iter
+        (function
+          | TDef d ->
+            Hashtbl.replace sig_tbl (m.ocaml_name ^ "/" ^ munge d.tname) d.tsch.sty
+          | _ -> ())
+        m.tops)
+    mods;
+  let unit_of = Hashtbl.create 16 in
+  List.iter (fun m -> Hashtbl.replace unit_of m.mname (String.lowercase_ascii m.ocaml_name)) mods;
+  ("lg_rt", Embedded_runtime.lg_rt_src, [])
+  :: List.map
+    (fun m ->
+      let b = Buffer.create 8192 in
+      emit_module_body b m;
+      let deps =
+        List.filter_map
+          (fun (_, rn) -> Hashtbl.find_opt unit_of rn)
+          m.requires
+      in
+      (String.lowercase_ascii m.ocaml_name, Buffer.contents b, deps))
+    mods

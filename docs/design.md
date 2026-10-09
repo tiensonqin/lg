@@ -148,6 +148,18 @@ Name mapping:
 back to `ocamlc` for byte). `lg check` runs the front half only
 (read → expand → infer → modes) for fast error reporting.
 
+**Incremental compile.** Native `lg build` emits one bare OCaml unit per
+lg module — `Lg_rt` once, then each module as `<ocaml_name>.ml` — under
+`<exe-dir>/.lg-obj`. A unit's stamp is `hash(emitted source + dependency
+unit hashes)`, so a module rebuilds only when its own emitted code or a
+transitive dependency changed (comment-only edits are free), and the
+runtime unit is compiled once per project. Cross-module references
+(`Test.f`) resolve to the dependency's `.cmi`; link order follows the
+topological module order. Units are ascription-annotated where a bare
+compilation unit would reject the weak type variables a module struct
+tolerates (`(atom (Map.of_list []))`). The melange backend still emits a
+single merged file into the `melange.emit` workspace.
+
 ## 7. Emit → `Clj_core.*` mapping
 
 | lg form | emitted OCaml |
