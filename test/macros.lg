@@ -1,0 +1,26 @@
+;; defmacro hygiene: syntax-quote renamed binders, ~ / ~@, gensym, nested macros
+(defmacro my-when [c & body] `(if ~c (do ~@body) nil))
+(defmacro my-unless [c & body] `(if ~c nil (do ~@body)))
+(defmacro swap-inc [a] `(swap! ~a inc))
+
+;; hygiene: the macro's internal `tmp` must not capture the caller's `tmp`
+(defmacro twice [e] `(let [tmp ~e] (str tmp tmp)))
+(def tmp "outer")
+(def t2 (twice "in"))
+
+;; gensym for a binding that *should* be shared across the expansion
+(defmacro log-wrap [e]
+  (let [g (gensym "v")]
+    `(let [~g ~e] (do (println (str "v=" ~g)) ~g))))
+
+(my-when true (println "when-ok"))
+(my-unless false (println "unless-ok"))
+(def c (atom 0))
+(swap-inc c)
+(println (str @c " " t2))
+(println (log-wrap (+ 1 2)))
+;; threading macros
+(println (str (-> 5 (+ 3) (* 2)) " " (->> '(1 2 3) (map inc) (filter (fn [x] (> x 2))) (first))))
+;; cond
+(println (str (cond false "a" false "b" :else "z")))
+(exit 0)

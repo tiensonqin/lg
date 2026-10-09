@@ -251,6 +251,7 @@ let () =
   reg "keyword" (fun () -> f [ TString ] TKeyword);
   reg "symbol" (fun () -> f [ TString ] TSymbol);
   reg "println" (fun () -> f [ v () ] TUnit);
+  reg "exit" (fun () -> f [ TInt ] (fresh_var ()));
   reg "print" (fun () -> f [ v () ] TUnit);
   reg "pr-str" (fun () -> f [ v () ] TString);
   reg "map" (fun () -> f [ v (); v () ] (v ()));
@@ -268,7 +269,7 @@ let () =
   reg "get-in" (fun () -> f [ TMap (TKeyword, TAny); v () ] (TOption TAny));
   reg "assoc-in" (fun () -> f [ TMap (TKeyword, TAny); v (); TAny ] (TMap (TKeyword, TAny)));
   reg "comp" (fun () -> f [ v (); v () ] (v ()));
-  reg "juxt" (fun () -> f [ v (); v () ] (v ()));
+  reg "juxt" (fun () -> let a = v () and b = v () in f [ f [ a ] b; f [ a ] b ] (f [ a ] (TVec b)));
   reg "partial" (fun () -> f [ v (); v () ] (v ()));
   reg "mapcat" (fun () -> let a = v () and b = v () in f [ f [ a ] (TList b); v () ] (TList b));
   reg "interpose" (fun () -> let a = v () in f [ a; v () ] (TList a));
@@ -288,6 +289,13 @@ let () =
   reg "sort-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (v ()));
   reg "group-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (TMap (k, TList a)));
   reg "frequencies" (fun () -> let a = v () in f [ TList a ] (TMap (a, TInt)));
+  (* tag predicates: on `any` they dispatch on the dyn tag; on a static
+     type the answer is constant-folded at emit *)
+  List.iter (fun p -> reg p (fun () -> f [ v () ] TBool))
+    [ "int?"; "float?"; "bool?"; "char?"; "string?"; "keyword?"; "symbol?";
+      "nil?"; "list?"; "vec?"; "set?"; "coll?"; "seq?"; "number?"; "fn?" ];
+  List.iter (fun p -> reg p (fun () -> f [ TInt ] TBool))
+    [ "zero?"; "pos?"; "neg?"; "even?"; "odd?" ];
   ()
 
 let is_numeric_op = function "+" | "-" | "*" | "/" | "+." | "-." | "*." | "/." -> true | _ -> false
@@ -303,7 +311,10 @@ let is_special_builtin = function
   | "partial" | "mapcat" | "interpose" | "reverse" | "distinct" | "second"
   | "last" | "butlast" | "min" | "max" | "every?" | "some" | "take-while"
   | "drop-while" | "zipmap" | "sort" | "sort-by" | "group-by" | "frequencies"
-  | "vec" | "set" -> true
+  | "vec" | "set"
+  | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
+  | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
+  | "zero?" | "pos?" | "neg?" | "even?" | "odd?" -> true
   | _ -> false
 
 (* ---------- inference ---------- *)
@@ -321,6 +332,15 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
   m
 
 and infer_top ctx f =
+  (* macro expansions arrive with hygiene-marked heads (def__hN); unmark the
+     head symbol so `def`/`do`/... dispatch sees the original form *)
+  let f =
+    match f with
+    | List (l, Atom (_, Symbol s) :: rest) ->
+      let s' = Macro.unmark s in
+      if s' = s then f else List (l, Atom (l, Symbol s') :: rest)
+    | _ -> f
+  in
   match f with
   | List (l, Atom (_, Symbol "ns") :: rest) -> parse_ns ctx l rest
   | List (_, Atom (_, Symbol "def") :: _) -> ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_def ctx f) ]
@@ -366,6 +386,18 @@ and infer_top ctx f =
   | List (_, Atom (_, Symbol "defmacro") :: _) ->
     (try Macro.register_defmacro ctx.modl.mname f
      with Macro.Macro_error (l, msg) -> type_error l msg)
+  | List (_, Atom (_, Symbol "do") :: body) ->
+    (* top-level do: each element is a top-level form (macro expansion target) *)
+    List.iter (infer_top ctx) body
+  | List (l, Atom (_, Symbol h) :: args) ->
+    (match macro_lookup ctx h with
+     | Some fn ->
+       let expanded =
+         (try Macro.expand fn args l
+          with Macro.Macro_error (l2, msg) -> type_error l2 msg)
+       in
+       infer_top ctx expanded
+     | None -> ctx.modl.effects <- ctx.modl.effects @ [ infer_expr ctx f ])
   | _ -> ctx.modl.effects <- ctx.modl.effects @ [ infer_expr ctx f ]
 
 and parse_ns ctx l rest =
@@ -680,7 +712,7 @@ and register_global ctx name sch variadic =
   in
   Hashtbl.replace tbl name { gsch = sch; gvar = variadic; gexp = true }
 
-and infer_fn ctx l name params body : expr =
+and infer_fn ?(hints = []) ctx l name params body : expr =
   let items = Array.to_list params in
   let rec split acc = function
     | [] -> (List.rev acc, None)
@@ -691,12 +723,15 @@ and infer_fn ctx l name params body : expr =
   let ps, variadic = split [] items in
   (* non-symbol params destructure into a temp + extra bindings; the
      destructured names see each other only inside the body *)
-  let mk_param f =
+  let mk_param hint f =
     let _, ta, inner = split_meta f in
     match inner with
     | Atom (_, Symbol s) ->
       let b = fresh_binder s in
-      b.bty <- (match ta with Some t -> t | None -> fresh_var ());
+      b.bty <- (match ta, hint with
+                | Some t, _ -> t
+                | None, Some t -> t
+                | None, None -> fresh_var ());
       (match implicit_ann f with
        | Some (Some t) -> b.bty <- TImplicit t
        | Some None -> b.bty <- TImplicit b.bty
@@ -704,11 +739,15 @@ and infer_fn ctx l name params body : expr =
       ((s, b), None)
     | (Vector _ | Map _) ->
       let b = fresh_binder "dp" in
-      b.bty <- (match ta with Some t -> t | None -> fresh_var ());
+      b.bty <- (match ta, hint with
+                | Some t, _ -> t
+                | None, Some t -> t
+                | None, None -> fresh_var ());
       (("", b), Some (inner, b))
     | _ -> type_error l "fn params must be symbols or destructuring patterns"
   in
-  let binders, destr_jobs = List.split (List.map mk_param ps) in
+  let hint_at i = match List.nth_opt hints i with Some (Some t) -> Some t | _ -> None in
+  let binders, destr_jobs = List.split (List.mapi (fun i p -> mk_param (hint_at i) p) ps) in
   let destr_jobs = List.filter_map (fun x -> x) destr_jobs in
   let vbinder =
     match variadic with
@@ -880,23 +919,39 @@ and quote_to_expr _l f : expr =
     | Vector (l, items) ->
       let es = List.map go (Array.to_list items) in
       let elem = fresh_var () in
-      List.iter (fun e -> unify e.loc elem e.ety) es;
-      mk l (TVec elem) (EVecLit es)
+      let het =
+        try List.iter (fun e -> unify e.loc elem e.ety) es; false
+        with Type_error _ -> true
+      in
+      mk l (TVec (if het then TAny else elem)) (EVecLit es)
     | List (l, items) ->
       let es = List.map go items in
       let elem = fresh_var () in
-      List.iter (fun e -> unify e.loc elem e.ety) es;
-      mk l (TList elem) (EListLit es)
+      let het =
+        try List.iter (fun e -> unify e.loc elem e.ety) es; false
+        with Type_error _ -> true
+      in
+      mk l (TList (if het then TAny else elem)) (EListLit es)
     | Map (l, kvs) ->
       let kes = List.map (fun (k, v) -> (go k, go v)) kvs in
       let kt = fresh_var () and vt = fresh_var () in
-      List.iter (fun (k, v) -> unify k.loc kt k.ety; unify v.loc vt v.ety) kes;
-      mk l (TMap (kt, vt)) (EMapLit kes)
+      let het_k =
+        try List.iter (fun (k, _) -> unify k.loc kt k.ety) kes; false
+        with Type_error _ -> true
+      in
+      let het_v =
+        try List.iter (fun (_, v) -> unify v.loc vt v.ety) kes; false
+        with Type_error _ -> true
+      in
+      mk l (TMap ((if het_k then TAny else kt), (if het_v then TAny else vt))) (EMapLit kes)
     | Set (l, items) ->
       let es = List.map go items in
       let elem = fresh_var () in
-      List.iter (fun e -> unify e.loc elem e.ety) es;
-      mk l (TSet elem) (ESetLit es)
+      let het =
+        try List.iter (fun e -> unify e.loc elem e.ety) es; false
+        with Type_error _ -> true
+      in
+      mk l (TSet (if het then TAny else elem)) (ESetLit es)
     | Meta (_, _, inner) | Quote (_, inner) -> go inner
   in
   go f
@@ -967,6 +1022,14 @@ and join_branches l a b =
   | TAny, TAny -> (TAny, a, b)
   | TAny, _ -> (TAny, a, mk b.loc TAny (EBox b))
   | _, TAny -> (TAny, mk a.loc TAny (EBox a), b)
+  (* `nil` (unit) against a concrete type widens to option — `(if c x
+     nil)` is `(option <t>)`, wrapped as `Some`/`None` at emit. Unit on
+     BOTH sides stays unit (e.g. `(if c (pass) (fail))`). *)
+  | TUnit, TUnit -> (TUnit, a, b)
+  | TOption _, TUnit -> (a.ety, a, mk b.loc a.ety (EOpt None))
+  | TUnit, TOption _ -> (b.ety, mk a.loc b.ety (EOpt None), b)
+  | TUnit, _ -> let ot = TOption b.ety in (ot, mk a.loc ot (EOpt None), mk b.loc ot (EOpt (Some b)))
+  | _, TUnit -> let ot = TOption a.ety in (ot, mk a.loc ot (EOpt (Some a)), mk b.loc ot (EOpt None))
   | _ -> unify l a.ety b.ety; (a.ety, a, b)
 
 and infer_if ctx l c t e =
@@ -1327,7 +1390,10 @@ and macro_lookup ctx s =
     let ns = String.sub s' 0 i and n = String.sub s' (i + 1) (String.length s' - i - 1) in
     let target = match List.assoc_opt ns ctx.modl.requires with Some f -> f | None -> ns in
     Macro.find_macro target n
-  | None -> Macro.find_macro ctx.modl.mname s'
+  | None ->
+    (match Macro.find_macro ctx.modl.mname s' with
+     | Some _ as r -> r
+     | None -> Hashtbl.find_opt Macro.macro_by_name s')
 
 (* clone a type with fresh unification vars — used to match an implicit
    entry against a needed dictionary type without mutating the entry *)
@@ -1405,6 +1471,34 @@ and infer_app ctx l callee args =
     unify ce.loc ce.ety (TFun (List.map (fun e -> e.ety) arg_es, ret));
     mk l ret (ECall (ce, arg_es))
 
+(* element type a collection argument contributes to a higher-order
+   fn's parameter — deliberately does NOT commit a TVar to a coll *)
+and coll_elem l name t =
+  match repr t with
+  | TVec a | TList a | TSet a -> a
+  | TMap (k, v) -> TTuple [ k; v ]
+  | TAny -> TAny
+  | TVar _ -> fresh_var ()
+  | TString -> TChar
+  | _ -> type_error l (Printf.sprintf "%s: not a collection" name)
+
+(* literal `(fn ...)` form -> expr, params pre-bound to `hints`.
+   Pre-binding is what lets `(swap! v (fn [xs] (conj xs 2)))` see that
+   `xs` is the atom's vec payload rather than defaulting `conj` to a
+   list. Returns None for non-fn forms. *)
+and is_fn_form = function
+  | List (_, Atom (_, Symbol "fn") :: Vector (_, _) :: _) -> true
+  | List (_, Atom (_, Symbol "fn") :: Atom (_, Symbol _) :: Vector (_, _) :: _) -> true
+  | _ -> false
+
+and infer_fn_form ?(hints = []) ctx l f : expr option =
+  match f with
+  | List (_, Atom (_, Symbol "fn") :: Vector (_, ps) :: body) ->
+    Some (infer_fn ~hints ctx l None ps body)
+  | List (_, Atom (_, Symbol "fn") :: Atom (_, Symbol n) :: Vector (_, ps) :: body) ->
+    Some (infer_fn ~hints ctx l (Some n) ps body)
+  | _ -> None
+
 and infer_app_no_macro ctx l s args =
   (* multi-arity dispatch: (f x y) where `f` was defined with arity 2
      resolves to the `f__a2` global. *)
@@ -1426,8 +1520,42 @@ and infer_app_no_macro ctx l s args =
     in
     match target with Some s2 -> s2 | None -> s
   in
-  let arg_es = List.map (infer_expr ctx) args in
   let ce = infer_symbol ctx l s in
+  (* higher-order call convention: when the callee is an `(fn ...)`
+     literal, infer the collection argument FIRST and pre-bind the fn's
+     parameters to its element type — otherwise inference of the fn
+     body commits before the call can tell it the element type *)
+  let arg_es =
+    match ce.desc, args with
+    | EBuiltin ("map" | "mapv" | "filter" | "filterv" | "mapcat" | "every?" | "some"
+               | "take-while" | "drop-while" | "sort-by" | "group-by"), [ fnf; cf ]
+      when is_fn_form fnf ->
+      let ce2 = infer_expr ctx cf in
+      let et = coll_elem l "hof" ce2.ety in
+      (match infer_fn_form ~hints:[ Some et ] ctx l fnf with
+       | Some fe -> [ fe; ce2 ] | None -> assert false)
+    | EBuiltin "reduce", [ fnf; zf; cf ]
+      when is_fn_form fnf ->
+      let ze = infer_expr ctx zf and ce2 = infer_expr ctx cf in
+      let et = coll_elem l "reduce" ce2.ety in
+      (match infer_fn_form ~hints:[ Some ze.ety; Some et ] ctx l fnf with
+       | Some fe -> [ fe; ze; ce2 ] | None -> assert false)
+    | EBuiltin "swap!", [ af; fnf ]
+      when is_fn_form fnf ->
+      let ae = infer_expr ctx af in
+      let at = fresh_var () in
+      unify l ae.ety (TAtom at);
+      (match infer_fn_form ~hints:[ Some at ] ctx l fnf with
+       | Some fe -> [ ae; fe ] | None -> assert false)
+    | EBuiltin "update", [ mf; kf; fnf ]
+      when is_fn_form fnf ->
+      let me = infer_expr ctx mf and ke = infer_expr ctx kf in
+      let vt = fresh_var () in
+      unify l me.ety (TMap (TKeyword, vt));
+      (match infer_fn_form ~hints:[ Some vt ] ctx l fnf with
+       | Some fe -> [ me; ke; fe ] | None -> assert false)
+    | _ -> List.map (infer_expr ctx) args
+  in
   (match ce.desc with
    | EBuiltin name when is_numeric_op name -> infer_numeric l name arg_es
    | EBuiltin name when is_cmp_op name -> infer_cmp l name arg_es
@@ -1663,10 +1791,27 @@ and infer_special ctx l name ce arg_es =
       | TVec x -> unify l a x; TVec a
       | TList x -> unify l a x; TList a
       | TSet x -> unify l a x; TSet a
+      | TMap (kk, vv) ->
+        (* map destination: source elements are [k v] pairs (vec, list or
+           tuple shape) or a source map's entries; key/value types unify
+           with the pair components. *)
+        let pair el =
+          (match repr el with
+           | TVec x | TList x -> unify l x kk; unify l x vv
+           | TTuple [ x; y ] -> unify l x kk; unify l y vv
+           | TAny -> ()
+           | _ -> type_error l "into: map destination expects pair elements")
+        in
+        let _ = with_coll src pair pair pair (fun k v -> unify l kk k; unify l vv v) (fun _ -> type_error l "into: not a collection") in
+        TMap (kk, vv)
       | TVar _ -> unify l dst (TVec a); TVec a
       | _ -> type_error l "into expects a collection destination"
     in
-    let _ = with_coll src (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    let _ =
+      match repr dst with
+      | TMap _ -> ()  (* already constrained by the pair check above *)
+      | _ -> with_coll src (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar)
+    in
     mk l ret (ECall (ce, arg_es))
   | "take", [ n; c ] | "drop", [ n; c ] ->
     unify l n TInt;
@@ -1677,16 +1822,35 @@ and infer_special ctx l name ce arg_es =
     (match repr f with
      | TFun (ts, r) ->
        (match List.rev ts with
-        | last :: _ -> unify l xs (TList last); unify l ret r
+        | last :: _ ->
+          (* any seqable last argument; when f ends in a `& rest` (TList)
+             parameter the spread elements are its items *)
+          let elem_t = match repr last with TList a -> a | t -> t in
+          let _ = with_coll xs (fun x -> unify l x elem_t) (fun x -> unify l x elem_t) (fun x -> unify l x elem_t)
+                    (fun _ _ -> type_error l "apply: not a sequence") (fun _ -> unify l TChar elem_t) in
+          unify l ret r
         | [] -> type_error l "apply: arity mismatch");
        mk l ret (ECall (ce, arg_es))
      | _ -> type_error l "apply: not a function")
   | "range", [ _ ] | "range", [ _; _ ] ->
     List.iter (fun t -> unify l t TInt) ty_args;
     mk l (TList TInt) (ECall (ce, arg_es))
-  | "concat", [] | "concat", _ :: _ ->
+  | ("int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
+    | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"), [ _ ] ->
+    mk l TBool (ECall (ce, arg_es))
+  | ("zero?" | "pos?" | "neg?" | "even?" | "odd?"), [ x ] ->
+    unify l x TInt;
+    mk l TBool (ECall (ce, arg_es))
+  | "concat", _ ->
+    (* seqable arguments: element types unify; the result is always a list
+       (emit collects each coll into a list first) *)
     let a = fresh_var () in
-    List.iter (fun t -> unify l t (TList a)) ty_args;
+    List.iter
+      (fun t ->
+        let _ = with_coll t (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x)
+                  (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+        ())
+      ty_args;
     mk l (TList a) (ECall (ce, arg_es))
   | "merge", _ :: _ ->
     let kk = fresh_var () and v = fresh_var () in
@@ -1751,10 +1915,15 @@ and infer_special ctx l name ce arg_es =
     unify l f (TFun ([ a ], b));
     mk l (TFun ([ x ], b)) (ECall (ce, arg_es))
   | "juxt", [ f; g ] ->
+    (* vec result: homo when the return types unify, vec<any> otherwise *)
     let a = fresh_var () and b = fresh_var () and c = fresh_var () in
     unify l f (TFun ([ a ], b));
     unify l g (TFun ([ a ], c));
-    mk l (TFun ([ a ], TTuple [ b; c ])) (ECall (ce, arg_es))
+    let el =
+      try unify l b c; b
+      with Type_error _ -> TAny
+    in
+    mk l (TFun ([ a ], TVec el)) (ECall (ce, arg_es))
   | "partial", f :: fixed ->
     let x = fresh_var () and r = fresh_var () in
     unify l f (TFun (fixed @ [ x ], r));
@@ -1801,8 +1970,10 @@ and infer_special ctx l name ce arg_es =
      | _ -> type_error l (name ^ " expects a list"));
     mk l (TList a) (ECall (ce, arg_es))
   | "zipmap", [ ks; vs ] ->
+    (* seqable args like everywhere else; emit lists them *)
     let kk = fresh_var () and v = fresh_var () in
-    unify l ks (TList kk); unify l vs (TList v);
+    let _ = with_coll ks (fun x -> unify l kk x) (fun x -> unify l kk x) (fun x -> unify l kk x) (fun _ _ -> type_error l "zipmap on map") (fun _ -> unify l kk TChar) in
+    let _ = with_coll vs (fun x -> unify l v x) (fun x -> unify l v x) (fun x -> unify l v x) (fun _ _ -> type_error l "zipmap on map") (fun _ -> unify l v TChar) in
     mk l (TMap (kk, v)) (ECall (ce, arg_es))
   | "sort", [ c ] ->
     let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "sort on map") (fun _ -> TList TChar) in
@@ -1810,7 +1981,7 @@ and infer_special ctx l name ce arg_es =
   | "sort", [ cmp; c ] ->
     let a = fresh_var () in
     unify l cmp (TFun ([ a; a ], TInt));
-    unify l c (TList a);
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "sort on map") (fun _ -> unify l a TChar) in
     mk l (TList a) (ECall (ce, arg_es))
   | "sort-by", [ f; c ] ->
     let a = fresh_var () and k = fresh_var () in

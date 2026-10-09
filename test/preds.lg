@@ -1,0 +1,12 @@
+;; type predicates: static answers fold at compile time, `any` checks the dyn tag
+(def ^any x 5)
+(def ^any y "s")
+(def v [1 2])
+(println (str (int? x) " " (int? y) " " (string? y) " " (vec? x) " " (number? x) " " (coll? x)))
+(println (str (int? 5) " " (vec? v) " " (string? v) " " (fn? inc) " " (fn? 3) " " (coll? v) " " (map? {:a 1})))
+(println (str (zero? 0) " " (pos? 1) " " (neg? -1) " " (even? 4) " " (odd? 3)))
+(def o (Some 2))
+(def n None)
+(println (str (nil? n) " " (some? o) " " (none? n)))
+(println (str (keyword? :a) " " (symbol? 's) " " (list? '(1 2)) " " (set? #{1}) " " (float? 1.5) " " (bool? true) " " (char? \c)))
+(exit 0)

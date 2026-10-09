@@ -1,0 +1,13 @@
+;; higher-order functions: comp/partial/juxt/apply/closures/curried-style
+(def inc2 (comp inc inc))
+(def add5 (partial + 5))
+(def both (juxt inc dec))
+(def fs [(fn [x] (+ x 1)) (fn [x] (* x 2))])
+(defn twice-of [f x] (f (f x)))
+(def counter (let [c (atom 0)] (fn [] (swap! c inc))))
+(counter) (counter)
+(println (str (inc2 10) " " (add5 10) " " (both 5) " " (twice-of inc 0) " " (counter)))
+(println (str (mapv (fn [f] (f 3)) fs) " " (apply + '(1 2 3 4)) " " (apply max '(9 3))))
+(def k (constantly 7))
+(println (str (k 99) " " ((fn [x] (fn [y] (+ x y))) 2)))
+(exit 0)

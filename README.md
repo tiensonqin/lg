@@ -50,6 +50,19 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
   (unquote-splicing) reader support. Bindings introduced by a macro are
   automatically gensym'd so they cannot capture user variables; `gensym`
   is also exposed for explicit control.
+- **Type predicates.** `int? float? bool? char? string? keyword? symbol?
+  list? vec? set? map? seq? coll? number? nil? some? none? fn?` dispatch
+  on the `dyn` tag for `any` scrutinees and constant-fold on static
+  types; `zero? pos? neg? even? odd?` work on ints (unboxing `any`).
+- **Structural `=` / `not=`.** Equality dispatches on the static type:
+  `Clj_core.Vec.equal` / `Map.equal` / `Set.equal` for collections
+  (polymorphic compare would crash — maps carry a compare fn internally),
+  `Lg_rt.dyn_eq` at the `any` boundary, `=` elsewhere. `juxt` returns a
+  `vec` (hetero branches box to `vec<any>`).
+- **Test library (`lib/test.lg`).** clojure.test-style, in lg itself:
+  `(ns t (:require [test :as t]))` then `t/deftest`, `t/is`, `t/testing`,
+  `t/are`, `(exit (t/run-tests))` — no exceptions, failures are reported
+  as `FAIL <name>: <form>` and counted.
 - **Three-layer memory model — `Local` / `Owned` / `Shared`.**
   - `Local`: values that never escape their region — eligible for
     stack/region allocation (OxCaml `@local`).
@@ -158,6 +171,7 @@ the non-native OCaml backends reachable later.
 bin/        lg CLI entry point
 src/        compiler: syntax → reader → macro → infer → modes → emit
 runtime/    Lg_rt prelude (printers/helpers) embedded into emitted files
+lib/        standard library in lg (test/ test framework)
 examples/   hello.lg, util.lg, features.lg
 test/       golden tests (.lg + .out); should_fail/ negative tests
 test.sh     runner: check → build → run → diff

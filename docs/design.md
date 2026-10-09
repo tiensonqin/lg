@@ -235,6 +235,27 @@ Deferred: nominal `TCon` record types (defrecord stays map-backed),
 OxCaml end-to-end build (no OxCaml switch on dev machines — emit is
 gated on `LG_OXCAML=1` per v2.md).
 
+## 11. Standard library + semantic notes
+
+- **`lib/test.lg`** — clojure.test in lg: `deftest`/`is`/`testing`/`are`/
+  `run-tests`. Registry is annotated `atom`s (`^(atom (vec symbol))` for
+  order, `^(atom (map symbol (fn [] unit)))` for cases). No exceptions:
+  `is` records `FAIL <name>: <form>` via macro-time `str` of the form.
+- **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
+  `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
+  and constant-fold statically. `fn?` is always `false` — functions are
+  never boxed. Numeric preds (`zero?` … `odd?`) unbox `any` via
+  `as_int`/`as_float`.
+- **`=`/`not=` are structural.** They dispatch on the operand's static
+  type — `Clj_core.Vec.equal`/`Map.equal`/`Set.equal` for collections
+  (polymorphic `=` would hit the compare fn carried inside `Map.t` and
+  crash), `Lg_rt.dyn_eq` for `dyn` payloads, `=` for scalars.
+- **`juxt` returns `vec`.** Homogeneous when branch results unify,
+  `vec<any>` otherwise (call-site emit boxes each branch result).
+- **Seqable builtins take any collection.** `zipmap`, `sort`, `concat`,
+  `apply`, `into`, `mapv`-family unify on the *element* type via
+  `with_coll`, and emit listifies with `as_list`.
+
 ## Invariants (do not break)
 
 - No `Obj.magic` anywhere; heterogeneity uses the `Lg_rt.dyn` closed

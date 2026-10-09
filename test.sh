@@ -22,17 +22,17 @@ for src in test/*.lg test/*.cljc; do
   bin=".test-bin/$name"
   link_extra=""
   case "$name" in ffi*) [ -f .test-bin/ffi_stub.o ] && link_extra=".test-bin/ffi_stub.o";; esac
-  if ! "$LG" check "$src" >/dev/null 2>&1; then
+  if ! "$LG" check "$src" -I lib >/dev/null 2>&1; then
     echo "FAIL(check) $name"
     fail=1; continue
   fi
   if [ "$name" = "mel" ]; then
-    if ! "$LG" build "$src" --backend=melange -o "$bin" >/dev/null 2>&1 || ! node "$bin.js" > ".test-bin/$name.out" 2>&1; then
+    if ! "$LG" build "$src" -I lib --backend=melange -o "$bin" >/dev/null 2>&1 || ! node "$bin.js" > ".test-bin/$name.out" 2>&1; then
       echo "FAIL(build/run) $name"
       fail=1; continue
     fi
   else
-    if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -o "$bin" >/dev/null 2>&1; then
+    if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -I lib -o "$bin" >/dev/null 2>&1; then
       echo "FAIL(build) $name"
       fail=1; continue
     fi

@@ -1,0 +1,14 @@
+;; hetero literals -> dyn boxing; get/unbox boundary; dyn-eq; str on dyn
+(def m {:name "lg" :ver 2 :ok true})
+(println (str (get m :name) " " (get m :ver) " " (get m :missing "dflt")))
+(println (str (get m :missing)))
+(def vi (if-let [v (get m :ver)] v 0))
+(def v [1 "two" :k 3.5])
+(println (str (count v) " " (nth v 0) " " (nth v 1)))
+;; ^T annotation unboxes with a runtime check
+(def i ^int vi)
+(println (str (inc i)))
+;; match on dyn tags
+(println (str (match vi [x] (str "v" x) {:name n} (str "m" n) x (str "o" x))))
+(println (str (= {:a 1} {:a 1}) " " (= [1 2] [1 2]) " " (= "s" "s")))
+(exit 0)

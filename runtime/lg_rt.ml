@@ -107,6 +107,30 @@ let as_unit = function DUnit -> () | _ -> invalid_arg "dyn: expected unit"
 let as_opt = function DOpt o -> o | _ -> invalid_arg "dyn: expected option"
 let as_list = function DList xs -> xs | _ -> invalid_arg "dyn: expected list"
 let as_vec = function DVec v -> v | _ -> invalid_arg "dyn: expected vec"
+let rec dyn_eq (a : dyn) (b : dyn) : bool =
+  match a, b with
+  | DInt x, DInt y -> x = y
+  | DFloat x, DFloat y -> x = y
+  | DBool x, DBool y -> x = y
+  | DChar x, DChar y -> x = y
+  | DStr x, DStr y -> x = y
+  | DKw x, DKw y -> Clj_core.Keyword.equal x y
+  | DSym x, DSym y -> Clj_core.Symbol.equal x y
+  | DUnit, DUnit -> true
+  | DOpt x, DOpt y ->
+    (match x, y with Some u, Some v -> dyn_eq u v | None, None -> true | _ -> false)
+  | DList x, DList y -> List.equal dyn_eq x y
+  | DVec x, DVec y -> Clj_core.Vec.equal ~eq:dyn_eq x y
+  | DSet x, DSet y -> Clj_core.Set.equal x y
+  | DMap x, DMap y -> nest_eq x y
+  | _ -> false
+and leaf_eq a b =
+  match a, b with
+  | Clj_core.Map.Leaf x, Clj_core.Map.Leaf y -> dyn_eq x y
+  | Clj_core.Map.Nest m1, Clj_core.Map.Nest m2 -> nest_eq m1 m2
+  | _ -> false
+and nest_eq a b = Clj_core.Map.equal ~eq:leaf_eq a b
+
 let as_map = function DMap m -> m | _ -> invalid_arg "dyn: expected map"
 let as_set = function DSet s -> s | _ -> invalid_arg "dyn: expected set"
 

@@ -1,0 +1,72 @@
+;; lg test library — clojure.test-style framework.
+;; Usage:
+;;   (ns my-test (:require [test :as t]))
+;;   (t/deftest addition (t/is (= 4 (+ 2 2))))
+;;   (exit (t/run-tests))
+;;
+;; deftest registers a zero-arg test under a quoted name, in definition
+;; order; is checks a boolean form and reports FAIL <name>: <form> on
+;; failure; testing adds a context label to failures inside it; are
+;; expands rows into is checks; run-tests runs every registered test
+;; and returns the failure count (feed to `exit` for a status code).
+
+(ns test)
+
+(def test-order ^(atom (vec symbol)) (atom [])) ;; definition order
+(def tests ^(atom (map symbol (fn [] unit))) (atom {}))
+(def checks ^(atom int) (atom 0))
+(def failures ^(atom int) (atom 0))
+(def current ^(atom symbol) (atom 'none))
+(def contexts ^(atom (vec string)) (atom []))   ;; `testing` labels
+
+(defn pass []
+  (do (swap! checks inc)
+      nil))
+
+(defn ctx-str []
+  (if (empty? (deref contexts))
+      ""
+      (str " " (deref contexts))))
+
+(defn fail [form]
+  (do (swap! failures inc)
+      (println (str "FAIL " (deref current) (ctx-str) ": " form))))
+
+(defmacro deftest [name & body]
+  `(do (def ~name (fn [] ~@body nil))
+       (reset! test/test-order (conj (deref test/test-order) (symbol ~(str name))))
+       (reset! test/tests (assoc (deref test/tests) (symbol ~(str name)) ~name))))
+
+(defmacro is [form]
+  `(if ~form (test/pass) (test/fail ~(str form))))
+
+(defmacro testing [msg & body]
+  `(do (reset! test/contexts (conj (deref test/contexts) ~msg))
+       ~@body
+       (reset! test/contexts (pop (deref test/contexts)))
+       nil))
+
+(defmacro are [argv expr & args]
+  ;; (are [x y] (= x y) 1 1 2 2) -> (do (is (let [x 1 y 1] (= x y))) ...)
+  (let [n (count argv)
+        z (fn z [vs xs]
+            (if (empty? vs)
+                (list)
+                (cons (first vs) (cons (first xs) (z (rest vs) (rest xs))))))
+        mk (fn mk [xs]
+             (if (empty? xs)
+                 (list)
+                 (cons (list 'is (list 'let (apply vector (z argv (take n xs))) expr))
+                       (mk (drop n xs)))))]
+    (cons 'do (mk args))))
+
+(defn run-tests []
+  (let [order (deref test-order)
+        ts (deref tests)]
+    (do
+      (mapv (fn [k] (do (reset! current k)
+                        (reset! contexts [])
+                        (if-let [f (get ts k)] (f) nil)))
+            order)
+      (println (str (deref checks) " checks, " (deref failures) " failures"))
+      (deref failures))))

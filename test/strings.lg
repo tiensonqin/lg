@@ -1,0 +1,6 @@
+;; string/interop fns: str/name/keyword/symbol/count on strings
+(println (str "a" 1 true nil [1 2] {:k 1} '(x y) #{1}))
+(println (str (name :hello) " " (name "world") " " (count "abcde") " " (str "")))
+(println (str (keyword "kw") " " (symbol "sy") 'qs :qkw))
+(println (str (str \a \b "cd") " " (str (first "xy"))))
+(exit 0)

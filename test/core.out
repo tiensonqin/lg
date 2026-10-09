@@ -46,7 +46,7 @@ opt true false true
 atom 42
 kw :k name abc
 comp 3
-juxt (6, 4)
+juxt [6 4]
 partial 15
 const 9
 ident 7

@@ -1,0 +1,14 @@
+;; reader surface: literals, sugar, comments, discard, escapes
+(def a 42) (def b 1.5) (def c \newline) (def d \x)
+(def v [1 :k "s" true nil])
+(def s #{1 2 3})
+(def m {:k 1 "s" 2 3 :x})
+(def l '(a b 3))
+(def q '(+ 1 2))
+(def at (atom 10))
+#_ (this form is discarded entirely)
+(println (str @at " " (count v) " " (count s) " " (count m) " " (count l) " " (count q))) ;; trailing comment
+(println (str (int c) " " (int d)))
+(def esc "tab\tnl\nq\"bs\\")
+(println esc)
+(exit 0)

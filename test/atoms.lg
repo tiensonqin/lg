@@ -1,0 +1,14 @@
+;; atoms: deref sugar + swap!/reset! + deref fn
+(def a (atom 0))
+(def v (atom [1]))
+(def s (atom "x"))
+(swap! a inc)
+(swap! a (fn [x] (+ x 10)))
+(swap! v (fn [xs] (conj xs 2)))
+(reset! a 0)
+(reset! s "done")
+(println (str @a " " @v " " @s " " (deref a)))
+(let [b (atom {:n 0})]
+  (do (swap! b (fn [m] (assoc m :n 5)))
+      (println (str (get @b :n)))))
+(exit 0)

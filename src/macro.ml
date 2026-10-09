@@ -86,8 +86,24 @@ let truthy = function
 
 (* ---- evaluator ---- *)
 
+(* apply forward-ref: eval_builtin_apply handles (apply f xs) before
+   `apply` is defined in the eval recursion group *)
+let apply_fn : (loc -> mval -> mval list -> mval) ref =
+  ref (fun _ _ _ -> failwith "apply: uninitialized")
+
 let rec eval_builtin_apply l name args =
   let loc = l in
+  if name = "apply" then
+    (match args with
+     | f :: rest ->
+       (match List.rev rest with
+        | MForm (List (_, xs)) :: midrev ->
+          !apply_fn l f (List.rev midrev @ List.map (fun x -> MForm x) xs)
+        | MForm (Vector (_, xs)) :: midrev ->
+          !apply_fn l f (List.rev midrev @ List.map (fun x -> MForm x) (Array.to_list xs))
+        | _ -> form_error loc "apply: last argument must be a sequence")
+     | [] -> form_error loc "apply: no function")
+  else
   let arg_forms =
     List.map
       (function
@@ -394,6 +410,8 @@ and apply l v args : mval =
     last fn.mbody
   | MBuiltin name -> eval_builtin_apply l name args
   | _ -> form_error l "macro apply: not a function"
+
+let _ = apply_fn := apply
 
 (* expand a macro call: arguments are raw forms *)
 let expand (fn : mfn) (args : form list) (l : loc) : form =

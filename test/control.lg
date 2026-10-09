@@ -1,0 +1,11 @@
+;; control forms: if/when/do/case/and/or/if-let/when-let
+(println (str (if (< 1 2) "y" "n") (if false "a") (if false "a" "b")))
+(println (str (and true (< 1 2) true) (and true false true)))
+(println (str (or false false true) (or false false)))
+(def m {:a 1 :b 2})
+(println (str (if-let [v (get m :a)] (+ v 10) -1) (if-let [v (get m :z)] v -2)))
+(when-let [v (get m :b)] (println (str "got " v)))
+(println (str (case 2 1 "one" 2 "two" "other") (case 9 1 "one" "other")))
+(do (println "do1") (println "do2"))
+(println (str (do 1 2 3)))
+(exit 0)

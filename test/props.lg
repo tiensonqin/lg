@@ -1,0 +1,64 @@
+;; property tests: pseudo-random inputs (deterministic LCG) + invariants.
+;; each property is asserted once via `is` over all iterations.
+(ns props (:require [test :as t]))
+
+;; xorshift32 — no FFI needed
+(defn xs ^(fn [int] int) [s]
+  (let [a (* s 747796405)]
+    (mod (abs (+ a 2891336453)) 2147483647)))
+
+(defn gen-vec ^(fn [int int] (vec int)) [seed n]
+  (let [g (fn g [i s ^(vec int) acc]
+            (if (= i 0) acc
+                (let [s2 (xs s)]
+                  (g (- i 1) s2 (conj acc (mod s2 1000))))))]
+    (g n seed [])))
+
+(def v1 (gen-vec 42 200))
+(def v2 (gen-vec 7 200))
+(def m1 (into {} (mapv (fn [x] [x (* x 2)]) v1)))
+(def s1 (into #{} v1))
+
+(t/deftest vec-laws
+  (t/is (= (count v1) 200))
+  (t/is (= (count (mapv inc v1)) (count v1)))
+  (t/is (= (reverse (reverse v1)) v1))
+  (t/is (= (count (concat v1 v2)) (+ (count v1) (count v2))))
+  (t/is (= (into [] v1) v1))
+  (t/is (= v1 (conj (pop v1) (nth v1 (- (count v1) 1)))))
+  (t/is (= (count (distinct v1)) (count (into #{} v1)))))
+
+(t/deftest map-laws
+  (t/is (every? (fn [k] (= (Some (* k 2)) (get m1 k))) (keys m1)))
+  (t/is (= (count (keys m1)) (count m1)))
+  (t/is (= (get (assoc m1 7 -1) 7) (Some -1)))
+  (t/is (not (contains? (dissoc m1 7) 7)) )
+  (t/is (= (get (merge m1 {7 0}) 7) (Some 0))))
+
+(t/deftest set-laws
+  (t/is (every? (fn [x] (contains? s1 x)) v1))
+  (t/is (not (contains? (disj s1 1) 1)))
+  (t/is (<= (count (into #{} (concat s1 s1))) (count s1))))
+
+(t/deftest seq-laws
+  (t/is (= (concat (take 50 v1) (drop 50 v1)) (seq v1)))
+  (t/is (= (first (rest v1)) (Some (nth v1 1))))
+  (t/is (= (count (filter (fn [x] (< x 500)) v1)) (count (filterv (fn [x] (< x 500)) v1))))
+  (t/is (= (sort (sort v1)) (sort v1)))
+  (t/is (= (count (sort v1)) (count v1))))
+
+(t/deftest fn-laws
+  (t/is (= (mapv (comp inc inc) (take 10 v1)) (mapv (fn [x] (+ x 2)) (take 10 v1))))
+  (t/is (= (mapv (partial + 5) (take 10 v1)) (mapv (fn [x] (+ x 5)) (take 10 v1))))
+  (t/is (= (mapv (apply juxt (list inc dec)) (take 10 v1)) (mapv (fn [x] [(inc x) (dec x)]) (take 10 v1))))
+  (t/is (= (apply + (seq (take 20 v1))) (reduce + 0 (seq (take 20 v1))))))
+
+(t/deftest atom-laws
+  (let [a (atom 0)]
+    (do (swap! a (fn [x] (+ x 41)))
+        (t/is (= (deref a) 41))
+        (reset! a -1)
+        (t/is (= (deref a) -1)))))
+
+(println (str "failures: " (t/run-tests)))
+(exit 0)

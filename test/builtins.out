@@ -1,5 +1,5 @@
 comp 7
-juxt (11, 9)
+juxt [11 9]
 partial 21
 update {:a 2, :b 2}
 get-in 5
