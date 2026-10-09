@@ -34,6 +34,18 @@ type ctx = {
 (* ns -> (name * dict type) entries exported via (:implicits true) *)
 let module_implicits : (string, (string * ty) list) Hashtbl.t = Hashtbl.create 16
 
+(* --strict: heterogeneous literals must carry an explicit ^any-family
+   annotation. [strict_ok] is set while descending into a meta form whose
+   declared type is dyn-flavoured (any / vec any / map any _ / set any). *)
+let strict = ref false
+let strict_ok = ref false
+
+let strict_decl t =
+  match repr t with
+  | TAny | TVec TAny | TSet TAny | TList TAny -> true
+  | TMap (TAny, _) | TMap (_, TAny) -> true
+  | _ -> false
+
 let lookup env n = List.assoc_opt n env
 
 (* ---------- name mangling ---------- *)
@@ -562,6 +574,8 @@ and infer_expr ctx f : expr =
       try List.iter (fun e -> unify e.loc elem e.ety) es; false
       with Type_error _ -> true
     in
+    if het && !strict && not !strict_ok then
+      type_error l "strict: heterogeneous literal requires ^any";
     mk l (TVec (if het then TAny else elem)) (EVecLit es)
   | Map (l, kvs) ->
     let kes = List.map (fun (k, v) -> (infer_expr ctx k, infer_expr ctx v)) kvs in
@@ -574,6 +588,8 @@ and infer_expr ctx f : expr =
       try List.iter (fun (_, v) -> unify v.loc vt v.ety) kes; false
       with Type_error _ -> true
     in
+    if (het_k || het_v) && !strict && not !strict_ok then
+      type_error l "strict: heterogeneous literal requires ^any";
     mk l (TMap ((if het_k then TAny else kt), (if het_v then TAny else vt))) (EMapLit kes)
   | Set (l, items) ->
     let es = List.map (infer_expr ctx) items in
@@ -582,10 +598,16 @@ and infer_expr ctx f : expr =
       try List.iter (fun e -> unify e.loc elem e.ety) es; false
       with Type_error _ -> true
     in
+    if het && !strict && not !strict_ok then
+      type_error l "strict: heterogeneous literal requires ^any";
     mk l (TSet (if het then TAny else elem)) (ESetLit es)
   | Quote (l, qf) -> quote_to_expr l qf
   | Meta (l, _, inner) ->
+    let _, ta0, _ = split_meta f in
+    let saved = !strict_ok in
+    (match ta0 with Some t when strict_decl t -> strict_ok := true | _ -> ());
     let e = infer_expr ctx inner in
+    strict_ok := saved;
     (match split_meta f with
      | _, Some t, _ ->
        (match repr e.ety, repr t with

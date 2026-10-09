@@ -1,0 +1,2 @@
+;; under --strict, a heterogeneous literal must opt in with ^any-family
+(def m {:a 1 :b "x"})

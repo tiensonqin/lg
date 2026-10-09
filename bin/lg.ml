@@ -23,7 +23,9 @@ let () =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
     ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml" ], (fun s -> backend := s)),
-       "<ocaml|oxcaml> emit mode annotations for the OxCaml backend") ]
+       "<ocaml|oxcaml> emit mode annotations for the OxCaml backend")
+    ; ("--strict", Arg.Set Lgc.Infer.strict,
+       " heterogeneous literals require an explicit ^any annotation") ]
   in
   Arg.parse speclist
     (fun a ->

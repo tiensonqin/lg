@@ -3,6 +3,8 @@
 # should_fail/*.lg must fail `lg check` (negative tests).
 set -u
 cd "$(dirname "$0")"
+# needs the 5.5.0 switch for clj_core/rrbvec when building emitted OCaml
+command -v opam >/dev/null 2>&1 && eval $(opam env --switch=5.5.0 --set-switch) >/dev/null 2>&1
 LG=./_build/default/bin/lg.exe
 mkdir -p .test-bin
 fail=0
@@ -36,7 +38,9 @@ for src in should_fail/*.lg; do
   [ -e "$src" ] || continue
   name=$(basename "$src" .lg)
   case "$name" in _*) continue;; esac
-  if "$LG" check "$src" > ".test-bin/$name.err" 2>&1; then
+  extra=""
+  case "$name" in strict*) extra="--strict";; esac
+  if "$LG" check "$src" $extra > ".test-bin/$name.err" 2>&1; then
     echo "FAIL(expected-error) $name: typechecked but should not"
     fail=1
   else
