@@ -435,22 +435,55 @@ and conv ty src s =
      let vs = List.mapi (fun i _ -> "cv" ^ string_of_int i ^ "_" ^ string_of_int (fresh_uid ())) ps in
      "(let (" ^ String.concat ", " vs ^ ") = " ^ s ^ " in ("
      ^ String.concat ", " (List.map2 (fun v (pt, at) -> conv pt at v) vs (List.combine ps as_)) ^ "))"
-   | TOption pe, TOption ae -> "(match " ^ s ^ " with Some x -> Some (" ^ conv pe ae "x" ^ ") | None -> None)"
-   | TVec pe, TVec ae -> "(Clj_core.Vec.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
-   | TList pe, TList ae -> "(List.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
-   | TSeq pe, TSeq ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
+   | TOption pe, TOption ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then s else "(match " ^ s ^ " with Some x -> Some (" ^ f ^ ") | None -> None)"
+   | TVec pe, TVec ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then s else "(Clj_core.Vec.map (fun x -> " ^ f ^ ") " ^ s ^ ")"
+   | TList pe, TList ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then s else "(List.map (fun x -> " ^ f ^ ") " ^ s ^ ")"
+   | TSeq pe, TSeq ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then s else "(Clj_core.Seq.map (fun x -> " ^ f ^ ") " ^ s ^ ")"
    | TMap (pk, pv), TMap (ak, av) ->
-     "(Clj_core.Map.of_list (List.map (fun (k, v) -> (" ^ conv pk ak "k" ^ ", " ^ conv pv av "v" ^ ")) (Clj_core.Map.to_list " ^ s ^ ")))"
-   | TSet pe, TSet ae -> "(Clj_core.Set.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Set.to_list " ^ s ^ ")))"
+     let fk = conv pk ak "k" and fv = conv pv av "v" in
+     if fk = "k" && fv = "v" then s
+     else "(Clj_core.Map.of_list (List.map (fun (k, v) -> (" ^ fk ^ ", " ^ fv ^ ")) (Clj_core.Map.to_list " ^ s ^ ")))"
+   | TSet pe, TSet ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then s else "(Clj_core.Set.of_list (List.map (fun x -> " ^ f ^ ") (Clj_core.Set.to_list " ^ s ^ ")))"
    (* seq is the universal collection interface: every concrete coll
       converts to a seq, and a seq realizes into a concrete coll *)
-   | TSeq pe, TList ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_list " ^ s ^ "))"
-   | TSeq pe, TVec ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_vec " ^ s ^ "))"
-   | TSeq pe, TSet ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_set " ^ s ^ "))"
-   | TSeq pe, TMap (ak, av) -> "(Clj_core.Seq.map (fun x -> " ^ conv pe (TTuple [ ak; av ]) "x" ^ ") (Clj_core.Seq.of_map " ^ s ^ "))"
-   | TList pe, TSeq ae -> "(List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ "))"
-   | TVec pe, TSeq ae -> "(Clj_core.Vec.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
-   | TSet pe, TSeq ae -> "(Clj_core.Set.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
+   | TSeq pe, TList ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Seq.of_list " ^ s ^ ")"
+     else "(Clj_core.Seq.map (fun x -> " ^ f ^ ") (Clj_core.Seq.of_list " ^ s ^ "))"
+   | TSeq pe, TVec ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Seq.of_vec " ^ s ^ ")"
+     else "(Clj_core.Seq.map (fun x -> " ^ f ^ ") (Clj_core.Seq.of_vec " ^ s ^ "))"
+   | TSeq pe, TSet ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Seq.of_set " ^ s ^ ")"
+     else "(Clj_core.Seq.map (fun x -> " ^ f ^ ") (Clj_core.Seq.of_set " ^ s ^ "))"
+   | TSeq pe, TMap (ak, av) ->
+     let f = conv pe (TTuple [ ak; av ]) "x" in
+     if f = "x" then "(Clj_core.Seq.of_map " ^ s ^ ")"
+     else "(Clj_core.Seq.map (fun x -> " ^ f ^ ") (Clj_core.Seq.of_map " ^ s ^ "))"
+   | TList pe, TSeq ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Seq.to_list " ^ s ^ ")"
+     else "(List.map (fun x -> " ^ f ^ ") (Clj_core.Seq.to_list " ^ s ^ "))"
+   | TVec pe, TSeq ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Vec.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
+     else "(Clj_core.Vec.of_list (List.map (fun x -> " ^ f ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
+   | TSet pe, TSeq ae ->
+     let f = conv pe ae "x" in
+     if f = "x" then "(Clj_core.Set.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
+     else "(Clj_core.Set.of_list (List.map (fun x -> " ^ f ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
    | TMap (pk, pv), TSeq (TTuple [ ak; av ]) ->
      "(Clj_core.Map.of_list (List.map (fun x -> " ^ conv (TTuple [ pk; pv ]) (TTuple [ ak; av ]) "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
    | TMap (_, _), TSeq _ -> "(Clj_core.Map.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
@@ -862,7 +895,7 @@ and emit_builtin_call b ret name args =
      in
      let el =
        match repr (t cidx) with
-       | TList x | TVec x | TSet x -> x
+       | TList x | TVec x | TSet x | TSeq x -> x
        | TMap (k, v) -> TTuple [ k; v ]
        | TString -> TChar
        | _ -> TAny

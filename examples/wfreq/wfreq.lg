@@ -1,0 +1,11 @@
+(ns wfreq (:require [textutil :as t]))
+
+(defvariant verdict hot cold)
+(defn classify [n] (match (>= n 3) true hot false cold))
+
+(let [args (argv)
+      file (match (empty? args) true "test/data/wfreq.txt" false (match (first args) (Some p) p None "test/data/wfreq.txt"))
+      text (slurp file)
+      counts (frequencies (t/tokenize text))]
+  (doall (map (fn [e] (println (str (nth e 0) ": " (str (nth e 1))))) (t/top-k 5 counts)))
+  (println (match (classify (count counts)) hot "hot" cold "cold")))

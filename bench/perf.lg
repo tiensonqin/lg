@@ -1,0 +1,16 @@
+;; perf baseline: run with `lg build test/perf.lg -o /tmp/perf && /tmp/perf`
+(defn bench [name f]
+  (let [t0 (now-ms) r (f) t1 (now-ms)]
+    (println (str name ": " (- t1 t0) "ms -> " (str r)))))
+
+(let [n 200000
+      v (into [] (range 0 n))]
+  (bench "range+into " (fn [] (count v)))
+  (bench "map+filter+reduce" (fn [] (reduce + 0 (filter (fn [x] (= 0 (mod x 3))) (map (fn [x] (* x 2)) v)))))
+  (bench "sort 50k" (fn [] (nth (sort (take 50000 (cycle (range 0 997)))) 12345)))
+  (bench "assoc 10k" (fn [] (count (reduce (fn [m i] (assoc m i i)) {} (range 0 10000)))))
+  (bench "atom+recur 1M" (fn []
+    (let [f (fn g [i acc] (match (< i 1000000) true (g (+ i 1) (+ acc i)) false acc))]
+      (f 0 0))))
+  (bench "str join 100k" (fn [] (count (join "," (map str (range 0 100000)))))
+  ))
