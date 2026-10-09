@@ -22,8 +22,8 @@ let () =
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
-    ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml" ], (fun s -> backend := s)),
-       "<ocaml|oxcaml> emit mode annotations for the OxCaml backend")
+    ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml"; "melange" ], (fun s -> backend := s)),
+       "<ocaml|oxcaml|melange> emit mode annotations for OxCaml, or JS via melange")
     ; ("--strict", Arg.Set Lgc.Infer.strict,
        " heterogeneous literals require an explicit ^any annotation") ]
   in
@@ -39,7 +39,9 @@ let () =
   | Some file ->
     (try
        if !backend = "oxcaml" then Lgc.Emit.oxcaml := true;
-       let mods = Lgc.Compiler.compile_path ~roots:!roots file in
+       if !backend = "melange" then Lgc.Emit.melange := true;
+       let target = if !backend = "melange" then Lgc.Reader.TJs else Lgc.Reader.TNative in
+       let mods = Lgc.Compiler.compile_path ~roots:!roots ~target file in
        (match !cmd with
         | Some "check" ->
           Printf.printf "ok (%d module%s)\n" (List.length mods)
@@ -69,6 +71,48 @@ let () =
           output_string oc ml;
           close_out oc;
           (match !cmd with
+           | Some "build" when !backend = "melange" ->
+             let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
+             (* scratch melange.emit workspace next to <exe>: copy the
+                emitted .ml, declare the stanza, dune build, copy the js out *)
+             let ws =
+               Filename.concat (Filename.get_temp_dir_name ())
+                 ("lgmel-" ^ (Digest.to_hex (Digest.string (Filename.concat (Sys.getcwd ()) exe)))) in
+             (try Unix.mkdir ws 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+             let oc = open_out (Filename.concat ws "dune-project") in
+             output_string oc "(lang dune 3.23)
+(using melange 1.0)
+"; close_out oc;
+             let modname = Filename.remove_extension (Filename.basename out_ml) in
+             let oc = open_out (Filename.concat ws "dune") in
+             output_string oc
+               (Printf.sprintf "(melange.emit
+ (target js)
+ (alias mel)
+ (modules %s)
+ (libraries clj-core rrbvec)
+ (preprocess (pps melange.ppx))
+ (module_systems commonjs))
+" modname);
+             close_out oc;
+             let rc = Sys.command (Printf.sprintf "cp %s %s && cd %s && dune build @mel"
+                 (Filename.quote out_ml) (Filename.quote (Filename.concat ws (Filename.basename out_ml)))
+                 (Filename.quote ws)) in
+             if rc <> 0 then (Printf.eprintf "lg: melange build failed
+%!"; raise (Exit rc));
+             let js = Filename.concat ws (Filename.concat "_build/default/js" (modname ^ ".js")) in
+             let dst = exe ^ ".js" in
+             let rc = Sys.command (Printf.sprintf "rm -f %s && cp %s %s" (Filename.quote dst) (Filename.quote js) (Filename.quote dst)) in
+             if rc <> 0 then (Printf.eprintf "lg: no js output at %s
+%!" js; raise (Exit rc));
+             (* CommonJS output requires the melange.js/clj-core runtime trees —
+                link the emitted node_modules next to the output *)
+             let nm = Filename.concat (Filename.dirname dst) "node_modules" in
+             let nmsrc = Filename.concat ws "_build/default/js/node_modules" in
+             if Sys.file_exists nmsrc && not (Sys.file_exists nm) then
+               Unix.symlink ~to_dir:true nmsrc nm;
+             Printf.printf "wrote %s (node %s to run)
+" dst dst
            | Some "build" ->
              let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
              if !backend = "oxcaml" then

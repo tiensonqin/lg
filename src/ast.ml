@@ -84,8 +84,18 @@ type topdef = {
   mutable timplicit : ty option;  (* ^{implicit T} on the def name *)
 }
 
-(* FFI selector: OCaml `external` stub or ctypes dynamic symbol. *)
-type ffi_sel = FOcaml of string | FNative of string
+(* FFI selector: OCaml `external` stub, ctypes dynamic symbol, or
+   a JavaScript binding (melange emit). *)
+type js_kind = JCall | JNew | JSend | JGet | JSet
+type js_ret = JDirect | JUndefined | JNull | JNullable
+type js_spec = {
+  jsym : string;
+  jkind : js_kind;
+  jmodule : string option;
+  jscope : string list;
+  jret : js_ret;
+}
+type ffi_sel = FOcaml of string | FNative of string | FJs of js_spec
 
 (* A top-level module item, in source order. *)
 type top =

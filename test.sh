@@ -14,8 +14,9 @@ if [ -f test/ffi_stub.c ]; then
   ocamlfind ocamlc -c test/ffi_stub.c -o .test-bin/ffi_stub.o 2>/dev/null || true
 fi
 
-for src in test/*.lg; do
-  name=$(basename "$src" .lg)
+for src in test/*.lg test/*.cljc; do
+  [ -e "$src" ] || continue
+  name=$(basename "$src"); name=${name%.*}
   case "$name" in _*) continue;; esac
   out="test/$name.out"
   bin=".test-bin/$name"
@@ -25,13 +26,20 @@ for src in test/*.lg; do
     echo "FAIL(check) $name"
     fail=1; continue
   fi
-  if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -o "$bin" >/dev/null 2>&1; then
-    echo "FAIL(build) $name"
-    fail=1; continue
-  fi
-  if ! "$bin" > ".test-bin/$name.out" 2>&1; then
-    echo "FAIL(run) $name"
-    fail=1; continue
+  if [ "$name" = "mel" ]; then
+    if ! "$LG" build "$src" --backend=melange -o "$bin" >/dev/null 2>&1 || ! node "$bin.js" > ".test-bin/$name.out" 2>&1; then
+      echo "FAIL(build/run) $name"
+      fail=1; continue
+    fi
+  else
+    if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -o "$bin" >/dev/null 2>&1; then
+      echo "FAIL(build) $name"
+      fail=1; continue
+    fi
+    if ! "$bin" > ".test-bin/$name.out" 2>&1; then
+      echo "FAIL(run) $name"
+      fail=1; continue
+    fi
   fi
   if ! diff -u "$out" ".test-bin/$name.out" > /dev/null 2>&1; then
     echo "FAIL(diff) $name"
@@ -43,7 +51,7 @@ done
 
 for src in should_fail/*.lg; do
   [ -e "$src" ] || continue
-  name=$(basename "$src" .lg)
+  name=$(basename "$src"); name=${name%.*}
   case "$name" in _*) continue;; esac
   extra=""
   case "$name" in strict*) extra="--strict";; esac

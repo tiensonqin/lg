@@ -19,6 +19,7 @@ let fresh_uid () = incr uid_ctr; !uid_ctr
    allocations, local_ on non-escaping params/bindings, unique_ on
    once-used owned bindings *)
 let oxcaml = ref false
+let melange = ref false
 
 let sanitize s = munge s
 
@@ -940,8 +941,32 @@ let ctypes_ty t =
   | TCon (_, []) -> "Ctypes.(ptr void)"
   | t -> failwith ("emit: type has no ctypes mapping: " ^ Typ.string_of_lg_ty t)
 
-let emit_ffi b _l name args ret sel lib =
+let emit_ffi b l name args ret sel lib =
   match sel with
+  | FJs sp ->
+    if not !melange then
+      raise (Typ.Type_error (l, "ffi :js requires --backend=melange"));
+    let dom = match args with [] -> "unit" | _ -> String.concat " -> " (List.map ocaml_ty args) in
+    let attrs =
+      (match sp.jkind with
+       | JCall -> [] | JNew -> [ "mel.new" ] | JSend -> [ "mel.send" ]
+       | JGet -> [ "mel.get" ] | JSet -> [ "mel.set" ])
+      @ (match sp.jmodule with None -> [] | Some m -> [ Printf.sprintf "mel.module %S" m ])
+      @ (match sp.jscope with
+         | [] -> []
+         | [ s ] -> [ Printf.sprintf "mel.scope %S" s ]
+         | ss -> [ "mel.scope (" ^ String.concat ", " (List.map (Printf.sprintf "%S") ss) ^ ")" ])
+      @ (match sp.jret with
+         | JDirect -> []
+         | JUndefined -> [ "mel.return undefined_to_opt" ]
+         | JNull -> [ "mel.return null_to_opt" ]
+         | JNullable -> [ "mel.return nullable" ])
+    in
+    let attr_s = String.concat "" (List.map (fun a -> " [@@" ^ a ^ "]") attrs) in
+    buf_add b (Printf.sprintf "external %s : %s -> %s = %S%s
+" (munge name) dom (ocaml_ty ret) sp.jsym attr_s)
+  | (FOcaml _ | FNative _) when !melange ->
+    raise (Typ.Type_error (l, "ffi :ocaml/:native are not supported on melange — use :js"))
   | FOcaml stub ->
     let dom = match args with [] -> "unit" | _ -> String.concat " -> " (List.map ocaml_ty args) in
     buf_add b (Printf.sprintf "external %s : %s -> %s = %S

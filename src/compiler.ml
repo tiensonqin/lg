@@ -51,7 +51,7 @@ let ns_to_paths ns =
 let find_module_file ~roots ns =
   let cands =
     List.concat_map
-      (fun r -> List.map (fun base -> Filename.concat r (base ^ ".lg")) (ns_to_paths ns))
+      (fun r -> List.concat_map (fun base -> [ Filename.concat r (base ^ ".lg"); Filename.concat r (base ^ ".cljc") ]) (ns_to_paths ns))
       roots
   in
   List.find_opt Sys.file_exists cands
@@ -159,7 +159,7 @@ let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
           Hashtbl.replace Infer.module_implicits m.mname (cur @ [ (n, sch.sty) ]))
       entries
 
-let compile_path ~(roots : string list) (path : string) : Ast.modl list =
+let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : string) : Ast.modl list =
   let globals : Infer.globals = Hashtbl.create 16 in
   let visited : (string, unit) Hashtbl.t = Hashtbl.create 16 in
   let order : Ast.modl list ref = ref [] in
@@ -172,7 +172,7 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
         with Sys_error m -> raise (Compile_error (no_loc, m))
       in
       let forms =
-        try Reader.read_file ~file src
+        try Reader.read_file ~file ~target src
         with Read_error (l, msg) -> raise (Compile_error (l, msg))
       in
       let ns0, reqs = scan_ns forms in

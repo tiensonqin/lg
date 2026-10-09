@@ -18,9 +18,17 @@ let named_char = function
   | "newline" -> '\n' | "space" -> ' ' | "tab" -> '\t' | "return" -> '\r'
   | "backspace" -> '\b' | "formfeed" -> '\012' | s -> s.[0]
 
-type t = { src : string; file : string; mutable pos : int; mutable line : int; mutable col : int }
+(* reader-conditional target (.cljc): native (default) or js (melange) *)
+type target = TNative | TJs
 
-let make ~file src = { src; file; pos = 0; line = 1; col = 1 }
+let match_target t k =
+  match t, k with
+  | TNative, ("native" | "default") | TJs, ("js" | "default") -> true
+  | _ -> false
+
+type t = { src : string; file : string; mutable pos : int; mutable line : int; mutable col : int; target : target }
+
+let make ~file ?(target = TNative) src = { src; file; pos = 0; line = 1; col = 1; target }
 
 let eof r = r.pos >= String.length r.src
 let peek r = if eof r then '\000' else r.src.[r.pos]
@@ -126,6 +134,13 @@ let rec read_form r : form =
       ignore (next r); ignore (next r);
       ignore (read_form r);
       read_form r)
+    else if peek2 r = '?' then (
+      (* #? / #?@ — .cljc reader conditional: pick the branch for the
+         current target; scalar position yields the branch or nil *)
+      match read_cond r l with
+      | [ f ] -> f
+      | [] -> Atom (l, Nil)
+      | _ -> read_error l "#?@ splice is only valid inside a collection")
     else read_error l "unsupported # reader form"
   | '\'' -> ignore (next r); Quote (l, read_form r)
   | '^' ->
@@ -148,16 +163,53 @@ let rec read_form r : form =
 
   | _ -> atom_of_token l (read_token r)
 
+(* #? / #?@ inside a collection: returns 0/1/many forms to splice in *)
+and read_cond r l : form list =
+  ignore (next r);  (* # *)
+  ignore (next r);  (* ? *)
+  let splice = peek r = '@' in
+  if splice then ignore (next r);
+  skip_ws r;
+  if peek r <> '(' then read_error l "#? expects (keyword form ... )";
+  ignore (next r);
+  let rec pairs acc =
+    skip_ws r;
+    if eof r then read_error l "expected ), got end of input in #?";
+    if peek r = ')' then (ignore (next r); List.rev acc)
+    else
+      let kw = read_form r in
+      let f = read_form r in
+      pairs ((kw, f) :: acc)
+  in
+  let ps = pairs [] in
+  let rec sel = function
+    | [] -> None
+    | (Atom (_, Keyword k), f) :: _ when match_target r.target k -> Some f
+    | _ :: tl -> sel tl
+  in
+  match sel ps with
+  | None -> []
+  | Some f ->
+    if splice then
+      (match f with
+       | List (_, xs) -> xs
+       | Vector (_, xs) -> Array.to_list xs
+       | _ -> read_error l "#?@ branch must be a list or vector")
+    else [ f ]
+
 and read_seq r close : form list =
   skip_ws r;
   if eof r then read_error (loc r) (Printf.sprintf "expected %c, got end of input" close);
   if peek r = close then (ignore (next r); [])
   else
-    let f = read_form r in
-    f :: read_seq r close
+    let fs =
+      if peek r = '#' && peek2 r = '?' then read_cond r (loc r)
+      else [ read_form r ]
+    in
+    fs @ read_seq r close
 
-let read_file ~file src : form list =
-  let r = make ~file src in
+let read_file ~file ?(target = TNative) src : form list =
+  let r = make ~file ~target src in
   let rec go acc =
     skip_ws r;
     if eof r then List.rev acc

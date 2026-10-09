@@ -612,7 +612,8 @@ and infer_ffi ctx l f : top =
     ffi_check_closed l ret;
     (match args with [ TUnit ] -> type_error l "explicit :unit argument — use []" | _ -> ());
     let sel, lib =
-      let sel = ref None and lib = ref None in
+      let sel = ref None and lib = ref None and jsym = ref None in
+      let jkind = ref JCall and jmodule = ref None and jscope = ref [] and jret = ref JDirect in
       List.iter
         (fun o ->
           match o with
@@ -622,22 +623,47 @@ and infer_ffi ctx l f : top =
                 match k, v with
                 | Atom (_, Keyword "ocaml"), Atom (_, Str s) -> sel := Some (FOcaml s)
                 | Atom (_, Keyword "native"), Atom (_, Str s) -> sel := Some (FNative s)
-                | Atom (_, Keyword "js"), _ ->
-                  type_error l "ffi :js backend needs the melange emit — not yet implemented"
+                | Atom (_, Keyword "js"), Atom (_, Str s) -> jsym := Some s
                 | Atom (_, Keyword "library"), Atom (_, Str s) -> lib := Some s
-                | _ -> type_error l "unsupported ffi option (want :ocaml/:native \"sym\", :library \"path\")")
+                | Atom (_, Keyword "kind"), Atom (_, Keyword k) ->
+                  jkind := (match k with
+                    | "call" -> JCall | "new" -> JNew | "send" -> JSend
+                    | "get" -> JGet | "set" -> JSet
+                    | _ -> type_error l "ffi :kind must be :call|:new|:send|:get|:set")
+                | Atom (_, Keyword "module"), Atom (_, Str s) -> jmodule := Some s
+                | Atom (_, Keyword "scope"), Vector (_, ss) ->
+                  jscope := List.map (function Atom (_, Str s) -> s | _ -> type_error l ":scope wants strings") (Array.to_list ss)
+                | Atom (_, Keyword "return"), Atom (_, Keyword k) ->
+                  jret := (match k with
+                    | "undefined" -> JUndefined | "null" -> JNull | "nullable" -> JNullable
+                    | "direct" -> JDirect
+                    | _ -> type_error l "ffi :return must be :undefined|:null|:nullable")
+                | _ -> type_error l "unsupported ffi option (want :ocaml/:native/:js \"sym\", :library \"path\", :kind, :module, :scope, :return)")
               kvs
           | _ -> type_error l "ffi options must be a literal map")
         optfs;
-      (match !sel with
-       | None -> type_error l "ffi requires a :ocaml or :native selector"
-       | Some s -> (s, !lib))
+      (match !sel, !jsym with
+       | None, None -> type_error l "ffi requires a :ocaml, :native, or :js selector"
+       | Some _, Some _ -> type_error l "ffi takes exactly one selector (:ocaml, :native, or :js)"
+       | Some s, None -> (s, !lib)
+       | None, Some s ->
+         let sp = { jsym = s; jkind = !jkind; jmodule = !jmodule; jscope = !jscope; jret = !jret } in
+         (FJs sp, !lib))
     in
     (match sel with
      | FOcaml _ ->
        if List.length args > 5 then type_error l "ffi :ocaml supports at most 5 arguments";
        if lib <> None then type_error l ":library does not apply to :ocaml ffi"
-     | FNative _ -> ctx.modl.uses_ctypes <- true);
+     | FNative _ -> ctx.modl.uses_ctypes <- true
+     | FJs sp ->
+       if lib <> None then type_error l ":library does not apply to :js ffi";
+       (match sp.jret with
+        | JDirect -> ()
+        | _ -> (match repr ret with TOption _ -> () | _ -> type_error l "ffi :return adapters require an :option result"));
+       (match sp.jkind with
+        | JGet -> if List.length args <> 1 then type_error l "ffi :get takes the receiver only"
+        | JSet -> if List.length args <> 2 then type_error l "ffi :set takes receiver and value"
+        | _ -> ()));
     let fty = TFun (args, ret) in
     register_global ctx name (mono fty) false;
     (match imp with

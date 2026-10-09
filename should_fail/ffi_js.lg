@@ -1,2 +1,2 @@
-;; :js backend needs the melange emit — rejected for now
-(ffi floor [:float] :float {:js "floor" :scope ["Math"]})
+;; :js :kind :get takes exactly one argument (the receiver)
+(ffi g [:int :int] :int {:js "g" :kind :get})
