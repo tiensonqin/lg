@@ -1373,7 +1373,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      in
      buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
                 ^ " with Some uv__ -> " ^ res ^ " | None -> " ^ miss ^ "))")
-   | "get-in" | "assoc-in" ->
+   | "get-in" | "assoc-in" | "update-in" ->
      let ks_arg = List.nth args 1 in
      (* clj-core's get_in/assoc_in walk 'k keys of the nest map — dyn here —
         so keyword paths are boxed to DKw and dyn paths pass through *)
@@ -1383,8 +1383,26 @@ and emit_builtin_call ?(call_local = false) b ret name args =
        | _ -> "(List.map (fun k -> Lg_rt.DKw k) " ^ as_list ks_arg ^ ")"
      in
      if name = "get-in" then
-       buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
-                  ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap s)) | None -> None)")
+       if List.length args = 3 then
+         buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
+                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> Lg_rt.DMap s) | None -> " ^ box_of (List.nth args 2) ^ ")")
+       else
+         buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
+                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap s)) | None -> None)")
+     else if name = "update-in" then
+       let miss =
+         if List.length args = 4 then box_of (List.nth args 3)
+         else "failwith \"update-in: missing key\""
+       in
+       let pf, rf = match repr (t 2) with TFun ([ p ], r) -> (p, r) | _ -> (TAny, TAny) in
+       let uv = conv pf TAny "uv__" in
+       let res = conv TAny rf ("(" ^ a 2 ^ " " ^ uv ^ ")") in
+       buf_add b
+         ("(let um__ = " ^ dyn_map_arg (List.nth args 0) ^ " and uks__ = " ^ kw_list ^ " in "
+          ^ "Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in um__ uks__ (Clj_core.Map.Leaf "
+          ^ "(match Clj_core.Map.get_in um__ uks__ with Some (Clj_core.Map.Leaf d) -> (match d with uv__ -> "
+          ^ res ^ ") | Some (Clj_core.Map.Nest s) -> (match Lg_rt.DMap s with uv__ -> " ^ res
+          ^ ") | None -> (match " ^ miss ^ " with uv__ -> " ^ res ^ ")))))")
      else
        let v_arg = List.nth args 2 in
        let boxed = if is_any v_arg.ety then arg_str v_arg else box_of v_arg in

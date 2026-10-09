@@ -11,7 +11,11 @@
 (println (str "update-missing " (update m :z inc 0) " " (update m :z (fn [x] (+ x 10)) 5)))
 (def deep {:x {:y {:z 5}}})
 (println (str "get-in " (get-in deep [:x :y :z])))
+(println (str "get-in-default " (get-in deep [:x :nope] 42) " " (get-in deep [:x :y :z] 0)))
 (println (str "assoc-in " (assoc-in {:x {:y 1}} [:x :w] 9)))
+(println (str "update-in " (update-in deep [:x :y :z] inc) " " (update-in deep [:x :q :r] (fn [x] x) 7)))
+(println (str "dissoc-missing " (dissoc m :zzz) " " (dissoc m :a :b)))
+(println (str "nth-default " (nth [1 2] 9 0) " " (nth [1 2] 0 0)))
 
 ;; seq fns
 (println (str "mapcat " (mapcat (fn [x] (list x x)) '(1 2))))

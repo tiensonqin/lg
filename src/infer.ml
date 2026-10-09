@@ -284,6 +284,7 @@ let () =
   reg "update" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k; v () ] (TMap (k, x)));
   reg "get-in" (fun () -> f [ TMap (TKeyword, TAny); v () ] (TOption TAny));
   reg "assoc-in" (fun () -> f [ TMap (TKeyword, TAny); v (); TAny ] (TMap (TKeyword, TAny)));
+  reg "update-in" (fun () -> f [ TMap (TKeyword, TAny); v (); v () ] (TMap (TKeyword, TAny)));
   reg "comp" (fun () -> f [ v (); v () ] (v ()));
   reg "juxt" (fun () -> let a = v () and b = v () in f [ f [ a ] b; f [ a ] b ] (f [ a ] (TVec b)));
   reg "partial" (fun () -> f [ v (); v () ] (v ()));
@@ -378,7 +379,7 @@ let is_special_builtin = function
   | "take" | "drop" | "cons" | "tuple"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
   | "str" | "println" | "print" | "pr-str" | "swap!"
-  | "select-keys" | "update" | "get-in" | "assoc-in" | "comp" | "juxt"
+  | "select-keys" | "update" | "get-in" | "assoc-in" | "update-in" | "comp" | "juxt"
   | "partial" | "mapcat" | "interpose" | "reverse" | "distinct" | "second"
   | "last" | "butlast" | "min" | "max" | "every?" | "some" | "take-while"
   | "drop-while" | "zipmap" | "sort" | "sort-by" | "group-by" | "frequencies"
@@ -2384,13 +2385,23 @@ and infer_special ctx l name ce arg_es =
     unify l f (TFun ([ v ], v));
     (match arg_es with [ _; _; _; d ] -> unify l d.ety v | _ -> ());
     mk l (TMap (kk, v)) (ECall (ce, arg_es))
-  | "get-in", [ m; ks ] ->
+  | "get-in", [ m; ks ] | "get-in", [ m; ks; _ ] ->
     unify l m (TMap (TKeyword, TAny));
     (match repr ks with
      | TList k2 | TVec k2 -> unify l TKeyword k2
      | TVar _ -> unify l ks (TList TKeyword)
      | _ -> type_error l "get-in: path must be a list/vector of keywords");
-    mk l (TOption TAny) (ECall (ce, arg_es))
+    (match ty_args with
+     | [ _; _; d ] -> unify l d TAny; mk l TAny (ECall (ce, arg_es))
+     | _ -> mk l (TOption TAny) (ECall (ce, arg_es)))
+  | "update-in", [ m; ks; f2 ] | "update-in", [ m; ks; f2; _ ] ->
+    unify l m (TMap (TKeyword, TAny));
+    (match repr ks with
+     | TList k2 | TVec k2 -> unify l TKeyword k2
+     | TVar _ -> unify l ks (TList TKeyword)
+     | _ -> type_error l "update-in: path must be a list/vector of keywords");
+    unify l f2 (TFun ([ TAny ], TAny));
+    mk l (TMap (TKeyword, TAny)) (ECall (ce, arg_es))
   | "assoc-in", [ m; ks; v2 ] ->
     unify l m (TMap (TKeyword, TAny));
     (match repr ks with
