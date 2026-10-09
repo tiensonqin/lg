@@ -1717,6 +1717,12 @@ let emit_def_group b ds =
   | [ `Extern (_l, n) ] -> buf_add b ("type " ^ munge n ^ "
 ")
   | [ `Ffi (_l, n, a, r, sel, lib) ] -> emit_ffi b _l n a r sel lib
+  | [ `Eff e ] ->
+    (* interleaved effect — runs in source position, between defs *)
+    buf_add b "let () = (ignore (";
+    emit_expr b e;
+    buf_add b "))
+"
   | [ `Variant (_l, n, ps, cs) ] ->
     let pfx =
       match ps with
@@ -1880,6 +1886,7 @@ let emit_module_body b (m : modl) =
     | TVariant (_l, n, ps, cs) :: rest -> groups ([ `Variant (_l, n, ps, cs) ] :: acc) rest
     | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
+    | TEffect e :: rest -> groups ([ `Eff e ] :: acc) rest
   in
   Hashtbl.reset topdef_names;
   List.iter

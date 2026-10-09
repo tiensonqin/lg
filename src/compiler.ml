@@ -154,6 +154,7 @@ let lgi_entries_of_module (m : Ast.modl) : lgi_entry list =
         Some (LDef (d.tname, d.tsch, esc, d.timplicit <> None))
       | Ast.TExtern (_, n) -> Some (LExtern n)
       | Ast.TVariant (_, n, ps, cs) -> Some (LVariant (n, ps, cs))
+      | Ast.TEffect _ -> None
       | Ast.TFfi (_, n, args, ret, _, _) ->
         Some (LDef (n, Typ.generalize [] (Typ.TFun (args, ret)), [], false)))
     m.tops

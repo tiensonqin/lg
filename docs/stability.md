@@ -219,8 +219,8 @@ be (a) now.
 |---|---|---|
 | `def` `defn` `defmacro` at top level only | a | nested `def` is unsupported — spec |
 | def-with-docstring `(def name "doc" v)`, `(defn name "doc" …)` | a | `defmacro` lacks docstring — add or spec |
-| **effect ordering** | b | defs and non-def effects are collected into *separate* lists — `(println 1) (def x 2) (println 3)` emits `x` first, then both effects. Source order between a def and an effect is lost. Fix before freeze (emit interleaved `let`s) or spec the two-phase rule. |
-| `f` multi-arity name as a *value* | b | aliases arity-1 (`greet` ≡ `greet__a1`); `(map greet xs)` silently picks arity 1. Recommend: static error on value-use of a multi-arity name (relaxing later is non-breaking). |
+| **effect ordering** | a | `TEffect` rides in `tops` — effects emit at source position; they split `let rec .. and ..` groups (correct: a crossing effect breaks the cycle). |
+| `f` multi-arity name as a *value* | a | static error — "call it with a matching argument count". |
 | `__aN` arity-mangled globals | a | internal; freeze only that `f__aN` is reserved |
 
 ## 2. Stability policy

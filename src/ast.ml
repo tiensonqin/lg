@@ -106,6 +106,7 @@ type top =
   | TFfi of loc * string * ty list * ty * ffi_sel * string option
     (* (ffi name [args] ret {selector [:library path]}) *)
   | TVariant of loc * string * ty list * (string * (string * ty) list) list
+  | TEffect of expr                         (* non-def top form, run in source order *)
     (* (defvariant (name params...) (ctor [f ty]...) ...) — ty params are
        shared TVar instances across all ctor field types *)
 

@@ -33,6 +33,7 @@ type ctx = {
   declared : (string, ty) Hashtbl.t;             (* (declare n) forward decls for mutual recursion *)
   variants : (string, vctor) Hashtbl.t;          (* defvariant ctor name -> info *)
   vtypes : (string, string list) Hashtbl.t;      (* defvariant type name -> ctor names *)
+  multi_arity : (string, unit) Hashtbl.t;        (* multi-arity defn names — value use is a static error *)
 
 }
 and vctor = { vc_ocaml : string; vc_scheme : scheme; vc_nfields : int }
@@ -403,7 +404,7 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
   let variants = Hashtbl.create 16 and vtypes = Hashtbl.create 8 in
   Hashtbl.iter (Hashtbl.replace variants) all_variants;
   Hashtbl.iter (Hashtbl.replace vtypes) all_vtypes;
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes; multi_arity = Hashtbl.create 7 } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -534,8 +535,8 @@ and infer_top ctx f =
           with Macro.Macro_error (l2, msg) -> type_error l2 msg)
        in
        infer_top ctx expanded
-     | None -> ctx.modl.effects <- ctx.modl.effects @ [ infer_expr ctx f ])
-  | _ -> ctx.modl.effects <- ctx.modl.effects @ [ infer_expr ctx f ]
+     | None -> ctx.modl.tops <- ctx.modl.tops @ [ TEffect (infer_expr ctx f) ])
+  | _ -> ctx.modl.tops <- ctx.modl.tops @ [ TEffect (infer_expr ctx f) ]
 
 and parse_ns ctx l rest =
   match rest with
@@ -723,6 +724,8 @@ and infer_defn ctx f =
        List.iter (fun t -> register_global ctx t.tname t.tsch false) tops;
        (* `f` aliases the first arity: value use gets arity 1's type; direct
           calls are arity-rewritten. *)
+       Hashtbl.replace ctx.multi_arity name ();
+       Hashtbl.replace ctx.multi_arity (ctx.modl.mname ^ "/" ^ name) ();
        let first = List.hd tops in
        let alias_e = mk l first.texpr.ety (EGlobal (ctx.modl.ocaml_name, munge first.tname, first.tname)) in
        let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared; timplicit = None } in
@@ -1069,7 +1072,9 @@ and resolve_unmarked ctx l s =
       | Some tbl ->
         (match Hashtbl.find_opt tbl n with
          | Some { gsch = sch; gexp = true; _ } ->
-           mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
+           if Hashtbl.mem ctx.multi_arity (target ^ "/" ^ n) then
+             type_error l (Printf.sprintf "%s is multi-arity — call it with a matching argument count" s)
+           else mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
          | Some _ -> type_error l (Printf.sprintf "%s is not exported by module %s" s target)
          | None -> type_error l (Printf.sprintf "unresolved symbol %s (no such var in %s)" s target))
       | None -> type_error l (Printf.sprintf "unresolved symbol %s (module %s not loaded)" s target))
@@ -1079,6 +1084,8 @@ and resolve_unmarked ctx l s =
      | Some { vkind = KBuiltin; _ } -> mk l (instantiate_builtin_ty s) (EBuiltin s)
      | _ ->
        (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
+        | Some tbl when Hashtbl.mem tbl s && Hashtbl.mem ctx.multi_arity s ->
+          type_error l (Printf.sprintf "%s is multi-arity — call it with a matching argument count" s)
         | Some tbl when Hashtbl.mem tbl s ->
           (match Hashtbl.find_opt tbl s with
            | Some { gsch = sch; _ } -> mk l (instantiate sch) (EGlobal (ctx.modl.ocaml_name, munge s, s))
