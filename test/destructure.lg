@@ -33,7 +33,7 @@
   (println (str "as " q " " (count whole))))
 
 ;; map destructuring in fn params
-(defn greet2 ^(fn [(map keyword int)] int) [{:keys [v]}] v)
+(defn greet2 ^(fn [(map keyword int)] int) [{:keys [v] :or {v 0}}] v)
 (println (str "fnmap " (greet2 {:v 11})))
 
 ;; destructure a dyn (any) map via match

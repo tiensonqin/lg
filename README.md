@@ -28,7 +28,7 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
   derived from the path. An `(ns ...)` form is optional. Cross-file
   dependencies are declared with `(:require [ns :as alias])` and resolved
   transitively via `-I` include dirs.
-- **Multi-arity `defn`, destructuring, and `match`.**
+- **Multi-arity `defn`, destructuring, and `match`, `case`, `loop`/`recur`, `defrecord`.**
   `(defn f ([x] …) ([x y] …))` dispatches on arity (each arity is its own
   checked definition). `let`/`fn`/parameters destructure vectors
   `[a [b c]]` and maps `{:keys [..] :strs [..] :as s :or {..}}` plus

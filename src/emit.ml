@@ -98,7 +98,12 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | ELet (pairs, body) ->
     List.iter
       (fun (bd, init) ->
-        buf_add b "(let ";
+        let selfrec =
+          match init.desc with
+          | EFun fn -> Modes.occurs_anywhere bd fn.body
+          | _ -> false
+        in
+        buf_add b (if selfrec then "(let rec " else "(let ");
         (match bd.bmode, !oxcaml with
          | Ast.Local, false -> buf_add b "(* @local *) "
          | Ast.Owned, false -> buf_add b "(* @owned *) "
@@ -593,6 +598,11 @@ and emit_builtin_call b ret name args =
       | `Set -> buf_add b ("(Clj_core.Set.is_empty " ^ a 0 ^ ")")
       | `Map -> buf_add b ("(Clj_core.Map.is_empty " ^ a 0 ^ ")")
       | `Str -> buf_add b ("(String.length " ^ a 0 ^ " = 0)"))
+   | "map?" ->
+     (match repr (t 0) with
+      | TMap _ -> buf_add b "true"
+      | TAny -> buf_add b ("(match " ^ dyn_map_arg (List.nth args 0) ^ " with Clj_core.Map.Nest _ -> true | _ -> false)")
+      | _ -> buf_add b "false")
    | "contains?" ->
      (match coll with
       | `Vec -> buf_add b ("(Clj_core.Vec.contains_ " ^ a 0 ^ " " ^ a 1 ^ ")")

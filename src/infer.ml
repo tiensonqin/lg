@@ -29,6 +29,7 @@ type ctx = {
   mutable env : env;
   mutable implicits : (ty * (unit -> expr)) list;  (* implicit dicts, innermost first *)
   mimplicits : (string * ty) list ref;           (* exported implicit defs of this module *)
+  mutable loops : (binder * int) list;           (* enclosing loop binders (recur targets) *)
 }
 
 (* ns -> (name * dict type) entries exported via (:implicits true) *)
@@ -67,7 +68,14 @@ let munge name =
       | '.' -> Buffer.add_string b "_dot_"
       | c -> Buffer.add_char b c)
     name;
-  Buffer.contents b
+  (* OCaml value identifiers can't start with a capital (ctor/module
+     namespace) — lowercase a leading capital *)
+  let s = Buffer.contents b in
+  if String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z' then (
+    let bs = Bytes.of_string s in
+    Bytes.set bs 0 (Char.lowercase_ascii s.[0]);
+    Bytes.to_string bs)
+  else s
 
 let ocaml_mod_of_ns ns =
   String.split_on_char '.' ns
@@ -163,6 +171,7 @@ let rec split_meta = function
          | Atom (_, Keyword k) when List.mem k primitive_type_names ->
            (try Some (ty_of_form (Atom (no_loc, Symbol k))) with Type_error _ -> None)
          | Atom (_, Symbol _) -> (try Some (ty_of_form m) with Type_error _ -> None)
+         | List _ -> (try Some (ty_of_form m) with Type_error _ -> None)
          | Map (_, kvs) ->
            (match
               List.find_map (fun (k, v) -> match k with Atom (_, Keyword "sig") -> Some v | _ -> None) kvs
@@ -220,6 +229,7 @@ let () =
   reg "assoc" (fun () -> let c = v () and k = v () and x = v () in f [ c; k; x ] c);
   reg "dissoc" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k ] (TMap (k, x)));
   reg "contains?" (fun () -> f [ v (); v () ] TBool);
+  reg "map?" (fun () -> f [ v () ] TBool);
   reg "merge" (fun () -> let k = v () and x = v () in f [ TMap (k, x); TMap (k, x) ] (TMap (k, x)));
   reg "vec" (fun () -> let a = v () in f [ TList a ] (TVec a));
   reg "peek" (fun () -> let a = v () in f [ TVec a ] (TOption a));
@@ -299,7 +309,7 @@ let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = []; iface_only = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref [] } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; loops = [] } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -310,6 +320,37 @@ and infer_top ctx f =
   | List (l, Atom (_, Symbol "ns") :: rest) -> parse_ns ctx l rest
   | List (_, Atom (_, Symbol "def") :: _) -> ctx.modl.defs <- ctx.modl.defs @ [ infer_def ctx f ]
   | List (_, Atom (_, Symbol "defn") :: _) -> ctx.modl.defs <- ctx.modl.defs @ [ infer_defn ctx f ]
+  | List (l, Atom (_, Symbol "defrecord") :: Atom (_, Symbol name) :: Vector (_, fields) :: _) ->
+    (* (defrecord Point [x y]) — map-backed record: positional ctor
+       `->Point` plus `Point?` predicate, fields keyed by same-name kw *)
+    let flds =
+      List.map
+        (function Atom (_, Symbol s) -> s | _ -> type_error l "defrecord fields must be symbols")
+        (Array.to_list fields)
+    in
+    let param_vec = Vector (l, Array.of_list (List.map (fun s -> Atom (l, Symbol s)) flds)) in
+    let map_lit =
+      Map (l, List.map (fun s -> (Atom (l, Keyword s), Atom (l, Symbol s))) flds)
+    in
+    let ctor =
+      List (l, [ Atom (l, Symbol "defn"); Atom (l, Symbol ("->" ^ name));
+                 param_vec; map_lit ])
+    in
+    let checks =
+      List.map (fun s -> List (l, [ Atom (l, Symbol "contains?"); Atom (l, Symbol "v"); Atom (l, Keyword s) ])) flds
+    in
+    let v_ty =
+      Meta (l, List (l, [ Atom (l, Symbol "map"); Atom (l, Symbol "keyword"); Atom (l, Symbol "any") ]),
+            Atom (l, Symbol "v"))
+    in
+    let pred_body =
+      List (l, Atom (l, Symbol "and") :: List (l, [ Atom (l, Symbol "map?"); Atom (l, Symbol "v") ]) :: checks)
+    in
+    let pred =
+      List (l, [ Atom (l, Symbol "defn"); Atom (l, Symbol (name ^ "?"));
+                 Vector (l, [| v_ty |]); pred_body ])
+    in
+    ctx.modl.defs <- ctx.modl.defs @ [ infer_defn ctx ctor; infer_defn ctx pred ]
   | List (_, Atom (_, Symbol "defmacro") :: _) ->
     (try Macro.register_defmacro ctx.modl.mname f
      with Macro.Macro_error (l, msg) -> type_error l msg)
@@ -732,6 +773,28 @@ and infer_call ctx l items : expr =
   | Atom (_, Symbol "->") :: x :: steps -> infer_expr ctx (desugar_thread l true x steps)
   | Atom (_, Symbol "->>") :: x :: steps -> infer_expr ctx (desugar_thread l false x steps)
   | Atom (_, Symbol "match") :: scrut :: clauses -> infer_match ctx l scrut clauses
+  | Atom (_, Symbol "loop") :: Vector (_, binds) :: body -> infer_loop ctx l binds body
+  | Atom (_, Symbol "recur") :: args ->
+    (match ctx.loops with
+     | (lb, argc) :: _ ->
+       if List.length args <> argc then
+         type_error l ("recur expects " ^ string_of_int argc ^ " args");
+       let es = List.map (infer_expr ctx) args in
+       let ret = fresh_var () in
+       unify l lb.bty (TFun (List.map (fun e -> e.ety) es, ret));
+       mk l ret (ECall (mk l lb.bty (ELocal lb), es))
+     | [] -> type_error l "recur outside loop")
+  | Atom (_, Symbol "case") :: scrut :: clauses ->
+    (* (case x lit v lit v default) — literals become match patterns *)
+    (match List.rev clauses with
+     | dflt :: pairs ->
+       let pairs = List.rev pairs in
+       if List.length pairs mod 2 <> 0 then type_error l "case: literal/body pairs expected";
+       let rec go = function
+         | k :: v :: t -> k :: v :: go t
+         | _ -> [] in
+       infer_match ctx l scrut (go pairs @ [ Atom (l, Symbol "_"); dflt ])
+     | [] -> type_error l "malformed case")
   | Atom (_, Symbol "Some") :: [ arg ] ->
     let e = infer_expr ctx arg in
     mk l (TOption e.ety) (EOpt (Some e))
@@ -968,6 +1031,37 @@ and infer_if_let ctx l b src body =
      _ or symbol           -> (bind &) body   (irrefutable)
      [p1 .. pn]            -> guard count=n, then per-elem destructure
      {map pattern}         -> irrefutable destructure *)
+and infer_loop ctx l binds body : expr =
+  (* (loop [b e ...] body) → let rec loop b.. = body in loop e..
+     the binder is in scope while body is inferred so recur resolves *)
+  let items = Array.to_list binds in
+  let rec pairs acc = function
+    | Atom (_, Symbol s) :: v :: t -> pairs ((s, v) :: acc) t
+    | [] -> List.rev acc
+    | _ -> type_error l "loop bindings must be [sym init ...]" in
+  let bs = pairs [] items in
+  let inits = List.map (fun (_, v) -> infer_expr ctx v) bs in
+  let loopb = fresh_binder "loop" in
+  let params = List.map (fun (s, _) -> let p = fresh_binder s in (s, p)) bs in
+  List.iter2 (fun (_, p) e -> p.bty <- e.ety) params inits;
+  let saved_l = ctx.loops in
+  ctx.loops <- (loopb, List.length params) :: ctx.loops;
+  let saved = ctx.env in
+  ctx.env <- List.map (fun (s, p) -> (s, { vscheme = mono p.bty; vkind = KLocal p; vvariadic = false })) params @ ctx.env;
+  loopb.bty <- TFun (List.map (fun (_, p) -> p.bty) params, fresh_var ());
+  let body_e = infer_exprs ctx body in
+  ctx.env <- saved; ctx.loops <- saved_l;
+  (match repr loopb.bty with TFun (_, r) -> unify l r body_e.ety | _ -> ());
+  let fn = mk l loopb.bty (EFun { fname = Some "loop"; params = List.map snd params; variadic = None; body = body_e; fescapes = false }) in
+  let call = mk l body_e.ety (ECall (mk l loopb.bty (ELocal loopb), inits)) in
+  mk l body_e.ety (ELet ([ (loopb, fn) ], call))
+
+and infer_exprs ctx es =
+  match List.map (infer_expr ctx) es with
+  | [] -> mk no_loc TUnit ENil
+  | [ e ] -> e
+  | es' -> mk (List.hd es').loc (List.hd (List.rev es')).ety (EDo es')
+
 and infer_match ctx l scrut clauses =
   let se = infer_expr ctx scrut in
   if List.length clauses mod 2 <> 0 then type_error l "match requires pattern/body pairs";
