@@ -30,9 +30,12 @@ Supported forms:
   (unquote-splicing) — read as data and evaluated by the macro expander.
 - **Comments**: `;` to end of line.
 
-Special forms (v0): `def`, `defn`, `defmacro`, `fn`, `let`, `if`, `do`,
-`quote`, `syntax-quote`, `ns`, `(:require …)`, `loop`/`recur`, `set!` /
-atom ops (`atom`, `deref`/`@`, `reset!`, `swap!`), and `throw`/`try`.
+Special forms (v2): `def`, `defn`, `defmacro`, `fn`, `let`, `if`, `do`,
+`quote`, `syntax-quote`, `ns`, `(:require …)`, `declare`, `defvariant`,
+`defrecord`, `match`, `case`, `extern-type`, `ffi`, and atom ops
+(`atom`, `deref`/`@`, `reset!`, `swap!`). There is deliberately no
+`loop`/`recur` (named `fn` self-recursion + native TCO covers it), no
+`set!` (atoms are the only mutable cell), and no `throw`/`try` (§9).
 
 ## 2. Implicit modules
 
