@@ -48,12 +48,12 @@ Dispatched in `infer_call` (src/infer.ml). `(a)` unless noted.
 | `if` (2- and 3-ary) | a | strict `bool` condition; `any` condition → `Lg_rt.dyn_truthy`. No truthiness coercion on static types — a deliberate divergence from Clojure, spec it. |
 | `do` | a | |
 | `let` | a | sequential (later bindings see earlier); binding forms may destructure (§1.2.1) |
-| `fn` | b | `(fn name [ps] …)` parses a name but never binds it — `(fn f [x] (f x))` fails `unresolved symbol f`. Bind it (self-recursion) or reject the name. |
+| `fn` | a | `(fn name [ps] …)` binds `name` to itself — emits `let rec` (self-recursion is the only recursion primitive). |
 | `when` | a | returns `any` — the body value or `nil` (dyn punning, same as 1-branch `if`). |
 | `and`, `or` | a | value-returning; mid args may be `bool`, `any` (dyn truthiness), or any concrete type (statically truthy); a non-`bool` last arg makes the result `any` (value\|false/true union). |
-| `cond` | b | pairs plus `:else`; a non-matching fallthrough yields `unit`, so a `cond` returning a value without `:else` is a type error. Spec. |
+| `cond` | a | fallthrough is `nil` (`any`), consistent with `if`/`when`. |
 | `->`, `->>` | a | special forms (not macros); insert first/last arg |
-| `match` | b | lowers to if/let chains; **no exhaustiveness check** — fallthrough is the `no-match` runtime trap. Spec the first-match order, and decide: keep runtime trap, warn on inexhaustive option patterns, or require `_`. |
+| `match` | a | first-match order; variant/option/bool scrutinees get W401/W402 inexhaustive warnings (`_`/binder silences); fallthrough keeps the `no-match` trap for open types. |
 | `(Some x)` / `None` | a | option constructor / pattern; bare `Some` unapplied is unresolved — spec |
 | `if-let`, `when-let` | a | binds the payload of an `option`; `when-let` else is `nil` (unit) |
 | `quote` | b | homogeneous quoted literals only — `'(1 "a")` is a compile error while `[1 "a"]` degrades to `any`. Align the two (recommended: both → `any`). |
