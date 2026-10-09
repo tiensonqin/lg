@@ -61,6 +61,10 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | EGlobal (m, n, _) -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n)
   | EBuiltin name -> buf_add b (emit_builtin_value name)
   | EFun fn ->
+    (match fn.Ast.fself with
+     | Some sb ->
+       buf_add b ("(let rec " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ " = ")
+     | None -> ());
     buf_add b "(fun ";
     let pesc =
       if !oxcaml then
@@ -80,7 +84,10 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | TFun (_, r) when is_any r && not (is_any fn.body.ety) ->
        buf_add b ("(Lg_rt." ^ dyn_ctor fn.body.ety ^ " ("); emit_expr b fn.body; buf_add b "))"
      | _ -> emit_expr b fn.body);
-    buf_add b ")"
+    buf_add b ")";
+    (match fn.Ast.fself with
+     | Some sb -> buf_add b (" in " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ ")")
+     | None -> ())
   | ECall (ce, args) -> emit_call b e.ety ce args
   | EIf (c, t, x) ->
     if is_any c.ety then buf_add b "(if (Lg_rt.dyn_truthy " else buf_add b "(if ";

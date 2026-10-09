@@ -219,9 +219,11 @@ All of docs/v2.md landed (detail lives there):
   `(local_ p)`; vanilla emit unchanged.
 - **`--strict`** — heterogeneous literals require `^any`-family
   annotation; every `any` in a program is one the author wrote.
-- **`loop`/`recur`, `case`, `defrecord` (map-backed ctor + predicate),
-  `map?`, `& rest` varargs, `cond`/`->`/`->>`** — covered by
-  test/loopcase.lg et al.
+- **Named `fn` self-recursion, `case`, `defrecord` (map-backed ctor +
+  predicate), `map?`, `& rest` varargs, `cond`/`->`/`->>`** — covered
+  by test/loopcase.lg et al. `(fn f [x] … (f …))` binds `f` to itself
+  and emits `let rec`; `loop`/`recur` was deliberately dropped (named
+  `fn` covers it; OCaml TCO is native).
 
 Deferred: nominal `TCon` record types (defrecord stays map-backed),
 OxCaml end-to-end build (no OxCaml switch on dev machines — emit is

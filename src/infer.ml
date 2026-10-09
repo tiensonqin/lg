@@ -29,7 +29,7 @@ type ctx = {
   mutable env : env;
   mutable implicits : (ty * (unit -> expr)) list;  (* implicit dicts, innermost first *)
   mimplicits : (string * ty) list ref;           (* exported implicit defs of this module *)
-  mutable loops : (binder * int) list;           (* enclosing loop binders (recur targets) *)
+
 }
 
 (* ns -> (name * dict type) entries exported via (:implicits true) *)
@@ -309,7 +309,7 @@ let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = []; iface_only = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; loops = [] } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref [] } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -564,6 +564,17 @@ and infer_fn ctx l name params body : expr =
     | Some s -> let b = fresh_binder s in b.bty <- TList (fresh_var ()); Some (s, b)
   in
   let saved = ctx.env and saved_imp = ctx.implicits in
+  (* named fn self-binding: `(fn f ...) → f` refers to the fn itself *)
+  let self_b =
+    match name with
+    | Some n ->
+      let fb = fresh_binder n in
+      let rest_ty = (match vbinder with Some (_, vb) -> [ vb.bty ] | None -> []) in
+      fb.bty <- TFun (List.map (fun (_, p) -> p.bty) binders @ rest_ty, fresh_var ());
+      ctx.env <- (n, { vscheme = mono fb.bty; vkind = KLocal fb; vvariadic = false }) :: ctx.env;
+      Some fb
+    | None -> None
+  in
   List.iter
     (fun (s, b) -> if s <> "" then ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env)
     binders;
@@ -592,8 +603,9 @@ and infer_fn ctx l name params body : expr =
     | Some (_, vb) -> TFun (ptys @ [ vb.bty ], body_e.ety)
     | None -> TFun (ptys, body_e.ety)
   in
+  (match self_b with Some fb -> unify l fb.bty fty | None -> ());
   mk l fty
-    (EFun { fname = name; params = List.map snd binders; variadic = (match vbinder with Some (_, b) -> Some b | None -> None); body = body_e; fescapes = false })
+    (EFun { fname = name; fself = self_b; params = List.map snd binders; variadic = (match vbinder with Some (_, b) -> Some b | None -> None); body = body_e; fescapes = false })
 
 and infer_expr ctx f : expr =
   match f with
@@ -773,17 +785,6 @@ and infer_call ctx l items : expr =
   | Atom (_, Symbol "->") :: x :: steps -> infer_expr ctx (desugar_thread l true x steps)
   | Atom (_, Symbol "->>") :: x :: steps -> infer_expr ctx (desugar_thread l false x steps)
   | Atom (_, Symbol "match") :: scrut :: clauses -> infer_match ctx l scrut clauses
-  | Atom (_, Symbol "loop") :: Vector (_, binds) :: body -> infer_loop ctx l binds body
-  | Atom (_, Symbol "recur") :: args ->
-    (match ctx.loops with
-     | (lb, argc) :: _ ->
-       if List.length args <> argc then
-         type_error l ("recur expects " ^ string_of_int argc ^ " args");
-       let es = List.map (infer_expr ctx) args in
-       let ret = fresh_var () in
-       unify l lb.bty (TFun (List.map (fun e -> e.ety) es, ret));
-       mk l ret (ECall (mk l lb.bty (ELocal lb), es))
-     | [] -> type_error l "recur outside loop")
   | Atom (_, Symbol "case") :: scrut :: clauses ->
     (* (case x lit v lit v default) — literals become match patterns *)
     (match List.rev clauses with
@@ -1031,37 +1032,6 @@ and infer_if_let ctx l b src body =
      _ or symbol           -> (bind &) body   (irrefutable)
      [p1 .. pn]            -> guard count=n, then per-elem destructure
      {map pattern}         -> irrefutable destructure *)
-and infer_loop ctx l binds body : expr =
-  (* (loop [b e ...] body) → let rec loop b.. = body in loop e..
-     the binder is in scope while body is inferred so recur resolves *)
-  let items = Array.to_list binds in
-  let rec pairs acc = function
-    | Atom (_, Symbol s) :: v :: t -> pairs ((s, v) :: acc) t
-    | [] -> List.rev acc
-    | _ -> type_error l "loop bindings must be [sym init ...]" in
-  let bs = pairs [] items in
-  let inits = List.map (fun (_, v) -> infer_expr ctx v) bs in
-  let loopb = fresh_binder "loop" in
-  let params = List.map (fun (s, _) -> let p = fresh_binder s in (s, p)) bs in
-  List.iter2 (fun (_, p) e -> p.bty <- e.ety) params inits;
-  let saved_l = ctx.loops in
-  ctx.loops <- (loopb, List.length params) :: ctx.loops;
-  let saved = ctx.env in
-  ctx.env <- List.map (fun (s, p) -> (s, { vscheme = mono p.bty; vkind = KLocal p; vvariadic = false })) params @ ctx.env;
-  loopb.bty <- TFun (List.map (fun (_, p) -> p.bty) params, fresh_var ());
-  let body_e = infer_exprs ctx body in
-  ctx.env <- saved; ctx.loops <- saved_l;
-  (match repr loopb.bty with TFun (_, r) -> unify l r body_e.ety | _ -> ());
-  let fn = mk l loopb.bty (EFun { fname = Some "loop"; params = List.map snd params; variadic = None; body = body_e; fescapes = false }) in
-  let call = mk l body_e.ety (ECall (mk l loopb.bty (ELocal loopb), inits)) in
-  mk l body_e.ety (ELet ([ (loopb, fn) ], call))
-
-and infer_exprs ctx es =
-  match List.map (infer_expr ctx) es with
-  | [] -> mk no_loc TUnit ENil
-  | [ e ] -> e
-  | es' -> mk (List.hd es').loc (List.hd (List.rev es')).ety (EDo es')
-
 and infer_match ctx l scrut clauses =
   let se = infer_expr ctx scrut in
   if List.length clauses mod 2 <> 0 then type_error l "match requires pattern/body pairs";

@@ -1,6 +1,6 @@
-;; loop/recur, case, defrecord, map?
-(println (loop [i 0 acc 0] (if (< i 10) (recur (+ i 1) (+ acc i)) acc)))
-(println (loop [x 10] (if (<= x 0) "done" (recur (- x 1)))))
+;; named-fn self-recursion, case, defrecord, map?
+(println (let [f (fn f [i acc] (if (< i 10) (f (+ i 1) (+ acc i)) acc))] (f 0 0)))
+(println (let [g (fn g [x] (if (<= x 0) "done" (g (- x 1))))] (g 10)))
 (println (case 2 1 "one" 2 "two" "other"))
 (println (case "x" "a" 1 "b" 2 0))
 (defrecord Point [x y])

@@ -19,6 +19,7 @@ type binder = {
 
 type func = {
   fname : string option;
+  fself : binder option;      (* named fn bound to itself for recursion *)
   params : binder list;
   variadic : binder option;  (* [& rest] *)
   body : expr;
