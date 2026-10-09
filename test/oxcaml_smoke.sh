@@ -4,13 +4,14 @@
 # binary and diff against the golden .out.
 #
 # Requires:
-#   - an `oxcaml` opam switch (OCaml 5.2.0+ox):
-#       opam switch create oxcaml ocaml-variants.5.2.0+ox \
-#         --repositories=oxcaml=git+https://github.com/oxcaml/opam-repository.git
+#   - an `oxcaml` opam switch (OCaml 5.4.0+ox):
+#       opam switch create oxcaml ocaml-variants.5.4.0+ox \
+#         --repos oxcaml=https://github.com/oxcaml/opam-repository.git,default
 #   - dune, ocamlfind, and the native deps built under it. clj-core +
-#     rrbvec need their melange/js_of_ocaml stanzas stripped for OxCaml
-#     (see docs/design.md §OxCaml) plus two locality-mode fixes in
-#     clj-core lib/{str,list}.ml.
+#     rrbvec need their `ox` branches (@ local borrow annotations +
+#     Seq.*_local variants, melange stanzas stripped):
+#       opam pin add -y rrbvec 'git+https://github.com/logseq/rrbvec.git#ox'
+#       opam pin add -y clj-core 'git+https://github.com/logseq/clj-core.git#ox'
 #
 # Run from the repo root: ./test/oxcaml_smoke.sh
 
