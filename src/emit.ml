@@ -13,6 +13,11 @@ let repr t = Typ.dimp t
 let uid_ctr = ref 0
 let fresh_uid () = incr uid_ctr; !uid_ctr
 
+(* when set, emit OxCaml mode annotations: stack_ on non-escaping
+   allocations, local_ on non-escaping params/bindings, unique_ on
+   once-used owned bindings *)
+let oxcaml = ref false
+
 let sanitize s = munge s
 
 let buf_add = Buffer.add_string
@@ -57,7 +62,18 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | EBuiltin name -> buf_add b (emit_builtin_value name)
   | EFun fn ->
     buf_add b "(fun ";
-    List.iter (fun p -> buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid ^ " ")) fn.params;
+    let pesc =
+      if !oxcaml then
+        (try List.map (fun p -> not (Modes.is_escaping_use p fn.Ast.body || Modes.occurs_in_result p fn.Ast.body)) fn.params
+         with _ -> List.map (fun _ -> false) fn.params)
+      else []
+    in
+    List.iteri
+      (fun i p ->
+        if i < List.length pesc && List.nth pesc i then buf_add b "(local_ ";
+        buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid);
+        if i < List.length pesc && List.nth pesc i then buf_add b ")" else buf_add b " ")
+      fn.params;
     (match fn.variadic with Some p -> buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid ^ " ") | None -> ());
     buf_add b "-> ";
     (match repr e.ety with
@@ -83,9 +99,19 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     List.iter
       (fun (bd, init) ->
         buf_add b "(let ";
-        (match bd.bmode with Local -> buf_add b "(* @local *) " | Owned -> buf_add b "(* @owned *) " | Shared -> ());
+        (match bd.bmode, !oxcaml with
+         | Ast.Local, false -> buf_add b "(* @local *) "
+         | Ast.Owned, false -> buf_add b "(* @owned *) "
+         | _ -> ());
         buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
+        (match bd.bmode, !oxcaml with
+         | Ast.Local, true -> buf_add b "(local_ "
+         | Ast.Owned, true -> buf_add b "(unique_ "
+         | _ -> ());
         emit_expr b init;
+        (match bd.bmode, !oxcaml with
+         | Ast.Local, true | Ast.Owned, true -> buf_add b ")"
+         | _ -> ());
         buf_add b " in ")
       pairs;
     emit_expr b body;
@@ -94,9 +120,11 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; emit_expr b a) es; buf_add b ")"
   | EVecLit es ->
     let el = match repr e.ety with TVec a -> a | _ -> TAny in
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
     buf_add b "(Clj_core.Vec.of_list [";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])"
+    buf_add b "])";
+    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
   | EListLit es ->
     let el = match repr e.ety with TList a -> a | _ -> TAny in
     buf_add b "[";
@@ -104,18 +132,22 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b "]"
   | EMapLit kes ->
     let kt, vt = match repr e.ety with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
     buf_add b "(Clj_core.Map.of_list [";
     List.iteri
       (fun i (k, v) ->
         if i > 0 then buf_add b "; ";
         buf_add b "("; emit_elem b kt k; buf_add b ", "; emit_elem b vt v; buf_add b ")")
       kes;
-    buf_add b "])"
+    buf_add b "])";
+    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
   | ESetLit es ->
     let el = match repr e.ety with TSet a -> a | _ -> TAny in
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
     buf_add b "(Clj_core.Set.of_list [";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])"
+    buf_add b "])";
+    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
   | EDynVec (se', bd, t, x) ->
     buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
     emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"

@@ -18,9 +18,12 @@ let () =
   let out = ref None in
   let cmd = ref None in
   let file = ref None in
+  let backend = ref "ocaml" in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
-    ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file") ]
+    ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
+    ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml" ], (fun s -> backend := s)),
+       "<ocaml|oxcaml> emit mode annotations for the OxCaml backend") ]
   in
   Arg.parse speclist
     (fun a ->
@@ -33,6 +36,7 @@ let () =
   | None -> Arg.usage speclist usage
   | Some file ->
     (try
+       if !backend = "oxcaml" then Lgc.Emit.oxcaml := true;
        let mods = Lgc.Compiler.compile_path ~roots:!roots file in
        (match !cmd with
         | Some "check" ->
@@ -65,6 +69,9 @@ let () =
           (match !cmd with
            | Some "build" ->
              let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
+             if !backend = "oxcaml" then
+               Printf.eprintf "lg: oxcaml backend — building %s requires an OxCaml-capable ocamlfind (flambda2 toolchain); emitting annotated source anyway
+%!" out_ml;
              let cmdline =
                Printf.sprintf "ocamlfind ocamlopt -package clj-core,rrbvec -linkpkg %s -o %s 2>/dev/null || ocamlfind ocamlc -package clj-core,rrbvec -linkpkg %s -o %s"
                  (Filename.quote out_ml) (Filename.quote exe)

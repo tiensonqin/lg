@@ -1,0 +1,4 @@
+;; --backend=oxcaml emits stack_/local_/unique_ annotations
+(let [v [1 2 3]] (println (conj v 4)))
+(def keep [1 2 3])
+(println (get keep 0))
