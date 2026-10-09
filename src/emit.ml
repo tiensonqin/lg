@@ -85,7 +85,11 @@ let ctor_qual q =
   then String.sub q (String.length pfx) (String.length q - String.length pfx)
   else q
 
-let rec emit_expr (b : Buffer.t) (e : expr) : unit =
+(* `~local` marks a position whose value need only be local — borrow
+   positions in calls, `let x @ local` inits, branch/scrutinee spines.
+   Combined with e.emode = Local it licenses `stack_` on direct allocation
+   sites and `Seq.*_local` callees on lazy producers. *)
+let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
   match e.desc with
   | EInt i -> buf_add b (if i < 0 then "(" ^ string_of_int i ^ ")" else string_of_int i)
   | EFloat x -> buf_add b (if x < 0. then "(" ^ ocaml_float x ^ ")" else ocaml_float x)
@@ -105,6 +109,8 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | None -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n))
   | EBuiltin name -> buf_add b (emit_builtin_value name e.ety)
   | EFun fn ->
+    let stk = local && e.emode = Ast.Local && !oxcaml && fn.Ast.fself = None in
+    if stk then buf_add b "(stack_ ";
     (match fn.Ast.fself with
      | Some sb ->
        buf_add b ("(let rec " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ " = ")
@@ -113,19 +119,22 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     let fn_may_local =
       match fn.Ast.fname with
       | Some n -> Hashtbl.mem topdef_names n && not (Hashtbl.mem Modes.value_ref_names n)
-      | None -> false
+      | None -> true (* anonymous lambdas get bmode=Local only at call sites *)
     in
     let pesc =
       if !oxcaml && fn_may_local then
-        (try List.mapi (fun i p -> is_prim_ty p.Ast.bty && Modes.local_uses_ok p ~self_b:fn.Ast.fself ~self_name:fn.Ast.fname ~pindex:i fn.Ast.body) fn.params
-         with _ -> List.map (fun _ -> false) fn.params)
+        List.map (fun p -> p.Ast.bmode = Ast.Local) fn.params
       else []
     in
+    (match fn.Ast.fname with
+     | Some n ->
+       Hashtbl.replace Modes.global_local_params (!cur_mod ^ "." ^ munge n) pesc
+     | None -> ());
     List.iteri
       (fun i p ->
-        if i < List.length pesc && List.nth pesc i then buf_add b "(local_ ";
+        if i < List.length pesc && List.nth pesc i then buf_add b "(";
         buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid);
-        if i < List.length pesc && List.nth pesc i then buf_add b ")" else buf_add b " ")
+        if i < List.length pesc && List.nth pesc i then buf_add b " @ local) " else buf_add b " ")
       fn.params;
     (match fn.variadic with Some p -> buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid ^ " ") | None -> ());
     if fn.params = [] && fn.variadic = None then buf_add b "() ";
@@ -134,10 +143,11 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | TFun (_, r) -> buf_add b (conv r fn.body.ety (arg_str fn.body))
      | _ -> emit_expr b fn.body);
     buf_add b ")";
+    if stk then buf_add b ")";
     (match fn.Ast.fself with
      | Some sb -> buf_add b (" in " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ ")")
      | None -> ())
-  | ECall (ce, args) -> emit_call b e.ety ce args
+  | ECall (ce, args) -> emit_call b e ce args
   | EIf (c, t, x) ->
     (* cond: bool passes through, `any` goes through dyn truthiness, and
        any other statically typed value is truthy but must still be
@@ -152,7 +162,9 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | TBool -> ()
      | _ -> buf_add b " in true)");
     buf_add b " then ";
-    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " else "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
+    buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t));
+    buf_add b " else ";
+    buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
   | EDo es ->
     (* every element but the last runs for effect only; the last is the
        do's value and must not be wrapped in ignore *)
@@ -160,7 +172,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     List.iteri (fun i a ->
         if i > 0 then buf_add b "; ";
         if i < List.length es - 1 then buf_add b "ignore (";
-        emit_expr b a;
+        emit_expr ~local:(local && i = List.length es - 1) b a;
         if i < List.length es - 1 then buf_add b ")")
       es;
     buf_add b ")"
@@ -177,67 +189,70 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
          | Ast.Local, false -> buf_add b "(* @local *) "
          | Ast.Owned, false -> buf_add b "(* @owned *) "
          | _ -> ());
-        buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
-        (* binding modes stay comments: `local_` on a let init only
-           compiles when every downstream consumer accepts locals — no
-           library declares that today — and `unique_` has no expression
-           syntax in OxCaml 5.2 *)
+        buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
+        let loc = !oxcaml && bd.bmode = Ast.Local in
+        if loc then buf_add b " @ local";
+        buf_add b " = ";
         (match bd.bmode, !oxcaml with
-         | Ast.Local, true -> buf_add b "(* local *) "
          | Ast.Owned, true -> buf_add b "(* unique *) "
          | _ -> ());
-        emit_expr b init;
+        emit_expr ~local:loc b init;
         buf_add b " in ")
       pairs;
-    emit_expr b body;
+    emit_expr ~local b body;
     List.iter (fun _ -> buf_add b ")") pairs
   | ETuple es ->
+    let stk = local && e.emode = Ast.Local && !oxcaml in
     let tys = match repr e.ety with TTuple ts -> ts | _ -> List.map (fun _ -> TAny) es in
-    buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; buf_add b (conv (List.nth tys i) a.ety (arg_str a))) es; buf_add b ")"
+    if stk then buf_add b "(stack_ ";
+    buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; buf_add b (conv (List.nth tys i) a.ety (arg_str ~local:(local && conv (List.nth tys i) a.ety "x" = "x") a))) es; buf_add b ")";
+    if stk then buf_add b ")"
   | EVecLit es ->
     let el = match repr e.ety with TVec a -> a | _ -> TAny in
-    (* stack_ cannot wrap the of_list call — it is not an allocation
-       site, and its list argument must be global anyway *)
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
-    buf_add b "(Clj_core.Vec.of_list [";
+    (* Vec.of_list borrows its list argument in the OxCaml clj-core build,
+       so the literal spine may always be stack-allocated there *)
+    buf_add b (if !oxcaml then "(Clj_core.Vec.of_list (stack_ [" else "(Clj_core.Vec.of_list [");
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])"
+    buf_add b (if !oxcaml then "]))" else "])");
   | EListLit es ->
     let el = match repr e.ety with TList a -> a | _ -> TAny in
+    let stk = local && e.emode = Ast.Local && !oxcaml && es <> [] in
+    if stk then buf_add b "(stack_ ";
     buf_add b "[";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "]"
+    buf_add b "]";
+    if stk then buf_add b ")"
   | EMapLit kes ->
     let kt, vt = match repr e.ety with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
-    buf_add b "(Clj_core.Map.of_list [";
+    buf_add b (if !oxcaml then "(Clj_core.Map.of_list (stack_ [" else "(Clj_core.Map.of_list [");
     List.iteri
       (fun i (k, v) ->
         if i > 0 then buf_add b "; ";
         buf_add b "("; emit_elem b kt k; buf_add b ", "; emit_elem b vt v; buf_add b ")")
       kes;
-    buf_add b "])"
+    buf_add b (if !oxcaml then "]))" else "])");
   | ESetLit es ->
     let el = match repr e.ety with TSet a -> a | _ -> TAny in
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
-    buf_add b "(Clj_core.Set.of_list [";
+    buf_add b (if !oxcaml then "(Clj_core.Set.of_list (stack_ [" else "(Clj_core.Set.of_list [");
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])"
+    buf_add b (if !oxcaml then "]))" else "])")
   | EDynVec (se', bd, t, x) ->
-    buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
-    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
+    buf_add b "(match "; emit_expr ~local:(se'.emode = Ast.Local) b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
+    buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
   | EDynMap (se', bd, t, x) ->
-    buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DMap " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
-    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
+    buf_add b "(match "; emit_expr ~local:(se'.emode = Ast.Local) b se'; buf_add b (" with Lg_rt.DMap " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
+    buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
   | EVariant (se', cname, bs, t, x) ->
     let cq = ctor_qual cname in
-    buf_add b "(match "; emit_expr b se';
+    buf_add b "(match "; emit_expr ~local:(se'.emode = Ast.Local) b se';
     (match bs with
      | [] -> buf_add b (" with " ^ cq ^ " -> ")
      | [ b1 ] -> buf_add b (" with " ^ cq ^ " " ^ sanitize b1.bname ^ "__" ^ string_of_int b1.bid ^ " -> ")
      | _ -> buf_add b (" with " ^ cq ^ " (" ^ String.concat ", " (List.map (fun bb -> sanitize bb.bname ^ "__" ^ string_of_int bb.bid) bs) ^ ") -> "));
-    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
-  | EOpt (Some e) -> buf_add b ("(Some " ^ arg_str e ^ ")")
+    buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
+  | EOpt (Some e) ->
+    let stk = local && e.emode = Ast.Local && !oxcaml in
+    buf_add b ((if stk then "(stack_ " else "") ^ "(Some " ^ arg_str ~local e ^ ")" ^ (if stk then ")" else ""))
   | EOpt None -> buf_add b "None"
   | EBox e -> buf_add b (box_deep e.ety (arg_str e))
   | EUnbox (e', t') -> buf_add b ("(" ^ unbox_fn t' ^ " " ^ arg_str e' ^ ")")
@@ -245,23 +260,34 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b ("(match " ^ arg_str e' ^ " with Some d -> Some (" ^ unbox_fn t' ^ " d) | None -> None)")
   | EMatchOpt (src, bd, t, x) ->
     if is_any src.ety then begin
-      buf_add b "(match "; emit_expr b src; buf_add b " with Lg_rt.DOpt (Some ";
+      buf_add b "(match "; emit_expr ~local:(src.emode = Ast.Local) b src; buf_add b " with Lg_rt.DOpt (Some ";
       buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-      buf_add b ") -> "; buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
+      buf_add b ") -> "; buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
     end else begin
-      buf_add b "(match "; emit_expr b src; buf_add b " with Some ";
+      buf_add b "(match "; emit_expr ~local:(src.emode = Ast.Local) b src; buf_add b " with Some ";
       buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-      buf_add b " -> "; buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | None -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
+      buf_add b " -> "; buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | None -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
     end
 
 and emit_args b es = List.iteri (fun i a -> if i > 0 then buf_add b "; "; emit_expr b a) es
-and arg_str e = let b = Buffer.create 16 in emit_expr b e; Buffer.contents b
-and emit_call b ret ce args =
+and arg_str ?local e =
+  let local = match local with Some l -> l | None -> e.emode = Ast.Local in
+  let b = Buffer.create 16 in
+  emit_expr ~local b e;
+  Buffer.contents b
+and emit_call b (e : expr) ce args =
+  let ret = e.ety in
+  let call_local = !oxcaml && e.emode = Ast.Local in
+  let arg_local a = a.emode = Ast.Local in
   match ce.desc with
-  | EBuiltin name -> emit_builtin_call b ret name args
+  | EBuiltin name -> emit_builtin_call ~call_local b ret name args
   | EGlobal (m, n, _) when Hashtbl.mem cur_v (m ^ "/" ^ n) ->
     let q, _ = Hashtbl.find cur_v (m ^ "/" ^ n) in
-    buf_add b ("(" ^ ctor_qual q ^ " " ^ (if List.length args = 1 then arg_str (List.hd args) else "(" ^ String.concat ", " (List.map arg_str args) ^ ")") ^ ")")
+    (* variant constructor: a direct allocation site — stack_ when the
+       result need only be local *)
+    if call_local then buf_add b "(stack_ ";
+    buf_add b ("(" ^ ctor_qual q ^ " " ^ (if List.length args = 1 then arg_str (List.hd args) else "(" ^ String.concat ", " (List.map (fun a -> arg_str ~local:(arg_local a) a) args) ^ ")") ^ ")");
+    if call_local then buf_add b ")"
   | _ ->
     (* box args into dyn when the callee's formal param is `any`. For an
        EGlobal the conv must follow the callee's *stored* signature — its
@@ -284,7 +310,9 @@ and emit_call b ret ce args =
          (fun i a ->
            buf_add c " ";
            let p = if i < List.length pts then List.nth pts i else TAny in
-           buf_add c (conv p a.ety (arg_str a)))
+           (* a converted (boxed/unboxed) arg cannot be stack_-allocated *)
+           let ident = conv p a.ety "x" = "x" in
+           buf_add c (conv p a.ety (arg_str ~local:(ident && arg_local a) a)))
          args;
        buf_add c ")";
        buf_add b (conv ret sret (Buffer.contents c))
@@ -297,10 +325,10 @@ and emit_call b ret ce args =
          (fun i a ->
            buf_add b " ";
            let p = if i < List.length pts then List.nth pts i else TAny in
-           buf_add b (conv p a.ety (arg_str a)))
+           let ident = conv p a.ety "x" = "x" in
+           buf_add b (conv p a.ety (arg_str ~local:(ident && arg_local a) a)))
          args;
        buf_add b ")");
-  ignore ret
 
 (* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
 (* ---- printers for str/println/pr-str ---- *)
@@ -517,7 +545,9 @@ and conv ty src s =
 
 (* emit an element expr, converting it to the joined element type —
    dyn boxing plus coll<->seq realization *)
-and emit_elem b elem_ty e = buf_add b (conv elem_ty e.ety (arg_str e))
+and emit_elem b elem_ty e =
+  let ident = conv elem_ty e.ety "x" = "x" in
+  buf_add b (conv elem_ty e.ety (arg_str ~local:(ident && e.emode = Ast.Local) e))
 
 (* coll dispatch by static type *)
 and coll_kind t =
@@ -538,27 +568,33 @@ and as_list e =
      | `Seq -> "(Clj_core.Seq.to_list " ^ a ^ ")"
      | `List -> a)
 
-(* the collection arg as a lazy OCaml seq *)
+(* the collection arg as a lazy OCaml seq — when the seq need only be
+   local (the arg's emode), the OxCaml `of_*_local` variants take and
+   return `t @ local` *)
 and as_seq e =
   let a = arg_str e in
+  let loc = !oxcaml && e.emode = Ast.Local in
   match repr e.ety with
   | TAny -> "(Lg_rt.dyn_to_seq " ^ a ^ ")"
   | TOption u ->
     let inner =
       match coll_kind u with
-      | `Vec -> "Clj_core.Seq.of_vec" | `Set -> "Clj_core.Seq.of_set"
-      | `Map -> "Clj_core.Seq.of_map" | `Str -> "Clj_core.Seq.of_string"
-      | `List -> "Clj_core.Seq.of_list" | `Seq -> "(fun s -> s)"
+      | `Vec -> if loc then "Clj_core.Seq.of_vec_local" else "Clj_core.Seq.of_vec"
+      | `Set -> if loc then "Clj_core.Seq.of_set_local" else "Clj_core.Seq.of_set"
+      | `Map -> if loc then "Clj_core.Seq.of_map_local" else "Clj_core.Seq.of_map"
+      | `Str -> if loc then "Clj_core.Seq.of_string_local" else "Clj_core.Seq.of_string"
+      | `List -> if loc then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list"
+      | `Seq -> "(fun s -> s)"
     in
     "(match " ^ a ^ " with None -> Clj_core.Seq.empty | Some s -> " ^ inner ^ " s)"
   | _ ->
     (match coll_kind e.ety with
-     | `Vec -> "(Clj_core.Seq.of_vec " ^ a ^ ")"
-     | `Set -> "(Clj_core.Seq.of_set " ^ a ^ ")"
-     | `Map -> "(Clj_core.Seq.of_map " ^ a ^ ")"
-     | `Str -> "(Clj_core.Seq.of_string " ^ a ^ ")"
+     | `Vec -> "(Clj_core.Seq.of_vec" ^ (if loc then "_local " else " ") ^ a ^ ")"
+     | `Set -> "(Clj_core.Seq.of_set" ^ (if loc then "_local " else " ") ^ a ^ ")"
+     | `Map -> "(Clj_core.Seq.of_map" ^ (if loc then "_local " else " ") ^ a ^ ")"
+     | `Str -> "(Clj_core.Seq.of_string" ^ (if loc then "_local " else " ") ^ a ^ ")"
      | `Seq -> a
-     | `List -> "(Clj_core.Seq.of_list " ^ a ^ ")")
+     | `List -> "(Clj_core.Seq.of_list" ^ (if loc then "_local " else " ") ^ a ^ ")")
 
 (* ---- FBIP: unique-owner update chains -> mutable builder + one freeze ----
    A spine of conj/assoc/into/pop/dissoc/disj/update calls rooted at a fresh
@@ -740,10 +776,20 @@ and emit_sbuilder b root el ops =
   List.iter (emit_sop b bn el) ops;
   buf_add b ("Lg_rt.sb_freeze " ^ bn ^ ")")
 
-and emit_builtin_call b ret name args =
+and emit_builtin_call ?(call_local = false) b ret name args =
   if not (emit_owned_chain b name args) then begin
   let a n = arg_str (List.nth args n) in
   let t n = (List.nth args n).ety in
+  let call_local = call_local && !oxcaml in
+  (* lazy seq producers pick `Seq.<name>_local` when the result need only
+     be local — its params are `@ local` so args may be local too *)
+  let sfn n =
+    if call_local then
+      (match Hashtbl.find_opt Modes.local_seq_fns n with
+       | Some v -> v
+       | None -> "Clj_core.Seq." ^ munge n)
+    else "Clj_core.Seq." ^ munge n
+  in
   let coll = if args = [] then `List else coll_kind (t 0) in
   (match name with
    | "+" | "-" | "*" | "/" | "+." | "-." | "*." | "/." | "neg" | "neg." ->
@@ -832,7 +878,7 @@ and emit_builtin_call b ret name args =
    | "cons" ->
      let el = match repr ret with TSeq e -> e | _ -> TAny in
      let hd = conv el (t 0) (a 0) in
-     buf_add b ("(Clj_core.Seq.cons " ^ hd ^ " " ^ seq_elem_conv el (t 1) (as_seq (List.nth args 1)) ^ ")")
+     buf_add b ("(" ^ sfn "cons" ^ " " ^ hd ^ " " ^ seq_elem_conv ~local:call_local el (t 1) (as_seq (List.nth args 1)) ^ ")")
    | "list" -> buf_add b ("[" ^ String.concat "; " (List.map arg_str args) ^ "]")
    | "vector" -> buf_add b ("(Clj_core.Vec.of_list [" ^ String.concat "; " (List.map arg_str args) ^ "])")
    | "hash-map" ->
@@ -848,8 +894,8 @@ and emit_builtin_call b ret name args =
      let el = match repr ret with TSet e -> e | _ -> TUnit in
      buf_add b ("(Clj_core.Set.of_list [" ^ String.concat "; " (List.map (fun e -> if is_any el && not (is_any e.ety) then box_of e else arg_str e) args) ^ "])")
    | "first" -> buf_add b ("(Clj_core.Seq.first " ^ as_seq (List.nth args 0) ^ ")")
-   | "next" -> buf_add b ("(Clj_core.Seq.next " ^ as_seq (List.nth args 0) ^ ")")
-   | "rest" -> buf_add b ("(Clj_core.Seq.rest " ^ as_seq (List.nth args 0) ^ ")")
+   | "next" -> buf_add b ("(" ^ sfn "next" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "rest" -> buf_add b ("(" ^ sfn "rest" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "seq" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if Clj_core.Seq.is_empty s then None else Some s)")
    | "exit" -> buf_add b ("(Stdlib.exit " ^ conv TInt (t 0) (a 0) ^ ")")
    (* io / system builtins: native emits inline channel/Sys/Unix code;
@@ -1139,9 +1185,9 @@ and emit_builtin_call b ret name args =
               | EBuiltin ("println" | "print"), (TSeq el | TVec el | TList el | TSet el) -> "(fun x -> print_endline (" ^ gen_printer el ^ " x))"
               | EBuiltin ("str" | "pr-str"), (TSeq el | TVec el | TList el | TSet el) -> "(fun x -> (" ^ gen_printer el ^ " x))"
               | _ -> a 0) in
-     buf_add b ("(Clj_core.Seq.map " ^ f ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "filter" -> buf_add b ("(Clj_core.Seq.filter " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "remove" -> buf_add b ("(Clj_core.Seq.remove " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+     buf_add b ("(" ^ sfn "map" ^ " " ^ f ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "filter" -> buf_add b ("(" ^ sfn "filter" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "remove" -> buf_add b ("(" ^ sfn "remove" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "reduce" ->
      buf_add b ("(match " ^ a 2 ^ " with "
                 ^ (match coll_kind (t 2) with
@@ -1202,7 +1248,7 @@ and emit_builtin_call b ret name args =
         buf_add b ("(" ^ items_for de ^ " @ " ^ a 0 ^ ")")
       | `Seq ->
         (match repr (t 0) with
-        | TSeq de -> buf_add b ("(Clj_core.Seq.fold_left (fun acc x -> Clj_core.Seq.cons x acc) " ^ a 0 ^ " " ^ seq_elem_conv de (t 1) (as_seq (List.nth args 1)) ^ ")")
+        | TSeq de -> buf_add b ("(Clj_core.Seq.fold_left (fun acc x -> Clj_core.Seq.cons x acc) " ^ a 0 ^ " " ^ seq_elem_conv ~local:call_local de (t 1) (as_seq (List.nth args 1)) ^ ")")
         | _ -> buf_add b ("(Clj_core.Seq.fold_left (fun acc x -> Clj_core.Seq.cons x acc) " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
       | `Str -> buf_add b "(failwith \"into string\")")
    | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
@@ -1256,42 +1302,42 @@ and emit_builtin_call b ret name args =
       | "neg?" -> buf_add b ("(" ^ unb ^ " < 0)")
       | "even?" -> buf_add b ("(" ^ unb ^ " mod 2 = 0)")
       | _ -> buf_add b ("(" ^ unb ^ " mod 2 <> 0)"))
-   | "take" -> buf_add b ("(Clj_core.Seq.take " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "drop" -> buf_add b ("(Clj_core.Seq.drop " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "take-while" -> buf_add b ("(Clj_core.Seq.take_while " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "drop-while" -> buf_add b ("(Clj_core.Seq.drop_while " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "take" -> buf_add b ("(" ^ sfn "take" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "drop" -> buf_add b ("(" ^ sfn "drop" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "take-while" -> buf_add b ("(" ^ sfn "take-while" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "drop-while" -> buf_add b ("(" ^ sfn "drop-while" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "range" ->
      (match List.length args with
-      | 0 -> buf_add b "(Clj_core.Seq.ints ())"
-      | 1 -> buf_add b ("(Clj_core.Seq.range " ^ a 0 ^ ")")
-      | 2 -> buf_add b ("(Clj_core.Seq.range ~start:" ^ a 0 ^ " " ^ a 1 ^ ")")
-      | _ -> buf_add b ("(Clj_core.Seq.range ~start:" ^ a 0 ^ " ~step:" ^ a 2 ^ " " ^ a 1 ^ ")"))
-   | "iterate" -> buf_add b ("(Clj_core.Seq.iterate " ^ a 0 ^ " " ^ a 1 ^ ")")
+      | 0 -> buf_add b ("(" ^ sfn "ints" ^ " ())")
+      | 1 -> buf_add b ("(" ^ sfn "range" ^ " " ^ a 0 ^ ")")
+      | 2 -> buf_add b ("(" ^ sfn "range" ^ " ~start:" ^ a 0 ^ " " ^ a 1 ^ ")")
+      | _ -> buf_add b ("(" ^ sfn "range" ^ " ~start:" ^ a 0 ^ " ~step:" ^ a 2 ^ " " ^ a 1 ^ ")"))
+   | "iterate" -> buf_add b ("(" ^ sfn "iterate" ^ " " ^ a 0 ^ " " ^ a 1 ^ ")")
    | "repeat" ->
-     if List.length args = 1 then buf_add b ("(Clj_core.Seq.repeat " ^ a 0 ^ ")")
-     else buf_add b ("(Clj_core.Seq.take " ^ a 0 ^ " (Clj_core.Seq.repeat " ^ a 1 ^ "))")
+     if List.length args = 1 then buf_add b ("(" ^ sfn "repeat" ^ " " ^ a 0 ^ ")")
+     else buf_add b ("(" ^ sfn "take" ^ " " ^ a 0 ^ " (" ^ sfn "repeat" ^ " " ^ a 1 ^ "))")
    | "repeatedly" ->
-     if List.length args = 1 then buf_add b ("(Clj_core.Seq.repeatedly (fun () -> " ^ a 0 ^ " ())")
-     else buf_add b ("(Clj_core.Seq.take " ^ a 0 ^ " (Clj_core.Seq.repeatedly (fun () -> " ^ a 1 ^ " ())))")
-   | "cycle" -> buf_add b ("(Clj_core.Seq.cycle " ^ as_seq (List.nth args 0) ^ ")")
-   | "interleave" -> buf_add b ("(Clj_core.Seq.interleave " ^ as_seq (List.nth args 0) ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "map-indexed" -> buf_add b ("(Clj_core.Seq.mapi " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "keep" | "filter-map" -> buf_add b ("(Clj_core.Seq.filter_map " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "take-nth" -> buf_add b ("(Clj_core.Seq.take_nth " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "partition" -> buf_add b ("(Clj_core.Seq.partition " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "partition-all" -> buf_add b ("(Clj_core.Seq.partition_all " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "nthrest" -> buf_add b ("(Clj_core.Seq.nthrest " ^ as_seq (List.nth args 0) ^ " " ^ a 1 ^ ")")
-   | "drop-last" -> buf_add b ("(Clj_core.Seq.drop_last " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "take-last" -> buf_add b ("(Clj_core.Seq.of_list (Clj_core.Seq.take_last " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ "))")
+     if List.length args = 1 then buf_add b ("(" ^ sfn "repeatedly" ^ " (fun () -> " ^ a 0 ^ " ())")
+     else buf_add b ("(" ^ sfn "take" ^ " " ^ a 0 ^ " (" ^ sfn "repeatedly" ^ " (fun () -> " ^ a 1 ^ " ())))")
+   | "cycle" -> buf_add b ("(" ^ sfn "cycle" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "interleave" -> buf_add b ("(" ^ sfn "interleave" ^ " " ^ as_seq (List.nth args 0) ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "map-indexed" -> buf_add b ("(" ^ sfn "map-indexed" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "keep" | "filter-map" -> buf_add b ("(" ^ sfn "filter-map" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "take-nth" -> buf_add b ("(" ^ sfn "take-nth" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "partition" -> buf_add b ("(" ^ sfn "partition" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "partition-all" -> buf_add b ("(" ^ sfn "partition-all" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "nthrest" -> buf_add b ("(" ^ sfn "nthrest" ^ " " ^ as_seq (List.nth args 0) ^ " " ^ a 1 ^ ")")
+   | "drop-last" -> buf_add b ("(" ^ sfn "drop-last" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "take-last" -> buf_add b ("(" ^ (if call_local then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list") ^ " (Clj_core.Seq.take_last " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ "))")
    | "split-at" -> buf_add b ("(let (x, y) = (Clj_core.Seq.split_at " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ") in (Clj_core.Vec.of_list [x; y]))")
    | "split-with" -> buf_add b ("(let (x, y) = (Clj_core.Seq.split_with " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ") in (Clj_core.Vec.of_list [x; y]))")
-   | "reductions" -> buf_add b ("(Clj_core.Seq.reductions " ^ a 0 ^ " " ^ a 1 ^ " " ^ as_seq (List.nth args 2) ^ ")")
-   | "dedupe" -> buf_add b ("(Clj_core.Seq.dedupe " ^ as_seq (List.nth args 0) ^ ")")
+   | "reductions" -> buf_add b ("(" ^ sfn "reductions" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ as_seq (List.nth args 2) ^ ")")
+   | "dedupe" -> buf_add b ("(" ^ sfn "dedupe" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "not-empty" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if Clj_core.Seq.is_empty s then None else Some s)")
-   | "lazy-seq" -> buf_add b ("(Clj_core.Seq.lazy_seq (fun () -> " ^ as_seq (List.nth args 0) ^ "))")
+   | "lazy-seq" -> buf_add b ("(" ^ sfn "lazy-seq" ^ " (fun () -> " ^ as_seq (List.nth args 0) ^ "))")
    | "doall" -> buf_add b ("(Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ")")
    | "dorun" -> buf_add b ("(Clj_core.Seq.iter (fun _ -> ()) " ^ as_seq (List.nth args 0) ^ ")")
-   | "concat" -> buf_add b ("(Clj_core.Seq.concat (Clj_core.Seq.of_list [" ^ String.concat "; " (List.map as_seq args) ^ "]))")
+   | "concat" -> buf_add b ("(" ^ sfn "concat" ^ " (" ^ (if call_local then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list") ^ " [" ^ String.concat "; " (List.map as_seq args) ^ "]))")
    | "apply" -> buf_add b (emit_apply args)
    | "atom" ->
      if is_any ret then buf_add b ("(Clj_core.Atom.atom " ^ box_of (List.nth args 0) ^ ")")
@@ -1359,16 +1405,19 @@ and emit_builtin_call b ret name args =
        match repr (t 0) with
        | TFun (_, r) ->
          (match repr r with
-          | TSeq _ -> "(fun s -> s)" | TVec _ -> "Clj_core.Seq.of_vec"
-          | TSet _ -> "Clj_core.Seq.of_set" | TMap _ -> "Clj_core.Seq.of_map"
-          | TString -> "Clj_core.Seq.of_string" | TAny -> "Lg_rt.dyn_to_seq"
-          | _ -> "Clj_core.Seq.of_list")
-       | _ -> "Clj_core.Seq.of_list"
+          | TSeq _ -> "(fun s -> s)"
+          | TVec _ -> if call_local then "Clj_core.Seq.of_vec_local" else "Clj_core.Seq.of_vec"
+          | TSet _ -> if call_local then "Clj_core.Seq.of_set_local" else "Clj_core.Seq.of_set"
+          | TMap _ -> if call_local then "Clj_core.Seq.of_map_local" else "Clj_core.Seq.of_map"
+          | TString -> if call_local then "Clj_core.Seq.of_string_local" else "Clj_core.Seq.of_string"
+          | TAny -> "Lg_rt.dyn_to_seq"
+          | _ -> if call_local then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list")
+       | _ -> if call_local then "Clj_core.Seq.of_list_local" else "Clj_core.Seq.of_list"
      in
-     buf_add b ("(Clj_core.Seq.mapcat (fun x -> " ^ coerce ^ " (" ^ a 0 ^ " x)) " ^ as_seq (List.nth args 1) ^ ")")
-   | "interpose" -> buf_add b ("(Clj_core.Seq.interpose " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+     buf_add b ("(" ^ sfn "mapcat" ^ " (fun x -> " ^ coerce ^ " (" ^ a 0 ^ " x)) " ^ as_seq (List.nth args 1) ^ ")")
+   | "interpose" -> buf_add b ("(" ^ sfn "interpose" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "reverse" -> buf_add b ("(Clj_core.Seq.reverse " ^ as_seq (List.nth args 0) ^ ")")
-   | "distinct" -> buf_add b ("(Clj_core.Seq.distinct " ^ as_seq (List.nth args 0) ^ ")")
+   | "distinct" -> buf_add b ("(" ^ sfn "distinct" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "second" -> buf_add b ("(Clj_core.Seq.second " ^ as_seq (List.nth args 0) ^ ")")
    | "last" -> buf_add b ("(match List.rev (Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ") with [] -> None | x :: _ -> Some x)")
    | "butlast" -> buf_add b ("(match List.rev (Clj_core.Seq.to_list " ^ as_seq (List.nth args 0) ^ ") with [] -> Clj_core.Seq.empty | _ :: t -> Clj_core.Seq.of_list (List.rev t))")
@@ -1404,14 +1453,14 @@ and emit_builtin_call b ret name args =
 
   end
 
-and seq_elem_conv dst_el src_ty es =
+and seq_elem_conv ?(local = false) dst_el src_ty es =
   let src_el = match repr src_ty with
     | TVec x | TList x | TSeq x | TSet x -> x | TMap (k, v) -> TTuple [ k; v ]
     | TString -> TChar | _ -> TAny in
   if is_any dst_el && not (is_any src_el) then
-    "(Clj_core.Seq.map (fun x -> " ^ box_deep src_el "x" ^ ") " ^ es ^ ")"
+    "(" ^ (if local then "Clj_core.Seq.map_local" else "Clj_core.Seq.map") ^ " (fun x -> " ^ box_deep src_el "x" ^ ") " ^ es ^ ")"
   else if (not (is_any dst_el)) && is_any src_el then
-    "(Clj_core.Seq.map " ^ unbox_fn dst_el ^ " " ^ es ^ ")"
+    "(" ^ (if local then "Clj_core.Seq.map_local" else "Clj_core.Seq.map") ^ " " ^ unbox_fn dst_el ^ " " ^ es ^ ")"
   else es
 
 and emit_apply args =
