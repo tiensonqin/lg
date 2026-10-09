@@ -1,0 +1,19 @@
+(ns csvcli)
+
+;; tiny CSV reader: file -> seq of maps keyed by the header row
+(defn parse-csv [text]
+  (let [ls (filter (fn [l] (not (blank? l))) (split text "\n"))]
+    (match ls
+      [] []
+      _ (let [header (split (nth ls 0) ",")
+              rows (rest ls)]
+          (mapv (fn [r] (into {} (zipmap header (split r ",")))) rows)))))
+
+;; column lookup through the parsed maps + typed nth defaults
+(defn ages [rows]
+  (mapv (fn [r] (get r "age" "?")) rows))
+
+(let [rows (parse-csv "name,age\nann,7\nbob,9\n")]
+  (println rows)
+  (println (ages rows))
+  (println (mapv (fn [r] (get r "name" "?")) rows)))

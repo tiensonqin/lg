@@ -1,0 +1,38 @@
+(ns json)
+
+;; a real ADT: JSON values with payloads, recursive encode
+(defvariant json
+  (jobj [m (map string json)])
+  (jarr [xs (vec json)])
+  (jstr [s string])
+  (jnum [n float])
+  (jbool [b bool])
+  jnull)
+
+;; quote a string (no escape handling — values here have none)
+(defn quote-s [s] (str "\"" s "\""))
+
+(defn encode [j]
+  (match j
+    jnull "null"
+    (jbool b) (match b true "true" false "false")
+    (jnum n) (str n)
+    (jstr s) (quote-s s)
+    (jarr xs) (str "[" (join ", " (mapv encode xs)) "]")
+    (jobj m)
+      (str "{"
+           (join ", "
+                 (mapv (fn [e] (str (quote-s (nth e 0)) ": " (encode (nth e 1))))
+                       (into [] m)))
+           "}")))
+
+;; build a small document programmatically
+(def doc
+  (jobj {"name" (jstr "lg")
+         "version" (jnum 2.0)
+         "tags" (jarr [(jstr "lang") (jstr "ocaml")])
+         "stable" (jbool true)
+         "note" jnull}))
+
+(println (encode doc))
+(println (encode (jarr [(jnum 1.0) (jstr "x") jnull])))

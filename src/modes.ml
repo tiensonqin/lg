@@ -317,12 +317,6 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
              | None -> true)
           | _ -> true)
      in
-     (match ce.desc with
-      | EBuiltin n when List.mem n [ "count"; "map"; "dorun" ] ->
-        Printf.eprintf "DBGcall %s escs=%s arg_esc0=%b rr=%b\n" n
-          (match escs with None -> "none" | Some _ -> "some")
-          (arg_esc 0) region_ret
-      | _ -> ());
      analyze_expr ~region_ret:true ce;
      List.iteri (fun i a -> analyze_expr ~region_ret:(arg_esc i) a) args;
      (* an immediately-applied lambda's params may be annotated local_:

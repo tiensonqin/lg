@@ -1318,17 +1318,22 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
     let el = fresh_var () in
     unify vl rhs.ety (TVec el);
     let tmp_e = mk vl rhs.ety (ELocal tmp) in
-    (tmp, rhs)
-    :: List.concat
-         (List.mapi
-            (fun i p ->
-              let ith =
-                mk vl el
-                  (ECall (mk vl (TFun ([ TVec el; TInt ], el)) (EBuiltin "nth"),
-                          [ tmp_e; mk vl TInt (EInt i) ]))
-              in
-              bind_pattern ctx vl p ith)
-            (Array.to_list items))
+    (* an empty [] pattern binds nothing — skip the scrutinee temp or the
+       emitted `let` trips warning 26 *)
+    (match Array.to_list items with
+     | [] -> []
+     | pats ->
+       (tmp, rhs)
+       :: List.concat
+            (List.mapi
+               (fun i p ->
+                 let ith =
+                   mk vl el
+                     (ECall (mk vl (TFun ([ TVec el; TInt ], el)) (EBuiltin "nth"),
+                             [ tmp_e; mk vl TInt (EInt i) ]))
+                 in
+                 bind_pattern ctx vl p ith)
+               pats))
   | Map (ml, kvs) ->
     let rhs =
       match repr rhs.ety with
