@@ -37,8 +37,10 @@ push a `v*` tag and CI builds ubuntu+macos tarballs.
 ## Tools
 
 `lg fmt file.lg` rewrites a file to canonical layout (flat under 90 cols,
-else vertical). Note: comments are not preserved yet — the reader drops
-them before formatting.
+else vertical) without losing source text: `;` comments are re-attached
+by position (leading / same-line trailing / inside a form's span),
+blank lines between top-level forms are kept, `#_` discarded forms are
+re-printed, and `.cljc` `#?`/`#?@` blocks keep every branch.
 
 `lg repl` — accumulative session REPL: `def`/`defn`/… forms persist
 across inputs; expressions print their value. `:quit` exits.

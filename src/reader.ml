@@ -26,9 +26,10 @@ let match_target t k =
   | TNative, ("native" | "default") | TJs, ("js" | "default") -> true
   | _ -> false
 
-type t = { src : string; file : string; mutable pos : int; mutable line : int; mutable col : int; target : target }
+type t = { src : string; file : string; mutable pos : int; mutable line : int; mutable col : int; target : target; preserve : bool }
 
-let make ~file ?(target = TNative) src = { src; file; pos = 0; line = 1; col = 1; target }
+let make ~file ?(target = TNative) ?(preserve = false) src =
+  { src; file; pos = 0; line = 1; col = 1; target; preserve }
 
 let eof r = r.pos >= String.length r.src
 let peek r = if eof r then '\000' else r.src.[r.pos]
@@ -132,8 +133,11 @@ let rec read_form r : form =
       Set (l, read_seq r '}'))
     else if peek2 r = '_' then (
       ignore (next r); ignore (next r);
-      ignore (read_form r);
-      read_form r)
+      let d = read_form r in
+      (* preserve mode (fmt): keep the discarded form as a pseudo-node so
+         the formatter can re-print it instead of dropping it *)
+      if r.preserve then List (l, [ Atom (l, Symbol "#_"); d ])
+      else read_form r)
     else if peek2 r = '?' then (
       (* #? / #?@ — .cljc reader conditional: pick the branch for the
          current target; scalar position yields the branch or nil *)
@@ -188,14 +192,22 @@ and read_cond r l : form list =
     | _ :: tl -> sel tl
   in
   match sel ps with
-  | None -> []
-  | Some f ->
-    if splice then
-      (match f with
-       | List (_, xs) -> xs
-       | Vector (_, xs) -> Array.to_list xs
-       | _ -> read_error l "#?@ branch must be a list or vector")
-    else [ f ]
+  | result ->
+    if r.preserve then
+      (* keep every branch as a pseudo-node: (#? kw f kw f ...) or #?@ *)
+      let tag = Atom (l, Symbol (if splice then "#?@" else "#?")) in
+      let flat_ps = List.concat_map (fun (k, f) -> [ k; f ]) ps in
+      [ List (l, tag :: flat_ps) ]
+    else
+      (match result with
+       | None -> []
+       | Some f ->
+         if splice then
+           (match f with
+            | List (_, xs) -> xs
+            | Vector (_, xs) -> Array.to_list xs
+            | _ -> read_error l "#?@ branch must be a list or vector")
+         else [ f ])
 
 and read_seq r close : form list =
   skip_ws r;
@@ -208,8 +220,8 @@ and read_seq r close : form list =
     in
     fs @ read_seq r close
 
-let read_file ~file ?(target = TNative) src : form list =
-  let r = make ~file ~target src in
+let read_file ~file ?(target = TNative) ?(preserve = false) src : form list =
+  let r = make ~file ~target ~preserve src in
   let rec go acc =
     skip_ws r;
     if eof r then List.rev acc

@@ -338,8 +338,13 @@ there is no `_` or catch-all binder.
 ## 15. Tooling (M6)
 
 `src/fmt.ml` canonicalizes forms: flat under 90 columns, else vertical
-layout. Comments are dropped by the reader (known gap — fmt is not
-comment-preserving yet). `lg repl` keeps a session buffer of def forms
+layout. Fidelity is preserved: the reader's `~preserve` mode (fmt only)
+reifies `#_`/`#?`/`#?@` as pseudo-lists headed by `"#_"`/`"#?"`/`"#?@"`
+symbols so discarded forms and all reader-conditional branches survive;
+`;` comments are collected by a string/char-aware scanner and re-attached
+to forms by source line (leading, first-line trailing, last-line
+trailing, or injected inside a multi-line span at the last line's
+indent); blank lines between top-level forms are kept. `lg repl` keeps a session buffer of def forms
 and evaluates expressions by appending `(println <expr>)` and rebuilding
 — ~1s per line, real compiled semantics. `src/lsp.ml` is a stdio
 JSON-RPC server with a hand-rolled field extractor (no JSON dep):
