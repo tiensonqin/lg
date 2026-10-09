@@ -222,7 +222,7 @@ let () =
   reg "constantly" (fun () -> let a = v () and b = v () in f [ a ] (f [ b ] a));
   (* lists *)
   reg "list" (fun () -> let a = v () in f [ a ] (TList a));
-  reg "cons" (fun () -> let a = v () in f [ a; TList a ] (TList a));
+  reg "cons" (fun () -> let a = v () in f [ a; TSeq a ] (TSeq a));
   reg "concat" (fun () -> let a = v () in f [ TList a; TList a ] (TList a));
   reg "empty?" (fun () -> f [ v () ] TBool);
   reg "count" (fun () -> f [ v () ] TInt);
@@ -320,6 +320,30 @@ let () =
   reg "now-ms" (fun () -> f [ TUnit ] TInt);
   reg "subs" (fun () -> f [ TString; TInt ] TString);
   reg "join" (fun () -> f [ v () ] TString);
+  (* lazy seq producers/realizers — special arms below assign exact types *)
+  reg "lazy-seq" (fun () -> let a = v () in f [ TSeq a ] (TSeq a));
+  reg "doall" (fun () -> let a = v () in f [ TSeq a ] (TList a));
+  reg "dorun" (fun () -> f [ v () ] TUnit);
+  reg "iterate" (fun () -> let a = v () in f [ f [ a ] a; a ] (TSeq a));
+  reg "repeat" (fun () -> let a = v () in f [ a ] (TSeq a));
+  reg "repeatedly" (fun () -> let a = v () in f [ f [ TUnit ] a ] (TSeq a));
+  reg "cycle" (fun () -> let a = v () in f [ v () ] (TSeq a));
+  reg "interleave" (fun () -> let a = v () in f [ v (); v () ] (TSeq a));
+  reg "map-indexed" (fun () -> let a = v () and b = v () in f [ f [ TInt; a ] b; v () ] (TSeq b));
+  reg "keep" (fun () -> let a = v () and b = v () in f [ f [ a ] (TOption b); v () ] (TSeq b));
+  reg "filter-map" (fun () -> let a = v () and b = v () in f [ f [ a ] (TOption b); v () ] (TSeq b));
+  reg "take-nth" (fun () -> let a = v () in f [ TInt; v () ] (TSeq a));
+  reg "partition" (fun () -> let a = v () in f [ TInt; v () ] (TSeq (TSeq a)));
+  reg "partition-all" (fun () -> let a = v () in f [ TInt; v () ] (TSeq (TSeq a)));
+  reg "nthrest" (fun () -> let a = v () in f [ v (); TInt ] (TSeq a));
+  reg "drop-last" (fun () -> let a = v () in f [ TInt; v () ] (TSeq a));
+  reg "take-last" (fun () -> let a = v () in f [ TInt; v () ] (TSeq a));
+  reg "split-at" (fun () -> let a = v () in f [ TInt; v () ] (TVec (TSeq a)));
+  reg "split-with" (fun () -> let a = v () in f [ f [ a ] TBool; v () ] (TVec (TSeq a)));
+  reg "reductions" (fun () -> let a = v () and s = v () in f [ f [ s; a ] s; s; v () ] (TSeq s));
+  reg "dedupe" (fun () -> let a = v () in f [ v () ] (TSeq a));
+  reg "remove" (fun () -> let a = v () in f [ f [ a ] TBool; v () ] (TSeq a));
+  reg "not-empty" (fun () -> let a = v () in f [ v () ] (TOption (TSeq a)));
   (* tag predicates: on `any` they dispatch on the dyn tag; on a static
      type the answer is constant-folded at emit *)
   List.iter (fun p -> reg p (fun () -> f [ v () ] TBool))
@@ -336,7 +360,7 @@ let is_special_builtin = function
   | "first" | "next" | "rest" | "seq" | "get" | "nth" | "conj" | "assoc"
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
   | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range"
-  | "take" | "drop"
+  | "take" | "drop" | "cons"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
   | "str" | "println" | "print" | "pr-str" | "swap!"
   | "select-keys" | "update" | "get-in" | "assoc-in" | "comp" | "juxt"
@@ -344,6 +368,10 @@ let is_special_builtin = function
   | "last" | "butlast" | "min" | "max" | "every?" | "some" | "take-while"
   | "drop-while" | "zipmap" | "sort" | "sort-by" | "group-by" | "frequencies"
   | "vec" | "set" | "read-line" | "argv" | "now-ms" | "subs" | "join"
+  | "lazy-seq" | "doall" | "dorun" | "iterate" | "repeat" | "repeatedly"
+  | "cycle" | "interleave" | "map-indexed" | "keep" | "filter-map" | "take-nth"
+  | "partition" | "partition-all" | "nthrest" | "drop-last" | "take-last"
+  | "split-at" | "split-with" | "reductions" | "dedupe" | "remove" | "not-empty"
   | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
   | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
   | "zero?" | "pos?" | "neg?" | "even?" | "odd?" -> true
@@ -638,6 +666,7 @@ and ffi_ty ctx l f : ty =
        | "option", [ t ] -> TOption t
        | "vec", [ t ] -> TVec t
        | "list", [ t ] -> TList t
+       | "seq", [ t ] -> TSeq t
        | "set", [ t ] -> TSet t
        | "atom", [ t ] -> TAtom t
        | "map", [ k2; v ] -> TMap (k2, v)
@@ -1518,7 +1547,7 @@ and infer_app ctx l callee args =
    fn's parameter — deliberately does NOT commit a TVar to a coll *)
 and coll_elem l name t =
   match repr t with
-  | TVec a | TList a | TSet a -> a
+  | TVec a | TList a | TSeq a | TSet a -> a
   | TMap (k, v) -> TTuple [ k; v ]
   | TAny -> TAny
   | TVar _ -> fresh_var ()
@@ -1571,12 +1600,24 @@ and infer_app_no_macro ctx l s args =
   let arg_es =
     match ce.desc, args with
     | EBuiltin ("map" | "mapv" | "filter" | "filterv" | "mapcat" | "every?" | "some"
-               | "take-while" | "drop-while" | "sort-by" | "group-by"), [ fnf; cf ]
+               | "take-while" | "drop-while" | "sort-by" | "group-by" | "keep" | "filter-map"), [ fnf; cf ]
       when is_fn_form fnf ->
       let ce2 = infer_expr ctx cf in
       let et = coll_elem l "hof" ce2.ety in
       (match infer_fn_form ~hints:[ Some et ] ctx l fnf with
        | Some fe -> [ fe; ce2 ] | None -> assert false)
+    | EBuiltin "map-indexed", [ fnf; cf ]
+      when is_fn_form fnf ->
+      let ce2 = infer_expr ctx cf in
+      let et = coll_elem l "hof" ce2.ety in
+      (match infer_fn_form ~hints:[ Some TInt; Some et ] ctx l fnf with
+       | Some fe -> [ fe; ce2 ] | None -> assert false)
+    | EBuiltin "reductions", [ fnf; zf; cf ]
+      when is_fn_form fnf ->
+      let ze = infer_expr ctx zf and ce2 = infer_expr ctx cf in
+      let et = coll_elem l "reductions" ce2.ety in
+      (match infer_fn_form ~hints:[ Some ze.ety; Some et ] ctx l fnf with
+       | Some fe -> [ fe; ze; ce2 ] | None -> assert false)
     | EBuiltin "reduce", [ fnf; zf; cf ]
       when is_fn_form fnf ->
       let ze = infer_expr ctx zf and ce2 = infer_expr ctx cf in
@@ -1708,9 +1749,10 @@ and infer_special ctx l name ce arg_es =
     | TSet a -> on_set a
     | TMap (k, v) -> on_map k v
     | TString -> on_other TString
+    | TSeq a -> on_list a
     | TVar _ ->
       let a = fresh_var () in
-      unify l c (TList a);
+      unify l c (TSeq a);
       on_list a
     | t -> type_error l (Printf.sprintf "%s: unsupported collection type %s" name (string_of_ty t))
   in
@@ -1724,14 +1766,104 @@ and infer_special ctx l name ce arg_es =
     let ret = with_coll c (fun a -> TOption a) (fun a -> TOption a) (fun a -> TOption a) (fun k v -> TOption (TTuple [ k; v ])) (fun _ -> TOption TChar) in
     mk l ret (ECall (ce, arg_es))
   | "next", [ c ] ->
-    let ret = with_coll c (fun a -> TOption (TList a)) (fun a -> TOption (TList a)) (fun a -> TOption (TList a)) (fun k v -> TOption (TList (TTuple [ k; v ]))) (fun _ -> TOption (TList TChar)) in
+    let ret = with_coll c (fun a -> TOption (TSeq a)) (fun a -> TOption (TSeq a)) (fun a -> TOption (TSeq a)) (fun k v -> TOption (TSeq (TTuple [ k; v ]))) (fun _ -> TOption (TSeq TChar)) in
     mk l ret (ECall (ce, arg_es))
   | "rest", [ c ] ->
-    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun k v -> TList (TTuple [ k; v ])) (fun _ -> TList TChar) in
+    let ret = with_coll c (fun a -> TSeq a) (fun a -> TSeq a) (fun a -> TSeq a) (fun k v -> TSeq (TTuple [ k; v ])) (fun _ -> TSeq TChar) in
     mk l ret (ECall (ce, arg_es))
   | "seq", [ c ] ->
+    (* Clojure (seq c): nil when empty, else the seq view *)
+    let ret = with_coll c (fun a -> TOption (TSeq a)) (fun a -> TOption (TSeq a)) (fun a -> TOption (TSeq a)) (fun k v -> TOption (TSeq (TTuple [ k; v ]))) (fun _ -> TOption (TSeq TChar)) in
+    mk l ret (ECall (ce, arg_es))
+  | "lazy-seq", [ b ] ->
+    let el = fresh_var () in
+    (match repr b with
+     | TOption s -> let _ = with_coll s (fun x -> unify l el x) (fun x -> unify l el x) (fun x -> unify l el x) (fun k v -> unify l el (TTuple [ k; v ])) (fun _ -> unify l el TChar) in ()
+     | _ -> let _ = with_coll b (fun x -> unify l el x) (fun x -> unify l el x) (fun x -> unify l el x) (fun k v -> unify l el (TTuple [ k; v ])) (fun _ -> unify l el TChar) in ());
+    mk l (TSeq el) (ECall (ce, arg_es))
+  | "doall", [ c ] ->
     let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun k v -> TList (TTuple [ k; v ])) (fun _ -> TList TChar) in
     mk l ret (ECall (ce, arg_es))
+  | "dorun", [ c ] ->
+    let _ = with_coll c (fun _ -> TUnit) (fun _ -> TUnit) (fun _ -> TUnit) (fun _ _ -> TUnit) (fun _ -> TUnit) in
+    mk l TUnit (ECall (ce, arg_es))
+  | "iterate", [ f; x ] ->
+    let a = fresh_var () in
+    unify l x a; unify l f (TFun ([ a ], a));
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "repeat", [ x ] ->
+    mk l (TSeq x) (ECall (ce, arg_es))
+  | "repeat", [ n; x ] | "repeatedly", [ n; x ] ->
+    unify l n TInt;
+    mk l (TSeq x) (ECall (ce, arg_es))
+  | "repeatedly", [ f ] ->
+    let a = fresh_var () in
+    unify l f (TFun ([ TUnit ], a));
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "cycle", [ c ] ->
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "interleave", [ c1; c2 ] ->
+    let a = fresh_var () in
+    let _ = with_coll c1 (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    let _ = with_coll c2 (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "map-indexed", [ f; c ] ->
+    let a = fresh_var () and b = fresh_var () in
+    unify l f (TFun ([ TInt; a ], b));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq b) (ECall (ce, arg_es))
+  | "keep", [ f; c ] | "filter-map", [ f; c ] ->
+    let a = fresh_var () and b = fresh_var () in
+    unify l f (TFun ([ a ], TOption b));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq b) (ECall (ce, arg_es))
+  | "take-nth", [ n; c ] ->
+    unify l n TInt;
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | ("partition" | "partition-all"), (_ :: _ as ns) ->
+    let c = List.nth arg_es (List.length arg_es - 1) in
+    List.iter (fun t -> unify l t TInt) (List.map (fun e -> e.ety) (List.filteri (fun i _ -> i < List.length arg_es - 1) arg_es));
+    let a = fresh_var () in
+    let _ = with_coll c.ety (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    ignore ns;
+    mk l (TSeq (TSeq a)) (ECall (ce, arg_es))
+  | "nthrest", [ c; n ] ->
+    unify l n TInt;
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "drop-last", [ n; c ] | "take-last", [ n; c ] ->
+    unify l n TInt;
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "split-at", [ n; c ] ->
+    unify l n TInt;
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TVec (TSeq a)) (ECall (ce, arg_es))
+  | "split-with", [ f; c ] ->
+    let a = fresh_var () in
+    unify l f (TFun ([ a ], TBool));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TVec (TSeq a)) (ECall (ce, arg_es))
+  | "reductions", [ f; init; c ] ->
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    unify l f (TFun ([ init; a ], init));
+    mk l (TSeq init) (ECall (ce, arg_es))
+  | "dedupe", [ c ] ->
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
+  | "not-empty", [ c ] ->
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TOption (TSeq a)) (ECall (ce, arg_es))
   | "count", [ c ] ->
     let _ = with_coll c (fun _ -> TInt) (fun _ -> TInt) (fun _ -> TInt) (fun _ _ -> TInt) (fun _ -> TInt) in
     mk l TInt (ECall (ce, arg_es))
@@ -1760,6 +1892,16 @@ and infer_special ctx l name ce arg_es =
     in
     let ret = if List.length ty_args = 3 then (unify l ret (List.nth ty_args 2); ret) else ret in
     mk l ret (ECall (ce, arg_es))
+  | "cons", [ x; c ] ->
+    let a = fresh_var () in
+    unify l x a;
+    (match repr c with
+     | TSeq e | TList e | TVec e | TSet e -> unify l a e
+     | TMap (k, v) -> unify l a (TTuple [ k; v ])
+     | TAny -> ()
+     | TVar _ -> unify l c (TSeq a)
+     | _ -> type_error l "cons: not a collection");
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "conj", c :: xs ->
     let ret =
       with_coll c
@@ -1799,12 +1941,12 @@ and infer_special ctx l name ce arg_es =
   | "map", [ f; c ] ->
     let a = fresh_var () and b = fresh_var () in
     unify l f (TFun ([ a ], b));
-    let ret = with_coll c (fun x -> unify l a x; TVec b) (fun x -> unify l a x; TList b) (fun x -> unify l a x; TVec b) (fun k v -> unify l a (TTuple [ k; v ]); TList b) (fun _ -> TList b) in
+    let ret = with_coll c (fun x -> unify l a x; TSeq b) (fun x -> unify l a x; TSeq b) (fun x -> unify l a x; TSeq b) (fun k v -> unify l a (TTuple [ k; v ]); TSeq b) (fun _ -> unify l a TChar; TSeq b) in
     mk l ret (ECall (ce, arg_es))
-  | "filter", [ f; c ] ->
+  | "filter", [ f; c ] | "remove", [ f; c ] ->
     let a = fresh_var () in
     unify l f (TFun ([ a ], TBool));
-    let ret = with_coll c (fun x -> unify l a x; TVec a) (fun x -> unify l a x; TList a) (fun x -> unify l a x; TSet a) (fun k v -> unify l a (TTuple [ k; v ]); TMap (k, v)) (fun _ -> TList a) in
+    let ret = with_coll c (fun x -> unify l a x; TSeq a) (fun x -> unify l a x; TSeq a) (fun x -> unify l a x; TSeq a) (fun k v -> unify l a (TTuple [ k; v ]); TSeq (TTuple [ k; v ])) (fun _ -> unify l a TChar; TSeq TChar) in
     mk l ret (ECall (ce, arg_es))
   | "reduce", [ f; init; c ] ->
     let a = fresh_var () in
@@ -1833,6 +1975,7 @@ and infer_special ctx l name ce arg_es =
       match repr dst with
       | TVec x -> unify l a x; TVec a
       | TList x -> unify l a x; TList a
+      | TSeq x -> unify l a x; TSeq a
       | TSet x -> unify l a x; TSet a
       | TMap (kk, vv) ->
         (* map destination: source elements are [k v] pairs (vec, list or
@@ -1858,13 +2001,10 @@ and infer_special ctx l name ce arg_es =
     mk l ret (ECall (ce, arg_es))
   | "take", [ n; c ] | "drop", [ n; c ] ->
     unify l n TInt;
-    (* take/drop keep vec shape but seq-view everything else: set -> elem
-       list, map -> (k, v) pair list, string -> char list *)
-    let r =
-      with_coll c (fun _ -> c) (fun _ -> c) (fun e -> TList e)
-        (fun k v -> TList (TTuple [ k; v ])) (fun _ -> TList TChar)
-    in
-    mk l r (ECall (ce, arg_es))
+    (* lazy in Clojure: always a seq view *)
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "apply", [ f; xs ] ->
     let ret = fresh_var () in
     (match repr f with
@@ -1880,9 +2020,9 @@ and infer_special ctx l name ce arg_es =
         | [] -> type_error l "apply: arity mismatch");
        mk l ret (ECall (ce, arg_es))
      | _ -> type_error l "apply: not a function")
-  | "range", [ _ ] | "range", [ _; _ ] ->
+  | "range", _ ->
     List.iter (fun t -> unify l t TInt) ty_args;
-    mk l (TList TInt) (ECall (ce, arg_es))
+    mk l (TSeq TInt) (ECall (ce, arg_es))
   | ("int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
     | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"), [ _ ] ->
     mk l TBool (ECall (ce, arg_es))
@@ -1890,8 +2030,7 @@ and infer_special ctx l name ce arg_es =
     unify l x TInt;
     mk l TBool (ECall (ce, arg_es))
   | "concat", _ ->
-    (* seqable arguments: element types unify; the result is always a list
-       (emit collects each coll into a list first) *)
+    (* lazy concat of seqables *)
     let a = fresh_var () in
     List.iter
       (fun t ->
@@ -1899,7 +2038,7 @@ and infer_special ctx l name ce arg_es =
                   (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
         ())
       ty_args;
-    mk l (TList a) (ECall (ce, arg_es))
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "merge", _ :: _ ->
     let kk = fresh_var () and v = fresh_var () in
     List.iter (fun t -> unify l t (TMap (kk, v))) ty_args;
@@ -1977,20 +2116,29 @@ and infer_special ctx l name ce arg_es =
     unify l f (TFun (fixed @ [ x ], r));
     mk l (TFun ([ x ], r)) (ECall (ce, arg_es))
   | "mapcat", [ f; c ] ->
-    let a = fresh_var () and b = fresh_var () in
-    unify l f (TFun ([ a ], TList b));
+    let a = fresh_var () and b = fresh_var () and br = fresh_var () in
+    unify l f (TFun ([ a ], br));
     let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
-    mk l (TList b) (ECall (ce, arg_es))
+    (match repr br with
+     | TList x | TVec x | TSet x | TSeq x -> unify l x b
+     | TMap (k, v) -> unify l b (TTuple [ k; v ])
+     | TString -> unify l TChar b
+     | TAny -> unify l b TAny
+     | TVar _ -> unify l br (TSeq b)
+     | _ -> type_error l "mapcat: fn must return a collection");
+    mk l (TSeq b) (ECall (ce, arg_es))
   | "interpose", [ sep; c ] ->
     let a = fresh_var () in
     let _ = with_coll c (fun x -> unify l a x; unify l sep a) (fun x -> unify l a x; unify l sep a) (fun x -> unify l a x; unify l sep a) (fun k v -> unify l a (TTuple [ k; v ]); unify l sep a) (fun _ -> unify l a TChar; unify l sep a) in
-    mk l (TList a) (ECall (ce, arg_es))
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "reverse", [ c ] ->
-    (match repr c with TVec _ | TList _ -> () | TVar _ -> unify l c (TList (fresh_var ())) | _ -> type_error l "reverse expects a list/vector");
-    mk l c (ECall (ce, arg_es))
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "distinct", [ c ] ->
-    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "distinct on map") (fun _ -> TList TChar) in
-    mk l ret (ECall (ce, arg_es))
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "second", [ c ] ->
     let ret = with_coll c (fun a -> TOption a) (fun a -> TOption a) (fun a -> TOption a) (fun _ _ -> TOption TAny) (fun _ -> TOption TChar) in
     mk l ret (ECall (ce, arg_es))
@@ -1998,8 +2146,9 @@ and infer_special ctx l name ce arg_es =
     let ret = with_coll c (fun a -> TOption a) (fun a -> TOption a) (fun a -> TOption a) (fun _ _ -> TOption TAny) (fun _ -> TOption TChar) in
     mk l ret (ECall (ce, arg_es))
   | "butlast", [ c ] ->
-    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "butlast on map") (fun _ -> TList TChar) in
-    mk l ret (ECall (ce, arg_es))
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "butlast on map") (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "min", [ a; b ] | "max", [ a; b ] ->
     let nty = if match repr a with TFloat -> true | _ -> (match repr b with TFloat -> true | _ -> false) then TFloat else TInt in
     unify l a nty; unify l b nty;
@@ -2012,11 +2161,8 @@ and infer_special ctx l name ce arg_es =
   | "take-while", [ f; c ] | "drop-while", [ f; c ] ->
     let a = fresh_var () in
     unify l f (TFun ([ a ], TBool));
-    (match repr c with
-     | TList x -> unify l a x
-     | TVar _ -> unify l c (TList a)
-     | _ -> type_error l (name ^ " expects a list"));
-    mk l (TList a) (ECall (ce, arg_es))
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "zipmap", [ ks; vs ] ->
     (* seqable args like everywhere else; emit lists them *)
     let kk = fresh_var () and v = fresh_var () in
@@ -2024,18 +2170,19 @@ and infer_special ctx l name ce arg_es =
     let _ = with_coll vs (fun x -> unify l v x) (fun x -> unify l v x) (fun x -> unify l v x) (fun _ _ -> type_error l "zipmap on map") (fun _ -> unify l v TChar) in
     mk l (TMap (kk, v)) (ECall (ce, arg_es))
   | "sort", [ c ] ->
-    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "sort on map") (fun _ -> TList TChar) in
-    mk l ret (ECall (ce, arg_es))
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "sort on map") (fun _ -> unify l a TChar) in
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "sort", [ cmp; c ] ->
     let a = fresh_var () in
     unify l cmp (TFun ([ a; a ], TInt));
     let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "sort on map") (fun _ -> unify l a TChar) in
-    mk l (TList a) (ECall (ce, arg_es))
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "sort-by", [ f; c ] ->
     let a = fresh_var () and k = fresh_var () in
     unify l f (TFun ([ a ], k));
     let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "sort-by on map") (fun _ -> unify l a TChar) in
-    mk l (TList a) (ECall (ce, arg_es))
+    mk l (TSeq a) (ECall (ce, arg_es))
   | "group-by", [ f; c ] ->
     let a = fresh_var () and k = fresh_var () in
     unify l f (TFun ([ a ], k));

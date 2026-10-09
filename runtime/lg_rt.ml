@@ -21,6 +21,8 @@ let str_list pr xs =
 let str_vec pr v =
   "[" ^ String.concat " " (List.map pr (Clj_core.Vec.to_list v)) ^ "]"
 
+let str_seq pr s = str_list pr (Clj_core.Seq.to_list s)
+
 let str_map kpr vpr m =
   let entries = List.of_seq (Clj_core.Map.seq m) in
   "{" ^ String.concat ", " (List.map (fun (k, v) -> kpr k ^ " " ^ vpr v) entries) ^ "}"
@@ -128,6 +130,25 @@ let dyn_to_list = function
       (List.of_seq (Clj_core.Map.seq m))
   | DStr s -> List.map (fun c -> DChar c) (string_chars s)
   | _ -> []
+
+(* any seqable dyn as a lazy seq of dyn elements — same element view as
+   dyn_to_list but stays lazy *)
+let dyn_to_seq = function
+  | DVec v -> Clj_core.Seq.of_vec v
+  | DList l -> Clj_core.Seq.of_list l
+  | DSet s -> Clj_core.Seq.of_set s
+  | DMap m ->
+    Clj_core.Seq.map
+      (fun (k, v) ->
+        DVec
+          (Clj_core.Vec.of_list
+             [ k; (match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d) ]))
+      (Clj_core.Seq.of_map m)
+  | DStr s -> Clj_core.Seq.map (fun c -> DChar c) (Clj_core.Seq.of_string s)
+  | _ -> Clj_core.Seq.empty
+
+(* unbox a dyn into a lazy seq (target element type is `any`) *)
+let as_seq = dyn_to_seq
 
 (* values of a dyn-keyed map: nest entries unwrap back into DMap *)
 let dyn_vals m =

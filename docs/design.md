@@ -270,3 +270,13 @@ gated on `LG_OXCAML=1` per v2.md).
   `Shared` (GC), never wrongly `Local`/`Owned`.
 - Macro expansion never lets an introduced binding capture a user
   variable (`__hN` + mark table).
+
+
+## 12. Lazy sequences (M3)
+
+Sequence-producing builtins return `(seq T)` = `'a Clj_core.Seq.t` and
+transform lazily; realization happens at `vec`/`set`/`into`/`doall`/
+`dorun`/`count`/`reduce`/`first`/`next`/`rest`/`nth`/`str`/`println`.
+`cons` accepts any collection and returns `seq`. `(seq c)` returns
+`option` — `nil` on empty, matching Clojure. Element types cross the
+`any` boundary with `Clj_core.Seq.map` box/unbox adapters at emit time.

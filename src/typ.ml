@@ -11,6 +11,7 @@ type ty =
   | TUnit
   | TList of ty
   | TVec of ty
+  | TSeq of ty                    (* lazy sequence, 'a Clj_core.Seq.t *)
   | TMap of ty * ty
   | TSet of ty
   | TAtom of ty
@@ -43,7 +44,7 @@ let rec repr t =
 let rec occurs v t =
   match repr t with
   | TVar v' -> v.id = v'.id
-  | TList t | TVec t | TSet t | TAtom t | TOption t -> occurs v t
+  | TList t | TVec t | TSeq t | TSet t | TAtom t | TOption t -> occurs v t
   | TMap (k, x) -> occurs v k || occurs v x
   | TTuple ts | TCon (_, ts) -> List.exists (occurs v) ts
   | TFun (ts, r) -> List.exists (occurs v) ts || occurs v r
@@ -63,7 +64,7 @@ let rec unify loc a b =
     | TAny, _ | _, TAny -> ()
     | TInt, TInt | TFloat, TFloat | TBool, TBool | TChar, TChar | TString, TString
     | TKeyword, TKeyword | TSymbol, TSymbol | TUnit, TUnit -> ()
-    | TList a, TList b | TVec a, TVec b | TSet a, TSet b | TAtom a, TAtom b | TOption a, TOption b -> unify loc a b
+    | TList a, TList b | TVec a, TVec b | TSeq a, TSeq b | TSet a, TSet b | TAtom a, TAtom b | TOption a, TOption b -> unify loc a b
     | TMap (k1, v1), TMap (k2, v2) -> unify loc k1 k2; unify loc v1 v2
     | TTuple xs, TTuple ys when List.length xs = List.length ys -> List.iter2 (unify loc) xs ys
     | TFun (xs, r1), TFun (ys, r2) when List.length xs = List.length ys ->
@@ -81,6 +82,7 @@ and string_of_ty t =
   | TAny -> "any"
   | TList t -> "(" ^ string_of_ty t ^ " list)"
   | TVec t -> "(vec " ^ string_of_ty t ^ ")"
+  | TSeq t -> "(seq " ^ string_of_ty t ^ ")"
   | TMap (k, v) -> "(map " ^ string_of_ty k ^ " " ^ string_of_ty v ^ ")"
   | TSet t -> "(set " ^ string_of_ty t ^ ")"
   | TAtom t -> "(atom " ^ string_of_ty t ^ ")"
@@ -102,6 +104,7 @@ let rec string_of_lg_ty t =
   | TUnit -> "unit" | TAny -> "any"
   | TList t -> "(list " ^ string_of_lg_ty t ^ ")"
   | TVec t -> "(vec " ^ string_of_lg_ty t ^ ")"
+  | TSeq t -> "(seq " ^ string_of_lg_ty t ^ ")"
   | TMap (k, v) -> "(map " ^ string_of_lg_ty k ^ " " ^ string_of_lg_ty v ^ ")"
   | TSet t -> "(set " ^ string_of_lg_ty t ^ ")"
   | TAtom t -> "(atom " ^ string_of_lg_ty t ^ ")"
@@ -137,7 +140,7 @@ let free_tvars t acc =
   let rec go acc t =
     match repr t with
     | TVar v -> if List.mem v.id acc then acc else v.id :: acc
-    | TList t | TVec t | TSet t | TAtom t | TOption t | TImplicit t -> go acc t
+    | TList t | TVec t | TSeq t | TSet t | TAtom t | TOption t | TImplicit t -> go acc t
     | TMap (k, v) -> go (go acc k) v
     | TTuple ts | TCon (_, ts) -> List.fold_left go acc ts
     | TFun (ts, r) -> go (List.fold_left go acc ts) r
@@ -162,6 +165,7 @@ let instantiate sch =
     | TVar v -> (match List.assoc_opt v.id subst with Some t -> t | None -> t)
     | TList t -> TList (go t)
     | TVec t -> TVec (go t)
+    | TSeq t -> TSeq (go t)
     | TSet t -> TSet (go t)
     | TAtom t -> TAtom (go t)
     | TOption t -> TOption (go t)
