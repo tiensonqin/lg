@@ -29,15 +29,12 @@ and mfn = {
 exception Macro_error of loc * string
 
 let macros : (string, mfn) Hashtbl.t = Hashtbl.create 32
-(* unqualified lookup for same-module calls inside macro bodies *)
-let macro_by_name : (string, mfn) Hashtbl.t = Hashtbl.create 32
 
 let is_macro ns name = Hashtbl.mem macros (ns ^ "/" ^ name)
 let find_macro ns name = Hashtbl.find_opt macros (ns ^ "/" ^ name)
 
 let register_macro ns name fn =
-  Hashtbl.replace macros (ns ^ "/" ^ name) fn;
-  Hashtbl.replace macro_by_name name fn
+  Hashtbl.replace macros (ns ^ "/" ^ name) fn
 
 (* dynamically-bound module of the macro currently expanding (like
    Clojure's dynamic ns var): set by `apply` around each macro body eval *)
@@ -49,13 +46,14 @@ let macro_of_sym s =
   match String.index_opt s '/' with
   | Some i ->
     let ns = String.sub s 0 i and name = String.sub s (i + 1) (String.length s - i - 1) in
-    (match find_macro ns name with Some fn -> Some fn | None -> Hashtbl.find_opt macro_by_name s)
+    (* a qualified name is already module-explicit — no by-name
+       fallback, so a cross-module last-wins hit is impossible *)
+    find_macro ns name
   | None ->
-    (* bare callee inside a macro body: the expanding macro's own module
-       first (hygiene boundary), then the shared by-name table *)
-    (match find_macro !cur_mns s with
-     | Some _ as r -> r
-     | None -> Hashtbl.find_opt macro_by_name s)
+    (* bare callee inside a macro body resolves only within the
+       expanding macro's own module — a bare name can never reach into
+       another module's macro table *)
+    find_macro !cur_mns s
 
 (* hygiene marks: renamed template symbol -> (original name, origin
    module). The origin module is the macro's own namespace — where
@@ -119,6 +117,50 @@ let rec eval_builtin_apply l name args =
           !apply_fn l f (List.rev midrev @ List.map (fun x -> MForm x) (Array.to_list xs))
         | _ -> form_error loc "apply: last argument must be a sequence")
      | [] -> form_error loc "apply: no function")
+  else if name = "not" then
+    (match args with
+     | [ a ] -> MForm (Atom (loc, Bool (not (truthy a))))
+     | _ -> form_error loc "not: 1 argument")
+  else if List.mem name [ "map"; "mapv"; "filter"; "reduce"; "meta"; "with-meta" ] then
+    (* higher-order / meta builtins: the fn operand is an mval, so match on
+       args before arg_forms forces everything to be a form *)
+    let to_forms loc v =
+      match v with
+      | MForm (List (_, xs)) -> xs
+      | MForm (Vector (_, xs)) -> Array.to_list xs
+      | MForm (Atom (_, Nil)) -> []
+      | _ -> form_error loc "%s: collection argument must be a list/vector" name
+    in
+    let of_results xs =
+      List.map
+        (function MForm f -> f | _ -> form_error loc "%s: function must return a form value" name)
+        xs
+    in
+    (match name, args with
+     | ("map" | "mapv"), f :: colls ->
+       let cols = List.map (to_forms loc) colls in
+       let n = List.fold_left min max_int (List.map List.length cols) in
+       let rs =
+         List.init n
+           (fun i -> !apply_fn l f (List.map (fun c -> MForm (List.nth c i)) cols))
+         |> of_results
+       in
+       MForm (if name = "mapv" then Vector (loc, Array.of_list rs) else List (loc, rs))
+     | "filter", [ f; c ] ->
+       let xs = to_forms loc c in
+       MForm
+         (List (loc,
+            (List.filter (fun x -> truthy (!apply_fn l f [ MForm x ])) xs)))
+     | "reduce", [ f; c ] | "reduce", [ f; MForm (Atom (_, Nil)); c ] ->
+       (match to_forms loc c with
+        | x :: xs -> List.fold_left (fun a x -> !apply_fn l f [ a; MForm x ]) (MForm x) xs
+        | [] -> MForm (Atom (loc, Nil)))
+     | "reduce", [ f; init; c ] ->
+       List.fold_left (fun a x -> !apply_fn l f [ a; MForm x ]) init (to_forms loc c)
+     | "meta", [ MForm (Meta (_, m, _)) ] -> MForm m
+     | "meta", [ MForm _ ] | "meta", [] -> MForm (Atom (loc, Nil))
+     | "with-meta", [ MForm x; MForm m ] -> MForm (Meta (loc, m, x))
+     | _ -> form_error loc "%s: bad arguments" name)
   else
   let arg_forms =
     List.map
@@ -268,7 +310,7 @@ let macro_builtins =
   [ "list"; "cons"; "first"; "rest"; "next"; "last"; "concat"; "conj"; "seq";
     "count"; "empty?"; "nth"; "take"; "drop"; "vector"; "quote"; "symbol";
     "keyword"; "name"; "str"; "="; "gensym"; "println"; "map"; "filter";
-    "apply"; "meta"; "with-meta"; "mapv"; "reduce" ]
+    "apply"; "meta"; "with-meta"; "mapv"; "reduce"; "not" ]
 
 let is_eval_builtin name = List.mem name macro_builtins
 

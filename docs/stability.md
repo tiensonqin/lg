@@ -56,7 +56,7 @@ Dispatched in `infer_call` (src/infer.ml). `(a)` unless noted.
 | `match` | a | first-match order; variant/option/bool scrutinees get W401/W402 inexhaustive warnings (`_`/binder silences); fallthrough keeps the `no-match` trap for open types. |
 | `(Some x)` / `None` | a | option constructor / pattern; bare `Some` unapplied is unresolved — spec |
 | `if-let`, `when-let` | a | binds the payload of an `option`; `when-let` else is `nil` (unit) |
-| `quote` | b | homogeneous quoted literals only — `'(1 "a")` is a compile error while `[1 "a"]` degrades to `any`. Align the two (recommended: both → `any`). |
+| `quote` | a | heterogeneous quoted literals degrade to `any`, same as bracket literals. |
 | `(:k m)`, `(:k m d)` | a | keyword in call position = `get` |
 | `loop`/`recur`, `set!`, `throw`/`try` | c | **listed in design.md §1 but not implemented** — calls silently parse as applications and fail at symbol resolution. Cut from the v1 surface (§6) or implement. |
 
@@ -208,8 +208,8 @@ be (a) now.
 | `(defmacro name [params & rest] body…)` | a | form-level evaluator; args arrive as raw forms; returns a form |
 | hygiene via `__hN` marks + mark table | a | introduced binders can't capture user vars — invariant in design.md |
 | `gensym` | a | macro-time only |
-| macro eval subset: `if do let fn quote` + 23 eval builtins | b | `macro_builtins` advertises 30 names; `map filter apply meta with-meta mapv reduce` are listed but **unimplemented** in `eval_builtin_apply` — calling one inside a macro body errors. Implement or trim the advertised list. |
-| cross-module macros via `ns/m` | b | works only because deps load first; the `macro_by_name` last-wins global fallback lets a bare name hit *another module's* macro — restrict unqualified lookup to same-module |
+| macro eval subset: `if do let fn quote` + eval builtins | a | `map mapv filter reduce apply meta with-meta not` implemented over mvals; the advertised list now matches the implementation. |
+| cross-module macros via `ns/m` | a | unqualified lookup restricted to the expanding macro's own module — no last-wins global fallback. |
 | `defmacro` multi-arity / docstring | c | absent |
 | macro must be defined textually before use | a | spec the ordering rule |
 
