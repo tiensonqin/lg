@@ -290,6 +290,36 @@ let () =
   reg "sort-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (v ()));
   reg "group-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (TMap (k, TList a)));
   reg "frequencies" (fun () -> let a = v () in f [ TList a ] (TMap (a, TInt)));
+  (* io / system: slurp/spit/argv/env/file-exists? work on every backend;
+     sh/read-line/now-ms/re-* emit Unix/Str code and are native-only *)
+  reg "slurp" (fun () -> f [ TString ] TString);
+  reg "spit" (fun () -> f [ TString; TString ] TUnit);
+  reg "env" (fun () -> f [ TString ] (TOption TString));
+  reg "file-exists?" (fun () -> f [ TString ] TBool);
+  reg "sh" (fun () -> f [ TString ] TString);
+  reg "split" (fun () -> f [ TString; TString ] (TList TString));
+  reg "trim" (fun () -> f [ TString ] TString);
+  reg "triml" (fun () -> f [ TString ] TString);
+  reg "trimr" (fun () -> f [ TString ] TString);
+  reg "upper-case" (fun () -> f [ TString ] TString);
+  reg "lower-case" (fun () -> f [ TString ] TString);
+  reg "blank?" (fun () -> f [ TString ] TBool);
+  reg "includes?" (fun () -> f [ TString; TString ] TBool);
+  reg "starts-with?" (fun () -> f [ TString; TString ] TBool);
+  reg "ends-with?" (fun () -> f [ TString; TString ] TBool);
+  reg "replace" (fun () -> f [ TString; TString; TString ] TString);
+  reg "re-find" (fun () -> f [ TString; TString ] (TOption TString));
+  reg "re-matches" (fun () -> f [ TString; TString ] (TOption TString));
+  reg "re-seq" (fun () -> f [ TString; TString ] (TList TString));
+  reg "re-split" (fun () -> f [ TString; TString ] (TList TString));
+  reg "re-replace" (fun () -> f [ TString; TString; TString ] TString);
+  (* 0-arity: the reg scheme only names the builtin for resolution; the
+     special arms below assign the real [] arity *)
+  reg "read-line" (fun () -> f [ TUnit ] (TOption TString));
+  reg "argv" (fun () -> f [ TUnit ] (TList TString));
+  reg "now-ms" (fun () -> f [ TUnit ] TInt);
+  reg "subs" (fun () -> f [ TString; TInt ] TString);
+  reg "join" (fun () -> f [ v () ] TString);
   (* tag predicates: on `any` they dispatch on the dyn tag; on a static
      type the answer is constant-folded at emit *)
   List.iter (fun p -> reg p (fun () -> f [ v () ] TBool))
@@ -313,7 +343,7 @@ let is_special_builtin = function
   | "partial" | "mapcat" | "interpose" | "reverse" | "distinct" | "second"
   | "last" | "butlast" | "min" | "max" | "every?" | "some" | "take-while"
   | "drop-while" | "zipmap" | "sort" | "sort-by" | "group-by" | "frequencies"
-  | "vec" | "set"
+  | "vec" | "set" | "read-line" | "argv" | "now-ms" | "subs" | "join"
   | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
   | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
   | "zero?" | "pos?" | "neg?" | "even?" | "odd?" -> true
@@ -2014,6 +2044,11 @@ and infer_special ctx l name ce arg_es =
   | "frequencies", [ c ] ->
     let ret = with_coll c (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun _ _ -> type_error l "frequencies on map") (fun _ -> TMap (TChar, TInt)) in
     mk l ret (ECall (ce, arg_es))
+  | "read-line", [] -> mk l (TOption TString) (ECall (ce, arg_es))
+  | "argv", [] -> mk l (TList TString) (ECall (ce, arg_es))
+  | "now-ms", [] -> mk l TInt (ECall (ce, arg_es))
+  | "subs", [ _; _ ] | "subs", [ _; _; _ ] -> mk l TString (ECall (ce, arg_es))
+  | "join", [ _ ] | "join", [ _; _ ] -> mk l TString (ECall (ce, arg_es))
   | ("str" | "println" | "print" | "pr-str"), _ ->
     (* a bare binder (ELocal) whose type is still free gets marked `any`:
        nothing else will constrain it, and the dyn-at-boundary contract

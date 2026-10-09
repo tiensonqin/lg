@@ -663,7 +663,108 @@ and emit_builtin_call b ret name args =
      buf_add b ("(match " ^ as_list (List.nth args 0) ^ " with [] -> None | _ :: t -> Some t)")
    | "rest" -> buf_add b ("(match " ^ as_list (List.nth args 0) ^ " with [] -> [] | _ :: t -> t)")
    | "seq" -> buf_add b (as_list (List.nth args 0))
-   | "exit" -> buf_add b ("(Stdlib.exit " ^ a 0 ^ ")")
+   | "exit" -> buf_add b ("(Stdlib.exit " ^ conv TInt (t 0) (a 0) ^ ")")
+   (* io / system builtins emit inline: channel/Sys/Unix primitives are
+      native-only, so every arm is guarded to the non-melange backend *)
+   | "slurp" ->
+     buf_add b
+       (if !melange then "(failwith \"slurp: native only\")"
+        else "(let ic__ = open_in_bin " ^ conv TString (t 0) (a 0) ^ " in "
+             ^ "let s__ = really_input_string ic__ (in_channel_length ic__) in close_in ic__; s__)")
+   | "spit" ->
+     buf_add b
+       (if !melange then "(failwith \"spit: native only\")"
+        else "(let oc__ = open_out_bin " ^ conv TString (t 0) (a 0) ^ " in "
+             ^ "output_string oc__ " ^ conv TString (t 1) (a 1) ^ "; close_out oc__)")
+   | "read-line" ->
+     buf_add b
+       (if !melange then "(failwith \"read-line: native only\")"
+        else "(try Some (Stdlib.read_line ()) with End_of_file -> None)")
+   | "argv" ->
+     buf_add b
+       (if !melange then "(failwith \"argv: native only\")"
+        else "(List.tl (Array.to_list Sys.argv))")
+   | "env" ->
+     buf_add b
+       (if !melange then "(failwith \"env: native only\")"
+        else "(Sys.getenv_opt " ^ conv TString (t 0) (a 0) ^ ")")
+   | "file-exists?" ->
+     buf_add b
+       (if !melange then "(failwith \"file-exists?: native only\")"
+        else "(Sys.file_exists " ^ conv TString (t 0) (a 0) ^ ")")
+   | "sh" ->
+     buf_add b
+       (if !melange then "(failwith \"sh: native only\")"
+        else
+          "(let ic__ = Unix.open_process_in " ^ conv TString (t 0) (a 0) ^ " in "
+          ^ "let b__ = Buffer.create 64 in "
+          ^ "(try while true do Buffer.add_string b__ (input_line ic__); Buffer.add_char b__ '\\n' done "
+          ^ "with End_of_file -> ()); "
+          ^ "Stdlib.ignore (Unix.close_process_in ic__); Buffer.contents b__)")
+   | "now-ms" ->
+     buf_add b
+       (if !melange then "(failwith \"now-ms: native only\")"
+        else "(int_of_float (Unix.gettimeofday () *. 1000.))")
+   (* string library *)
+   | "subs" ->
+     if List.length args = 3 then
+       buf_add b ("(String.sub " ^ conv TString (t 0) (a 0) ^ " " ^ conv TInt (t 1) (a 1)
+                  ^ " (" ^ conv TInt (t 2) (a 2) ^ " - " ^ a 1 ^ "))")
+     else
+       buf_add b ("(String.sub " ^ conv TString (t 0) (a 0) ^ " " ^ conv TInt (t 1) (a 1)
+                  ^ " (String.length " ^ a 0 ^ " - " ^ a 1 ^ "))")
+   | "split" -> buf_add b ("(Lg_rt.split_on " ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
+   | "join" ->
+     (* each element is coerced with its own printer, like str *)
+     let sep_s, cidx =
+       if List.length args = 2 then (conv TString (t 0) (a 0), 1) else ("\"\"", 0)
+     in
+     let el =
+       match repr (t cidx) with
+       | TList x | TVec x | TSet x -> x
+       | TMap (k, v) -> TTuple [ k; v ]
+       | TString -> TChar
+       | _ -> TAny
+     in
+     buf_add b ("(String.concat " ^ sep_s ^ " (List.map " ^ gen_printer el
+                ^ " " ^ as_list (List.nth args cidx) ^ "))")
+   | "trim" -> buf_add b ("(String.trim " ^ conv TString (t 0) (a 0) ^ ")")
+   | "triml" -> buf_add b ("(Lg_rt.triml " ^ conv TString (t 0) (a 0) ^ ")")
+   | "trimr" -> buf_add b ("(Lg_rt.trimr " ^ conv TString (t 0) (a 0) ^ ")")
+   | "upper-case" -> buf_add b ("(String.uppercase_ascii " ^ conv TString (t 0) (a 0) ^ ")")
+   | "lower-case" -> buf_add b ("(String.lowercase_ascii " ^ conv TString (t 0) (a 0) ^ ")")
+   | "blank?" -> buf_add b ("(Lg_rt.str_blank " ^ conv TString (t 0) (a 0) ^ ")")
+   | "includes?" -> buf_add b ("(Lg_rt.str_contains " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")")
+   | "starts-with?" -> buf_add b ("(String.starts_with ~prefix:" ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
+   | "ends-with?" -> buf_add b ("(String.ends_with ~suffix:" ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
+   | "replace" -> buf_add b ("(Lg_rt.str_replace_lit " ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 2) (a 2) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
+   (* regex-lite (Str): native only *)
+   | "re-find" ->
+     buf_add b
+       (if !melange then "(failwith \"re-find: native only\")"
+        else "(try Stdlib.ignore (Str.search_forward (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") "
+             ^ conv TString (t 1) (a 1) ^ " 0); Some (Str.matched_string " ^ a 1 ^ ") with Not_found -> None)")
+   | "re-matches" ->
+     buf_add b
+       (if !melange then "(failwith \"re-matches: native only\")"
+        else "(if Str.string_match (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") " ^ conv TString (t 1) (a 1)
+             ^ " 0 && Str.match_end () = String.length " ^ a 1 ^ " then Some " ^ a 1 ^ " else None)")
+   | "re-seq" ->
+     buf_add b
+       (if !melange then "(failwith \"re-seq: native only\")"
+        else "(let re__ = Str.regexp " ^ conv TString (t 0) (a 0) ^ " in let rec go__ i acc = "
+             ^ "match (try Some (Str.search_forward re__ " ^ conv TString (t 1) (a 1) ^ " i) with Not_found -> None) "
+             ^ "with Some _ -> go__ (Str.match_end ()) (Str.matched_string " ^ a 1 ^ " :: acc) "
+             ^ "| None -> List.rev acc in go__ 0 [])")
+   | "re-split" ->
+     buf_add b
+       (if !melange then "(failwith \"re-split: native only\")"
+        else "(Str.split (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") " ^ conv TString (t 1) (a 1) ^ ")")
+   | "re-replace" ->
+     buf_add b
+       (if !melange then "(failwith \"re-replace: native only\")"
+        else "(Str.global_replace (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") "
+             ^ conv TString (t 2) (a 2) ^ " " ^ conv TString (t 1) (a 1) ^ ")")
    | "count" ->
      (match coll with
       | `Vec -> buf_add b ("(Clj_core.Vec.count " ^ a 0 ^ ")")
@@ -1137,6 +1238,13 @@ and emit_builtin_value name =
   | "comp" -> "(fun f g x -> f (g x))" | "juxt" -> "(fun f g x -> (Clj_core.Vec.of_list [f x; g x]))"
   | "mapcat" -> "List.concat_map" | "reverse" -> "List.rev" | "sort" -> "List.sort"
   | "every?" -> "List.for_all" | "some" -> "List.exists" | "min" -> "Stdlib.min" | "max" -> "Stdlib.max"
+  | "slurp" -> "(fun p -> let ic = open_in_bin p in let s = really_input_string ic (in_channel_length ic) in close_in ic; s)"
+  | "file-exists?" -> "Sys.file_exists"
+  | "trim" -> "String.trim" | "triml" -> "Lg_rt.triml" | "trimr" -> "Lg_rt.trimr"
+  | "upper-case" -> "String.uppercase_ascii" | "lower-case" -> "String.lowercase_ascii"
+  | "blank?" -> "Lg_rt.str_blank"
+  | "split" -> "(fun s sep -> Lg_rt.split_on sep s)"
+  | "includes?" -> "Lg_rt.str_contains" | "replace" -> "(fun s m r -> Lg_rt.str_replace_lit m r s)"
   | "zero?" -> "(fun x -> x = 0)" | "pos?" -> "(fun x -> x > 0)" | "neg?" -> "(fun x -> x < 0)"
   | "even?" -> "(fun x -> x mod 2 = 0)" | "odd?" -> "(fun x -> x mod 2 <> 0)"
   | "int?" -> "(fun x -> match x with Lg_rt.DInt _ -> true | _ -> false)"

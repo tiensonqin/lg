@@ -120,8 +120,8 @@ let () =
 %!" out_ml;
              let pkgs =
                if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
-                 "clj-core,rrbvec,ctypes.foreign"
-               else "clj-core,rrbvec"
+                 "clj-core,rrbvec,unix,str,ctypes.foreign"
+               else "clj-core,rrbvec,unix,str"
              in
              let extra = try Sys.getenv "LG_EXTRA_LINK" with Not_found -> "" in
              let cmdline =

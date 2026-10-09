@@ -162,6 +162,9 @@ back to `ocamlc` for byte). `lg check` runs the front half only
 | `map`/`filter`/`reduce`/`into` etc. | `Clj_core.Vec.map` / `Map`/`Set`/`Seq` counterparts — same names and argument order as `clojure.core` |
 | `atom`/`deref`/`reset!`/`swap!` | `Clj_core.Atom.*` |
 | `str`/`print`/`println`/`pr-str` | `Lg_rt.str` / `Lg_rt.print` / `Lg_rt.println` / `Lg_rt.pr_str` |
+| string lib: `subs` `split` `join` `trim` `triml` `trimr` `upper-case` `lower-case` `blank?` `includes?` `starts-with?` `ends-with?` `replace` | `String.*` / `Lg_rt` literal-string helpers — portable on every backend |
+| io/system: `slurp` `spit` `read-line` `argv` `env` `file-exists?` `sh` `now-ms` | inline channels/`Sys`/`Unix` — **native only** (melange emits `failwith`) |
+| regex-lite: `re-find` `re-matches` `re-seq` `re-split` `re-replace` | `Str.*` — native only; `re-*` take the pattern first, subject second |
 | heterogeneous literal | `Lg_rt.dyn` boxed value + checked `EUnbox` projections |
 | `alias/f a b` | `Alias.f a b` (cross-module call) |
 | `if`/`let`/`fn`/`do` | OCaml `if`/`let`/`fun`/sequencing, locals `__N`-renamed |

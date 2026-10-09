@@ -203,6 +203,66 @@ let flat_merge base ms =
 
 let no_match () = failwith "match: no clause matched"
 
+(* ---------- string / io helpers ----------
+   Pure-OCaml implementations (String/Sys/channels only) so the runtime
+   stays portable across native, bytecode, js_of_ocaml and melange.
+   Unix/Str-dependent builtins (sh, regex helpers) are emitted inline
+   by the compiler and guarded to native. *)
+
+let find_sub_from s sub i =
+  let n = String.length sub and sl = String.length s in
+  let rec scan i =
+    if i + n > sl then None
+    else if String.sub s i n = sub then Some i
+    else scan (i + 1)
+  in
+  scan i
+
+(* literal (non-regex) split *)
+let split_on sep s =
+  if String.length sep = 0 then [ s ]
+  else
+    let rec go i acc =
+      match find_sub_from s sep i with
+      | Some p -> go (p + String.length sep) (String.sub s i (p - i) :: acc)
+      | None -> List.rev (String.sub s i (String.length s - i) :: acc)
+    in
+    go 0 []
+
+let str_contains s sub = match find_sub_from s sub 0 with Some _ -> true | None -> false
+
+(* literal replace-all *)
+let str_replace_lit m rep s =
+  if String.length m = 0 then s
+  else
+    let b = Buffer.create (String.length s + 16) in
+    let rec go i =
+      match find_sub_from s m i with
+      | Some p ->
+        Buffer.add_substring b s i (p - i);
+        Buffer.add_string b rep;
+        go (p + String.length m)
+      | None ->
+        Buffer.add_substring b s i (String.length s - i);
+        Buffer.contents b
+    in
+    go 0
+
+let str_blank s = String.trim s = ""
+
+let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' || c = '\012'
+
+let triml s =
+  let n = String.length s in
+  let rec first i = if i < n && is_ws s.[i] then first (i + 1) else i in
+  let i = first 0 in
+  if i = 0 then s else String.sub s i (n - i)
+
+let trimr s =
+  let rec last i = if i >= 0 && is_ws s.[i] then last (i - 1) else i in
+  let i = last (String.length s - 1) in
+  if i < 0 then "" else String.sub s 0 (i + 1)
+
 (* bridges between a (Keyword.t, dyn) heterogeneous lg map (TMap (kw, any))
    and clj-core's (dyn, (dyn, dyn) nest) Map.t used by Map.get_in / assoc_in /
    update_in / select_keys on dyn maps *)
