@@ -15,10 +15,30 @@ let repr t = match Typ.dimp t with TVar _ -> TAny | u -> u
 let uid_ctr = ref 0
 let fresh_uid () = incr uid_ctr; !uid_ctr
 
-(* when set, emit OxCaml mode annotations: stack_ on non-escaping
-   allocations, local_ on non-escaping params/bindings, unique_ on
-   once-used owned bindings *)
+(* when set, emit OxCaml mode annotations. The conservative lowering:
+   `local_` is emitted on non-escaping params of primitive type — those
+   are the only annotations OxCaml accepts against un-annotated libraries
+   (local values cannot flow into global-parameter functions, and no
+   clj-core API declares @ local params yet). `stack_`/`unique_` are kept
+   as comments: stack_ only wraps direct allocation sites — never a call
+   like Vec.of_list — and the persistent structures it would mark have no
+   local-accepting consumers anyway; unique_ has no expression-level
+   syntax in OxCaml 5.2 and persistent collections are inherently aliased
+   rather than unique. *)
 let oxcaml = ref false
+
+(* primitive (unboxed-or-opaque-scalar) types whose values may safely be
+   local_ — arithmetic/comparison externals accept local arguments *)
+let is_prim_ty t =
+  match Typ.repr t with
+  | Typ.TInt | Typ.TFloat | Typ.TBool | Typ.TChar -> true
+  | _ -> false
+
+(* top-level defn names of the module being emitted — `local_` params
+   annotate only these: any other EFun may flow into a higher-order call
+   expecting global-param callbacks, and a nested `fn` could alias a
+   defn's name *)
+let topdef_names : (string, unit) Hashtbl.t = Hashtbl.create 31
 let melange = ref false
 
 let sanitize s = munge s
@@ -90,9 +110,14 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
        buf_add b ("(let rec " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ " = ")
      | None -> ());
     buf_add b "(fun ";
+    let fn_may_local =
+      match fn.Ast.fname with
+      | Some n -> Hashtbl.mem topdef_names n && not (Hashtbl.mem Modes.value_ref_names n)
+      | None -> false
+    in
     let pesc =
-      if !oxcaml then
-        (try List.map (fun p -> not (Modes.is_escaping_use p fn.Ast.body || Modes.occurs_in_result p fn.Ast.body)) fn.params
+      if !oxcaml && fn_may_local then
+        (try List.mapi (fun i p -> is_prim_ty p.Ast.bty && Modes.local_uses_ok p ~self_b:fn.Ast.fself ~self_name:fn.Ast.fname ~pindex:i fn.Ast.body) fn.params
          with _ -> List.map (fun _ -> false) fn.params)
       else []
     in
@@ -144,14 +169,15 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
          | Ast.Owned, false -> buf_add b "(* @owned *) "
          | _ -> ());
         buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
+        (* binding modes stay comments: `local_` on a let init only
+           compiles when every downstream consumer accepts locals — no
+           library declares that today — and `unique_` has no expression
+           syntax in OxCaml 5.2 *)
         (match bd.bmode, !oxcaml with
-         | Ast.Local, true -> buf_add b "(local_ "
-         | Ast.Owned, true -> buf_add b "(unique_ "
+         | Ast.Local, true -> buf_add b "(* local *) "
+         | Ast.Owned, true -> buf_add b "(* unique *) "
          | _ -> ());
         emit_expr b init;
-        (match bd.bmode, !oxcaml with
-         | Ast.Local, true | Ast.Owned, true -> buf_add b ")"
-         | _ -> ());
         buf_add b " in ")
       pairs;
     emit_expr b body;
@@ -161,11 +187,12 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; buf_add b (conv (List.nth tys i) a.ety (arg_str a))) es; buf_add b ")"
   | EVecLit es ->
     let el = match repr e.ety with TVec a -> a | _ -> TAny in
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
+    (* stack_ cannot wrap the of_list call — it is not an allocation
+       site, and its list argument must be global anyway *)
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
     buf_add b "(Clj_core.Vec.of_list [";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])";
-    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
+    buf_add b "])"
   | EListLit es ->
     let el = match repr e.ety with TList a -> a | _ -> TAny in
     buf_add b "[";
@@ -173,22 +200,20 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b "]"
   | EMapLit kes ->
     let kt, vt = match repr e.ety with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
     buf_add b "(Clj_core.Map.of_list [";
     List.iteri
       (fun i (k, v) ->
         if i > 0 then buf_add b "; ";
         buf_add b "("; emit_elem b kt k; buf_add b ", "; emit_elem b vt v; buf_add b ")")
       kes;
-    buf_add b "])";
-    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
+    buf_add b "])"
   | ESetLit es ->
     let el = match repr e.ety with TSet a -> a | _ -> TAny in
-    if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
+    if !oxcaml && e.emode = Ast.Local then buf_add b "(* stack *) ";
     buf_add b "(Clj_core.Set.of_list [";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
-    buf_add b "])";
-    if !oxcaml && e.emode = Ast.Local then buf_add b ")"
+    buf_add b "])"
   | EDynVec (se', bd, t, x) ->
     buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
     buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
@@ -1734,6 +1759,10 @@ let emit_module_body b (m : modl) =
     | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
   in
+  Hashtbl.reset topdef_names;
+  List.iter
+    (function TDef d -> Hashtbl.replace topdef_names d.tname () | _ -> ())
+    m.tops;
   List.iter (emit_def_group b) (groups [] m.tops);
   List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects
 
@@ -1838,6 +1867,7 @@ let emit_program (mods : modl list) : string =
           | _ -> ())
         m.tops)
     mods;
+  Modes.collect_value_refs_program mods;
   buf_add b "(* generated by lg — do not edit *)\n";
   buf_add b ("module Lg_rt = struct\n" ^ Embedded_runtime.lg_rt_src ^ "\nend\n");
   if !melange then buf_add b lg_node_src;
@@ -1863,6 +1893,7 @@ let emit_units (mods : modl list) : (string * string * string list) list =
           | _ -> ())
         m.tops)
     mods;
+  Modes.collect_value_refs_program mods;
   let unit_of = Hashtbl.create 16 in
   List.iter (fun m -> Hashtbl.replace unit_of m.mname (String.lowercase_ascii m.ocaml_name)) mods;
   ("lg_rt", Embedded_runtime.lg_rt_src, [])

@@ -256,9 +256,17 @@ All of docs/v2.md landed (detail lives there):
 - **FBIP builder lowering** — provably single-use collection literals
   (unique-owner chains of conj/assoc/dissoc/pop/update/into/disj) emit
   `Lg_rt` growable builders + one freeze instead of persistent copies.
-- **OxCaml emit** — `--backend=oxcaml` lowers `Local` literals to
-  `stack_`, lets to `(local_ …)`/`(unique_ …)`, non-escaping params to
-  `(local_ p)`; vanilla emit unchanged.
+- **OxCaml emit** — `--backend=oxcaml` is verified end-to-end against a
+  real OxCaml (flambda2) switch (test/oxcaml_smoke.sh, 28/28 programs
+  compile and run). The conservative lowering: `local_` annotates
+  primitive-typed params of top-level defns whose uses stay in
+  local-accepting positions (arithmetic builtins, self-recursion, `if`
+  conditions) — functions referenced as values are never annotated
+  because higher-order callees expect global-param callbacks. `stack_` /
+  `unique_` / binding `local_` stay comments: `stack_` only wraps direct
+  allocation sites (never a `Vec.of_list` call) and no clj-core API
+  declares `@ local` params yet, `unique_` has no expression syntax in
+  OxCaml 5.2 and persistent collections are aliased not unique.
 - **`--strict`** — heterogeneous literals require `^any`-family
   annotation; every `any` in a program is one the author wrote.
 - **Named `fn` self-recursion, `case`, `defrecord` (map-backed ctor +
@@ -267,9 +275,12 @@ All of docs/v2.md landed (detail lives there):
   and emits `let rec`; `loop`/`recur` was deliberately dropped (named
   `fn` covers it; OCaml TCO is native).
 
-Deferred: nominal `TCon` record types (defrecord stays map-backed),
-OxCaml end-to-end build (no OxCaml switch on dev machines — emit is
-gated on `LG_OXCAML=1` per v2.md).
+Deferred: nominal `TCon` record types (defrecord stays map-backed);
+deeper OxCaml coverage needs a clj-core borrow-annotation pass (`@ local`
+on non-retaining params) so collection `stack_`/`local_` can flow —
+see §OxCaml notes. Building clj-core/rrbvec under OxCaml also requires
+stripping their `melange`/`js_of_ocaml` stanzas (the ox patch set) plus
+two locality fixes (`Seq.iter` partial-application, `List.mem` mli mode).
 
 ## 11. Standard library + semantic notes
 

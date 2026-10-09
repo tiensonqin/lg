@@ -244,9 +244,15 @@ let () =
              Printf.printf "wrote %s.js (+ %s.assets) — node %s.js to run\n" exe exe exe
            | Some "build" ->
              let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
-             if !backend = "oxcaml" then
-               Printf.eprintf "lg: oxcaml backend — building %s requires an OxCaml-capable ocamlfind (flambda2 toolchain); emitting annotated source anyway
-%!" out_ml;
+             if !backend = "oxcaml" then begin
+               (* the build must run inside an OxCaml opam switch: probe
+                  ocamlopt's flambda2 flag rather than guessing *)
+               let ox =
+                 Sys.command "ocamlfind ocamlopt -config 2>/dev/null | grep -q 'flambda2: true'" = 0
+               in
+               if not ox then
+                 Printf.eprintf "lg: warning: ocamlfind is not an OxCaml toolchain — `local_`/`stack_` annotations will not compile (run inside `eval $(opam env --switch=oxcaml)`)\n%!"
+             end;
              let pkgs =
                if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
                  "clj-core,rrbvec,unix,str,ctypes.foreign"

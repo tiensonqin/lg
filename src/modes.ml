@@ -139,6 +139,103 @@ and is_escaping_use b body : bool =
 let param_escapes (fn : func) : bool list =
   List.map (fun p -> is_escaping_use p fn.body || occurs_in_result p fn.body) fn.params
 
+(* OxCaml lowering aid: may a primitive-typed param be emitted `local_`?
+   Every use of p must sit in a position that accepts local values —
+   arithmetic/comparison builtin arguments, a self-recursive call (whose
+   params will themselves be local_), or an if-condition. Collection
+   literals, boxing, atoms, closure capture, and foreign calls all demand
+   global, so p occurring anywhere else disqualifies it. *)
+let arith_builtins =
+  [ "+"; "-"; "*"; "/"; "mod"; "abs"; "min"; "max"; "<"; "<="; ">";
+    ">="; "="; "<>"; "not"; "neg"; "float"; "int"; "succ"; "pred";
+    "float_of_int"; "int_of_float" ]
+
+let local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : string option)
+    ~(pindex : int) (body : expr) : bool =
+  let bad = ref false in
+  let callee_is_self ce =
+    match ce.desc with
+    | ELocal b' -> (match self_b with Some sb -> b'.bid = sb.bid | None -> false)
+    | EGlobal (_, n, _) -> self_name = Some n
+    | _ -> false
+  in
+  let rec go safe_ctx e =
+    if !bad then ()
+    else
+      match e.desc with
+      | ELocal b' when b'.bid = p.bid -> if not safe_ctx then bad := true
+      | EFun fn ->
+        (* capture of a local would store it in a heap closure *)
+        if occurs_anywhere p fn.body then bad := true
+      | ECall (ce, args) ->
+        if occurs_anywhere p ce then bad := true
+        else
+          List.iteri
+            (fun i a ->
+              let safe =
+                match ce.desc with
+                | EBuiltin n -> List.mem n arith_builtins
+                | _ -> callee_is_self ce && i = pindex
+              in
+              go safe a)
+            args
+      | EIf (c, t, x) -> go true c; go false t; go false x
+      | EDo es -> List.iter (go false) es
+      | ELet (pairs, b) ->
+        List.iter (fun (_, i) -> go false i) pairs;
+        go false b
+      | EMatchOpt (s, _, t, x) -> go false s; go false t; go false x
+      | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) ->
+        go false s; go false t; go false x
+      | _ -> if occurs_anywhere p e then bad := true
+  in
+  go false body;
+  not !bad
+
+(* globals and local binders referenced as first-class values (outside a
+   callee position) — such functions cannot carry `local_` params because
+   higher-order consumers (Seq.map, Vec.map, ...) expect global-param
+   callbacks. Names + binder ids tracked separately. *)
+let value_ref_names : (string, unit) Hashtbl.t = Hashtbl.create 31
+let value_ref_bids : (int, unit) Hashtbl.t = Hashtbl.create 31
+
+let rec collect_value_refs e =
+  match e.desc with
+  | ELocal b -> Hashtbl.replace value_ref_bids b.bid ()
+  | EGlobal (_, n, _) -> Hashtbl.replace value_ref_names n ()
+  | EFun fn -> collect_value_refs fn.body
+  | ECall (ce, args) ->
+    (* the callee itself is a callee-position use; args are value uses *)
+    (match ce.desc with EFun fn -> collect_value_refs fn.body | _ -> ());
+    List.iter collect_value_refs args
+  | EIf (c, t, x) -> collect_value_refs c; collect_value_refs t; collect_value_refs x
+  | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es ->
+    List.iter collect_value_refs es
+  | EMapLit kes -> List.iter (fun (k, v) -> collect_value_refs k; collect_value_refs v) kes
+  | ELet (pairs, b) ->
+    List.iter (fun (_, i) -> collect_value_refs i) pairs;
+    collect_value_refs b
+  | EMatchOpt (s, _, t, x) | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) ->
+    collect_value_refs s; collect_value_refs t; collect_value_refs x
+  | EVariant (s, _, _, t, x) -> collect_value_refs s; collect_value_refs t; collect_value_refs x
+  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> collect_value_refs e
+  | EOpt (Some e) -> collect_value_refs e
+  | _ -> ()
+
+let collect_value_refs_program (mods : modl list) =
+  Hashtbl.reset value_ref_names;
+  Hashtbl.reset value_ref_bids;
+  List.iter
+    (fun m ->
+      List.iter
+        (fun t ->
+          match t with
+          | TDef d -> collect_value_refs d.texpr
+          | _ -> ())
+        m.tops;
+      List.iter collect_value_refs m.effects)
+    mods
+
 let record_escapes ocaml_mod (d : topdef) =
   match d.texpr.desc with
   | EFun fn ->

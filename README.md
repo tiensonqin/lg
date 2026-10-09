@@ -152,9 +152,14 @@ unresolved), E2xx reader.
   unique-owner `conj`/`assoc`/`dissoc`/`pop`/`update`/`into`/`disj`
   chains — emit `Lg_rt` growable builders plus a single freeze instead
   of persistent-structure copies. Everything else stays persistent.
-- **OxCaml emit (`--backend=oxcaml`).** `Local` literals → `stack_`,
-  let bindings → `(local_ …)` / `(unique_ …)`, non-escaping params →
-  `(local_ p)`. Vanilla `ocaml` stays the default backend.
+- **OxCaml emit (`--backend=oxcaml`).** Verified end-to-end on an
+  OxCaml (flambda2) switch — emit → `ocamlfind ocamlopt` → run, 28/28
+  test programs green (test/oxcaml_smoke.sh). The lowering is
+  conservative: non-escaping primitive params of top-level defns emit
+  real `local_` annotations (checked by the OxCaml typechecker); coll
+  `stack_`/`unique_`/binding `local_` remain comments until clj-core's
+  borrow surface (`@ local` params) exists. Vanilla `ocaml` stays the
+  default backend.
 - **wasm (`--backend=wasm`).** `ocamlc` bytecode → `wasm_of_ocaml`
   → `<exe>.js` + `<exe>.assets/*.wasm`, runnable under `node`. Verified:
   pure language, collections, lazy seqs, `println`, `env`,
