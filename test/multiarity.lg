@@ -1,0 +1,21 @@
+(ns multiarity-test)
+
+;; multi-arity defn: dispatch by argument count
+(defn greet
+  ([x] (str "hi " x))
+  ([x y] (str "hi " x " and " y)))
+
+(println (greet "world"))
+(println (greet "a" "b"))
+
+;; multi-arity with different types per arity
+(defn area
+  ([r] (*. 3.0 r r))
+  ([w h] (*. w h)))
+(println (str "area " (area 2.0) " " (area 3.0 4.0)))
+
+;; recursion within an arity
+(defn sum-to
+  ([n] (sum-to n 0))
+  ([n acc] (if (= n 0) acc (sum-to (- n 1) (+ acc n)))))
+(println (str "sum-to " (sum-to 10)))

@@ -1,0 +1,48 @@
+(ns match-test)
+
+;; literal patterns on int
+(defn fizz ^(fn [int] string) [n]
+  (match n
+    0 "zero"
+    1 "one"
+    _ "other"))
+(println (str "fizz " (fizz 0) " " (fizz 1) " " (fizz 9)))
+
+;; string literal patterns
+(defn greet ^(fn [string] string) [s]
+  (match s
+    "hi" "hello"
+    "bye" "farewell"
+    _ "?"))
+(println (str "greet " (greet "hi") " " (greet "x")))
+
+;; vec patterns on a typed vec
+(defn head2 ^(fn [(vec int)] int) [v]
+  (match v
+    [a b] (+ a b)
+    [a] a
+    _ 0))
+(println (str "head2 " (head2 [1 2]) " " (head2 [7]) " " (head2 [1 2 3])))
+
+;; option patterns
+(defn optinc ^(fn [(option int)] int) [o]
+  (match o
+    (Some x) (inc x)
+    None 0))
+(println (str "optinc " (optinc (Some 5)) " " (optinc None)))
+
+;; match on a dyn (any) value
+(defn describe [^any x]
+  (match x
+    0 "zero-int"
+    [a b] "pair"
+    {:keys [id]} "map-with-id"
+    _ "other"))
+(println (str "dyn " (describe 0) " " (describe [1 2]) " " (describe {:id 9}) " " (describe "s")))
+
+;; nested vec pattern
+(defn mtx ^(fn [(vec (vec int))] int) [m]
+  (match m
+    [[a b] [c d]] (+ a b c d)
+    _ -1))
+(println (str "mtx " (mtx [[1 2] [3 4]])))

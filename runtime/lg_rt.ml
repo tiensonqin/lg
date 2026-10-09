@@ -72,7 +72,7 @@ type dyn =
   | DOpt of dyn option
   | DList of dyn list
   | DVec of dyn Clj_core.Vec.t
-  | DMap of (dyn, dyn) Clj_core.Map.t
+  | DMap of (dyn, (dyn, dyn) Clj_core.Map.nest) Clj_core.Map.t
   | DSet of dyn Clj_core.Set.t
 
 let rec str_dyn = function
@@ -88,8 +88,13 @@ let rec str_dyn = function
   | DOpt None -> "nil"
   | DList xs -> str_list str_dyn xs
   | DVec v -> str_vec str_dyn v
-  | DMap m -> str_map str_dyn str_dyn m
+  | DMap m -> str_map str_dyn str_nest_dyn m
   | DSet s -> str_set str_dyn s
+
+and str_nest_dyn n =
+  match n with
+  | Clj_core.Map.Leaf d -> str_dyn d
+  | Clj_core.Map.Nest m -> str_map str_dyn str_nest_dyn m
 
 let as_int = function DInt i -> i | _ -> invalid_arg "dyn: expected int"
 let as_float = function DFloat x -> x | DInt i -> float_of_int i | _ -> invalid_arg "dyn: expected float"
@@ -106,3 +111,58 @@ let as_map = function DMap m -> m | _ -> invalid_arg "dyn: expected map"
 let as_set = function DSet s -> s | _ -> invalid_arg "dyn: expected set"
 
 
+let no_match () = failwith "match: no clause matched"
+
+(* bridges between a (Keyword.t, dyn) heterogeneous lg map (TMap (kw, any))
+   and clj-core's (dyn, (dyn, dyn) nest) Map.t used by Map.get_in / assoc_in /
+   update_in / select_keys on dyn maps *)
+let nest_map_of_dyn_map m =
+  List.fold_left
+    (fun acc (k, v) ->
+      let n = match v with DMap s -> Clj_core.Map.Nest s | d -> Clj_core.Map.Leaf d in
+      Clj_core.Map.assoc acc (DKw k) n)
+    (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
+
+let dyn_map_of_nest_map m =
+  List.fold_left
+    (fun acc (k, n) ->
+      match k with
+      | DKw kw ->
+        let d = match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap s in
+        Clj_core.Map.assoc acc kw d
+      | _ -> acc)
+    (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
+
+let interpose sep xs =
+  match xs with [] -> [] | x :: rest -> x :: List.concat_map (fun y -> [ sep; y ]) rest
+
+let butlast xs = match List.rev xs with [] -> [] | _ :: t -> List.rev t
+let last_opt xs = match xs with [] -> None | _ -> Some (List.nth xs (List.length xs - 1))
+let second_opt xs = match xs with _ :: x :: _ -> Some x | _ -> None
+
+let rec take_while f xs =
+  match xs with [] -> [] | x :: t -> if f x then x :: take_while f t else []
+
+let rec drop_while f xs =
+  match xs with [] -> [] | x :: t -> if f x then drop_while f t else xs
+
+let distinct xs =
+  let rec go seen = function
+    | [] -> List.rev seen
+    | x :: t -> if List.mem x seen then go seen t else go (x :: seen) t
+  in
+  go [] xs
+
+let frequencies xs =
+  List.fold_left
+    (fun m x -> Clj_core.Map.assoc m x (match Clj_core.Map.get m x with Some n -> n + 1 | None -> 1))
+    (Clj_core.Map.of_list []) xs
+
+let group_by f xs =
+  List.fold_left
+    (fun m x ->
+      let k = f x in
+      Clj_core.Map.assoc m k (match Clj_core.Map.get m k with Some vs -> vs @ [ x ] | None -> [ x ]))
+    (Clj_core.Map.of_list []) xs
+
+let dyn_truthy = function DBool b -> b | DUnit -> false | DOpt None -> false | _ -> true

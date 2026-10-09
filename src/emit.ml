@@ -37,8 +37,8 @@ let cur_mod = ref ""
 
 let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   match e.desc with
-  | EInt i -> buf_add b (string_of_int i)
-  | EFloat x -> buf_add b (ocaml_float x)
+  | EInt i -> buf_add b (if i < 0 then "(" ^ string_of_int i ^ ")" else string_of_int i)
+  | EFloat x -> buf_add b (if x < 0. then "(" ^ ocaml_float x ^ ")" else ocaml_float x)
   | EBool x -> buf_add b (string_of_bool x)
   | EChar c -> buf_add b (ocaml_char c)
   | EStr s -> buf_add b (ocaml_str s)
@@ -60,7 +60,10 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b ")"
   | ECall (ce, args) -> emit_call b e.ety ce args
   | EIf (c, t, x) ->
-    buf_add b "(if "; emit_expr b c; buf_add b " then ";
+    if is_any c.ety then buf_add b "(if (Lg_rt.dyn_truthy " else buf_add b "(if ";
+    emit_expr b c;
+    if is_any c.ety then buf_add b ")" else ();
+    buf_add b " then ";
     emit_expr b t; buf_add b " else "; emit_expr b x; buf_add b ")"
   | EDo es ->
     buf_add b "(ignore (";
@@ -106,6 +109,15 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     buf_add b "(Clj_core.Set.of_list [";
     List.iteri (fun i x -> if i > 0 then buf_add b "; "; emit_elem b el x) es;
     buf_add b "])"
+  | EDynVec (se', bd, t, x) ->
+    buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
+    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+  | EDynMap (se', bd, t, x) ->
+    buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DMap " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
+    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+  | EOpt (Some e) -> buf_add b ("(Some " ^ arg_str e ^ ")")
+  | EOpt None -> buf_add b "None"
+  | EBox e -> buf_add b (box_deep e.ety (arg_str e))
   | EUnbox (e', t') -> buf_add b ("(" ^ unbox_fn t' ^ " " ^ arg_str e' ^ ")")
   | EUnboxOpt (e', t') ->
     buf_add b ("(match " ^ arg_str e' ^ " with Some d -> Some (" ^ unbox_fn t' ^ " d) | None -> None)")
@@ -150,6 +162,10 @@ and printer_call t e =
   | TMap (k, v) -> "(Lg_rt.str_map " ^ gen_printer k ^ " " ^ gen_printer v ^ " " ^ es ^ ")"
   | TSet a -> "(Lg_rt.str_set " ^ gen_printer a ^ " " ^ es ^ ")"
   | TOption a -> "(Lg_rt.str_opt " ^ gen_printer a ^ " " ^ es ^ ")"
+  | TTuple ts ->
+    let vs = List.mapi (fun i _ -> "t" ^ string_of_int i) ts in
+    let ps = List.map2 (fun v t -> "(" ^ gen_printer t ^ " " ^ v ^ ")") vs ts in
+    "(let (" ^ String.concat ", " vs ^ ") = " ^ es ^ " in \"(\" ^ String.concat \", \" [" ^ String.concat "; " ps ^ "] ^ \")\")"
   | TAny -> "(Lg_rt.str_dyn " ^ es ^ ")"
   | _ -> "\"<val>\""
 and gen_printer t : string =
@@ -163,7 +179,10 @@ and gen_printer t : string =
     | TMap (k, v) -> "(Lg_rt.str_map " ^ go k ^ " " ^ go v ^ ")"
     | TSet a -> "(Lg_rt.str_set " ^ go a ^ ")"
     | TOption a -> "(Lg_rt.str_opt " ^ go a ^ ")"
-    | TTuple _ -> "(fun _ -> \"<tuple>\")"
+    | TTuple ts ->
+      let vs = List.mapi (fun i _ -> "t" ^ string_of_int i) ts in
+      let ps = List.map2 (fun v t -> "(" ^ go t ^ " " ^ v ^ ")") vs ts in
+      "(fun t -> let (" ^ String.concat ", " vs ^ ") = t in \"(\" ^ String.concat \", \" [" ^ String.concat "; " ps ^ "] ^ \")\")"
     | TAny -> "Lg_rt.str_dyn"
     | _ -> "(fun _ -> \"<val>\")"
   in
@@ -186,7 +205,51 @@ and unbox_fn t =
   | TList _ -> "Lg_rt.as_list" | TVec _ -> "Lg_rt.as_vec" | TMap _ -> "Lg_rt.as_map"
   | TSet _ -> "Lg_rt.as_set" | _ -> "Lg_rt.as_string"
 
-and box_of e = "(Lg_rt." ^ dyn_ctor e.ety ^ " " ^ arg_str e ^ ")"
+(* deep box: a homogeneous collection crossed into `any` is re-boxed
+   element-wise so the OCaml type is the closed Lg_rt.dyn *)
+and box_deep ety es =
+  match Typ.repr ety with
+  | TVec el -> "(Lg_rt.DVec (Clj_core.Vec.map (fun x -> " ^ box_deep el "x" ^ ") " ^ es ^ "))"
+  | TList el -> "(Lg_rt.DList (List.map (fun x -> " ^ box_deep el "x" ^ ") " ^ es ^ "))"
+  | TSet el -> "(Lg_rt.DSet (Clj_core.Set.of_list (List.map (fun x -> " ^ box_deep el "x" ^ ") (Clj_core.Set.to_list " ^ es ^ "))))"
+  | TMap _ -> "(Lg_rt.DMap " ^ nest_map_of ety es ^ ")"
+  | TOption a -> "(Lg_rt.DOpt (match " ^ es ^ " with Some x -> Some (" ^ box_deep a "x" ^ ") | None -> None))"
+  | TTuple _ | TFun _ -> "(Lg_rt.DStr \"<fn>\")"
+  | TAny -> es
+  | _ -> "(Lg_rt." ^ dyn_ctor ety ^ " " ^ es ^ ")"
+
+and box_of e = box_deep e.ety (arg_str e)
+
+(* a statically-typed map re-built as clj-core's (dyn, (dyn,dyn) nest) map —
+   the shape Map.get_in / assoc_in / update_in / select_keys on dyn maps take,
+   and the payload of Lg_rt.DMap *)
+and nest_map_of ety es =
+  match Typ.repr ety with
+  | TMap (k, v) ->
+    "(List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m " ^ box_deep k "k" ^ " " ^ box_nest v "v"
+    ^ ") (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq " ^ es ^ ")))"
+  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> m | _ -> Clj_core.Map.of_list [])"
+  | _ -> "(Clj_core.Map.of_list [])"
+
+(* a map value in a nest map: sub-maps are Nest, leaves are Leaf dyn *)
+and box_nest ety es =
+  match Typ.repr ety with
+  | TMap _ -> "(Clj_core.Map.Nest " ^ nest_map_of ety es ^ ")"
+  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> Clj_core.Map.Nest m | d -> Clj_core.Map.Leaf d)"
+  | _ -> "(Clj_core.Map.Leaf " ^ box_deep ety es ^ ")"
+
+(* the dyn-map arg of get-in / assoc-in / select-keys *)
+and dyn_map_arg e = nest_map_of e.ety (arg_str e)
+
+(* `Some dyn` lookup on a (dyn,(dyn,dyn)nest) map, keyed by a dyn *)
+and dyn_map_get mstr kdyn =
+  "(match Clj_core.Map.get " ^ mstr ^ " " ^ kdyn
+  ^ " with Some (Clj_core.Map.Leaf d) -> Some d | Some (Clj_core.Map.Nest s) -> Some (Lg_rt.DMap s) | None -> None)"
+
+(* unwrapped lookup with default *)
+and dyn_map_get_or dstr mstr kdyn =
+  "(match Clj_core.Map.get " ^ mstr ^ " " ^ kdyn
+  ^ " with Some (Clj_core.Map.Leaf d) -> d | Some (Clj_core.Map.Nest s) -> Lg_rt.DMap s | None -> " ^ dstr ^ ")"
 and is_any t = match Typ.repr t with TAny -> true | _ -> false
 and as_dyn_list e =
   match Typ.repr e.ety with
@@ -317,6 +380,11 @@ and emit_builtin_call b ret name args =
       | `Set -> buf_add b ("(Clj_core.Set.contains_ " ^ a 0 ^ " " ^ a 1 ^ ")")
       | `Map -> buf_add b ("(Clj_core.Map.contains_ " ^ a 0 ^ " " ^ a 1 ^ ")")
       | `Str -> buf_add b "(failwith \"contains? on string\")")
+   | "get" when (match repr (t 0) with TAny -> true | _ -> false) ->
+     let mstr = dyn_map_arg (List.nth args 0) in
+     let kd = box_of (List.nth args 1) in
+     if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) mstr kd)
+     else buf_add b (dyn_map_get mstr kd)
    | "get" ->
      (match coll with
       | `Vec ->
@@ -335,8 +403,14 @@ and emit_builtin_call b ret name args =
         if List.length args = 3 then buf_add b ("(if Clj_core.Set.contains_ " ^ a 0 ^ " " ^ a 1 ^ " then " ^ a 1 ^ " else " ^ a 2 ^ ")")
         else buf_add b ("(if Clj_core.Set.contains_ " ^ a 0 ^ " " ^ a 1 ^ " then Some " ^ a 1 ^ " else None)")
       | `Map ->
-        if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 0 ^ " " ^ a 1 ^ ")")
-        else buf_add b ("(Clj_core.Map.get " ^ a 0 ^ " " ^ a 1 ^ ")")
+        (match repr (t 0) with
+         | TMap (k, _) when is_any k ->
+           let kd = box_of (List.nth args 1) in
+           if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) (a 0) kd)
+           else buf_add b (dyn_map_get (a 0) kd)
+         | _ ->
+           if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 0 ^ " " ^ a 1 ^ ")")
+           else buf_add b ("(Clj_core.Map.get " ^ a 0 ^ " " ^ a 1 ^ ")"))
       | `Str -> buf_add b "(failwith \"get on string\")")
    | "nth" ->
      (match coll with
@@ -389,8 +463,18 @@ and emit_builtin_call b ret name args =
    | "vals" -> buf_add b ("(List.of_seq (Clj_core.Map.vals " ^ a 0 ^ "))")
    | "merge" -> buf_add b (List.fold_left (fun acc i -> "(Clj_core.Map.merge " ^ acc ^ " " ^ a i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
    | "kw-get" ->
-     if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
-     else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")")
+     let kd = "(Lg_rt.DKw " ^ a 0 ^ ")" in
+     (match repr (t 1) with
+      | TMap (k, _) when is_any k ->
+        if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) (a 1) kd)
+        else buf_add b (dyn_map_get (a 1) kd)
+      | TAny ->
+        let mstr = dyn_map_arg (List.nth args 1) in
+        if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) mstr kd)
+        else buf_add b (dyn_map_get mstr kd)
+      | _ ->
+        if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
+        else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")"))
    | "vec" -> buf_add b ("(Clj_core.Vec.of_list " ^ as_list (List.nth args 0) ^ ")")
    | "peek" -> buf_add b ("(Clj_core.Vec.peek " ^ a 0 ^ ")")
    | "pop" -> buf_add b ("(Clj_core.Vec.pop " ^ a 0 ^ ")")
@@ -431,9 +515,13 @@ and emit_builtin_call b ret name args =
       | `Vec -> buf_add b ("(Clj_core.Vec.filter " ^ a 0 ^ " " ^ a 1 ^ ")")
       | _ -> buf_add b ("(Clj_core.Vec.of_list (List.filter " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")))"))
    | "into" ->
+     let src_items =
+       let el = match Typ.repr (t 0) with TVec x -> x | TList x -> x | TSet x -> x | _ -> TUnit in
+       if is_any el then as_dyn_list (List.nth args 1) else as_list (List.nth args 1)
+     in
      (match coll with
-      | `Vec -> buf_add b ("(List.fold_left Clj_core.Vec.conj " ^ a 0 ^ " " ^ as_dyn_list (List.nth args 1) ^ ")")
-      | `Set -> buf_add b ("(List.fold_left Clj_core.Set.conj " ^ a 0 ^ " " ^ as_dyn_list (List.nth args 1) ^ ")")
+      | `Vec -> buf_add b ("(List.fold_left Clj_core.Vec.conj " ^ a 0 ^ " " ^ src_items ^ ")")
+      | `Set -> buf_add b ("(List.fold_left Clj_core.Set.conj " ^ a 0 ^ " " ^ src_items ^ ")")
       | `Map ->
         buf_add b ("(List.fold_left (fun m e -> match Clj_core.Vec.to_list e with [k; v] -> Clj_core.Map.conj m (k, v) | (k, v) -> Clj_core.Map.conj m (k, v) | _ -> m) " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
       | `List -> buf_add b ("(" ^ as_list (List.nth args 1) ^ " @ " ^ a 0 ^ ")")
@@ -463,6 +551,64 @@ and emit_builtin_call b ret name args =
      let av = match repr (t 0) with TAtom p -> p | _ -> TAny in
      if is_any av then buf_add b ("(Clj_core.Atom.reset_bang " ^ a 0 ^ " " ^ box_of (List.nth args 1) ^ ")")
      else buf_add b ("(Clj_core.Atom.reset_bang " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "no-match" -> buf_add b "(Lg_rt.no_match ())"
+   | "dyn-eq" -> buf_add b ("(" ^ a 0 ^ " = " ^ box_of (List.nth args 1) ^ ")")
+   | "select-keys" ->
+     (match Typ.repr (t 0) with
+      | TMap (k, _) when is_any k ->
+        (* already a nest map: keys are dyn — box the kw list *)
+        buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ a 0
+                   ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))")
+      | TMap _ ->
+        buf_add b ("(Clj_core.Map.select_keys " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+      | _ ->
+        buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ dyn_map_arg (List.nth args 0)
+                   ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))"))
+   | "update" -> buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (" ^ a 2 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1 ^ " with Some uv__ -> uv__ | None -> failwith \"update: missing key\")))")
+   | "get-in" | "assoc-in" ->
+     let ks_arg = List.nth args 1 in
+     (* clj-core's get_in/assoc_in walk 'k keys of the nest map — dyn here —
+        so keyword paths are boxed to DKw and dyn paths pass through *)
+     let kw_list =
+       match repr ks_arg.ety with
+       | TList el | TVec el when is_any el -> as_list ks_arg
+       | _ -> "(List.map (fun k -> Lg_rt.DKw k) " ^ as_list ks_arg ^ ")"
+     in
+     if name = "get-in" then
+       buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
+                  ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap s)) | None -> None)")
+     else
+       let v_arg = List.nth args 2 in
+       let boxed = if is_any v_arg.ety then arg_str v_arg else box_of v_arg in
+       buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in " ^ dyn_map_arg (List.nth args 0)
+                  ^ " " ^ kw_list ^ " (Clj_core.Map.Leaf " ^ boxed ^ ")))")
+   | "comp" -> buf_add b ("(fun x__ -> " ^ a 0 ^ " (" ^ a 1 ^ " x__))")
+   | "juxt" -> buf_add b ("(fun x__ -> (" ^ a 0 ^ " x__, " ^ a 1 ^ " x__))")
+   | "partial" ->
+     buf_add b ("(fun x__ -> (" ^ a 0 ^ String.concat "" (List.init (List.length args - 1) (fun i -> " " ^ a (i + 1))) ^ " x__))")
+   | "mapcat" -> buf_add b ("(List.concat_map " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "interpose" -> buf_add b ("(Lg_rt.interpose " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "reverse" ->
+     (match coll with
+      | `Vec -> buf_add b ("(Clj_core.Vec.of_list (List.rev (Clj_core.Vec.to_list " ^ a 0 ^ ")))")
+      | _ -> buf_add b ("(List.rev " ^ a 0 ^ ")"))
+   | "distinct" -> buf_add b ("(Lg_rt.distinct " ^ as_list (List.nth args 0) ^ ")")
+   | "second" -> buf_add b ("(Lg_rt.second_opt " ^ as_list (List.nth args 0) ^ ")")
+   | "last" -> buf_add b ("(Lg_rt.last_opt " ^ as_list (List.nth args 0) ^ ")")
+   | "butlast" -> buf_add b ("(Lg_rt.butlast " ^ as_list (List.nth args 0) ^ ")")
+   | "min" -> buf_add b ("(Stdlib.min " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "max" -> buf_add b ("(Stdlib.max " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "every?" -> buf_add b ("(List.for_all " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "some" -> buf_add b ("(List.exists " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "take-while" -> buf_add b ("(Lg_rt.take_while " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "drop-while" -> buf_add b ("(Lg_rt.drop_while " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "zipmap" -> buf_add b ("(Clj_core.Map.of_list (List.combine " ^ as_list (List.nth args 0) ^ " " ^ as_list (List.nth args 1) ^ "))")
+   | "sort" ->
+     if List.length args = 2 then buf_add b ("(List.sort " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+     else buf_add b ("(List.sort Stdlib.compare " ^ as_list (List.nth args 0) ^ ")")
+   | "sort-by" -> buf_add b ("(List.sort (fun a b -> Stdlib.compare (" ^ a 0 ^ " a) (" ^ a 0 ^ " b)) " ^ as_list (List.nth args 1) ^ ")")
+   | "group-by" -> buf_add b ("(Lg_rt.group_by " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "frequencies" -> buf_add b ("(Lg_rt.frequencies " ^ as_list (List.nth args 0) ^ ")")
    | "swap!" -> buf_add b ("(Clj_core.Atom.swap_bang " ^ a 0 ^ " " ^ a 1 ^ ")")
    | "some?" -> buf_add b ("(" ^ a 0 ^ " <> None)")
    | "none?" -> buf_add b ("(" ^ a 0 ^ " = None)")
@@ -470,7 +616,18 @@ and emit_builtin_call b ret name args =
 
 and emit_apply args =
   let f = arg_str (List.nth args 0) and xs = arg_str (List.nth args 1) in
-  match repr (List.nth args 0).ety with
+  match (List.nth args 0).desc with
+  | EBuiltin ("+" | "+." | "*" | "*." as op) ->
+    (* variadic arithmetic: (apply + xs) folds *)
+    let o = if String.contains op '.' then "( " ^ op ^ " )" else "( " ^ op ^ " )" in
+    let z = if String.contains op '.' then "0." else (if op = "*" then "1" else "0") in
+    "(List.fold_left " ^ o ^ " " ^ z ^ " " ^ xs ^ ")"
+  | EBuiltin ("-" | "-." | "/" | "/." as op) ->
+    let o = "( " ^ op ^ " )" in
+    let z = if String.contains op '.' then "0." else "0" in
+    "(match " ^ xs ^ " with [] -> " ^ z ^ " | x :: r -> List.fold_left " ^ o ^ " x r)"
+  | _ ->
+  (match repr (List.nth args 0).ety with
   | TFun (ts, _) ->
     let n = List.length ts in
     let last_is_list = match repr (List.nth ts (n - 1)) with TList _ -> true | _ -> false in
@@ -486,7 +643,7 @@ and emit_apply args =
       ^ "] -> " ^ f ^ " "
       ^ String.concat " " (List.init n (fun i -> Printf.sprintf "a%d" i))
       ^ " | _ -> failwith \"apply: arity\")"
-  | _ -> "(failwith \"apply\")"
+  | _ -> "(failwith \"apply\")")
 
 and emit_builtin_value name =
   match name with
@@ -504,6 +661,10 @@ and emit_builtin_value name =
   | "str" -> "(fun _ -> \"\")" | "println" -> "print_endline" | "print" -> "print_string"
   | "atom" -> "Clj_core.Atom.atom" | "deref" -> "Clj_core.Atom.deref"
   | "reset!" -> "Clj_core.Atom.reset_bang" | "swap!" -> "Clj_core.Atom.swap_bang"
+  | "comp" -> "(fun f g x -> f (g x))" | "juxt" -> "(fun f g x -> (f x, g x))"
+  | "mapcat" -> "List.concat_map" | "reverse" -> "List.rev" | "sort" -> "List.sort"
+  | "every?" -> "List.for_all" | "some" -> "List.exists" | "min" -> "Stdlib.min" | "max" -> "Stdlib.max"
+  | "keys" -> "(fun m -> List.of_seq (Clj_core.Map.keys m))" | "vals" -> "(fun m -> List.of_seq (Clj_core.Map.vals m))"
   | _ -> "(fun _ -> failwith \"builtin as value: " ^ name ^ "\")"
 
 let emit_topdef b (d : topdef) =
@@ -516,10 +677,53 @@ let emit_topdef b (d : topdef) =
   emit_expr b d.texpr;
   buf_add b "\n"
 
+(* Consecutive defs named `x__a<N>` are one multi-arity fn; emit them as a
+   single `let rec .. and ..` group so arities can call each other. *)
+let arity_root n =
+  let ln = String.length n in
+  let rec suffix_ok i =
+    i = ln || (n.[i] >= '0' && n.[i] <= '9' && suffix_ok (i + 1))
+  in
+  let rec find i =
+    if i > ln - 3 then None
+    else if n.[i] = '_' && n.[i + 1] = '_' && n.[i + 2] = 'a' && i + 3 < ln && suffix_ok (i + 3)
+    then Some (String.sub n 0 i)
+    else find (i + 1)
+  in
+  find 0
+
+let emit_def_group b ds =
+  match ds with
+  | [] -> ()
+  | [ d ] -> emit_topdef b d
+  | ds ->
+    buf_add b "let rec ";
+    List.iteri
+      (fun i d ->
+        if i > 0 then buf_add b " and ";
+        buf_add b (munge d.tname);
+        buf_add b " = ";
+        emit_expr b d.texpr)
+      ds;
+    buf_add b "\n"
+
 let emit_module b (m : modl) =
   cur_mod := m.ocaml_name;
   buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");
-  List.iter (emit_topdef b) m.defs;
+  let rec groups acc = function
+    | [] -> List.rev acc
+    | d :: rest ->
+      (match arity_root d.tname with
+       | Some root ->
+         let rec take acc2 = function
+           | d2 :: tl when arity_root d2.tname = Some root -> take (d2 :: acc2) tl
+           | tl -> (List.rev acc2, tl)
+         in
+         let same, rest' = take [] rest in
+         groups ((d :: same) :: acc) rest'
+       | None -> groups ([ d ] :: acc) rest)
+  in
+  List.iter (emit_def_group b) (groups [] m.defs);
   List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects;
   buf_add b "end\n\n"
 

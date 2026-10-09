@@ -56,6 +56,10 @@ and edesc =
   | EMatchOpt of expr * binder * expr * expr  (* if-let/when-let: match opt with Some b -> t | None -> e *)
   | EUnbox of expr * ty      (* ^T on an any-typed value: runtime-checked unbox *)
   | EUnboxOpt of expr * ty   (* ^(option T) on an any-option: unbox inside *)
+  | EOpt of expr option                     (* (Some e) / None *)
+  | EBox of expr                            (* concrete expr widened to `any`: deep-box at emit *)
+  | EDynVec of expr * binder * expr * expr (* match on `any`: DVec b -> t | _ -> e *)
+  | EDynMap of expr * binder * expr * expr (* match on `any`: DMap b -> t | _ -> e *)
 
 let binder_id = ref 0
 let fresh_binder name = incr binder_id; { bname = name; bid = !binder_id; bty = TUnit; bmode = Shared; bused = 0 }

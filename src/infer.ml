@@ -157,7 +157,7 @@ let () =
   reg "not=" (fun () -> let a = v () in f [ a; a ] TBool);
   reg "not" (fun () -> f [ TBool ] TBool);
   reg "identity" (fun () -> let a = v () in f [ a ] a);
-  reg "constantly" (fun () -> let a = v () and b = v () in f [ a; b ] a);
+  reg "constantly" (fun () -> let a = v () and b = v () in f [ a ] (f [ b ] a));
   (* lists *)
   reg "list" (fun () -> let a = v () in f [ a ] (TList a));
   reg "cons" (fun () -> let a = v () in f [ a; TList a ] (TList a));
@@ -201,6 +201,31 @@ let () =
   reg "drop" (fun () -> let c = v () in f [ TInt; c ] c);
   reg "some?" (fun () -> let a = v () in f [ TOption a ] TBool);
   reg "none?" (fun () -> let a = v () in f [ TOption a ] TBool);
+  reg "select-keys" (fun () -> let k = v () and x = v () in f [ TMap (k, x); v () ] (TMap (k, x)));
+  reg "update" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k; v () ] (TMap (k, x)));
+  reg "get-in" (fun () -> f [ TMap (TKeyword, TAny); v () ] (TOption TAny));
+  reg "assoc-in" (fun () -> f [ TMap (TKeyword, TAny); v (); TAny ] (TMap (TKeyword, TAny)));
+  reg "comp" (fun () -> f [ v (); v () ] (v ()));
+  reg "juxt" (fun () -> f [ v (); v () ] (v ()));
+  reg "partial" (fun () -> f [ v (); v () ] (v ()));
+  reg "mapcat" (fun () -> let a = v () and b = v () in f [ f [ a ] (TList b); v () ] (TList b));
+  reg "interpose" (fun () -> let a = v () in f [ a; v () ] (TList a));
+  reg "reverse" (fun () -> let a = v () in f [ a ] a);
+  reg "distinct" (fun () -> let a = v () in f [ a ] a);
+  reg "second" (fun () -> f [ v () ] (v ()));
+  reg "last" (fun () -> f [ v () ] (v ()));
+  reg "butlast" (fun () -> f [ v () ] (v ()));
+  reg "min" (fun () -> let a = v () in f [ a; a ] a);
+  reg "max" (fun () -> let a = v () in f [ a; a ] a);
+  reg "every?" (fun () -> let a = v () in f [ f [ a ] TBool; v () ] TBool);
+  reg "some" (fun () -> let a = v () in f [ f [ a ] TBool; v () ] TBool);
+  reg "take-while" (fun () -> let a = v () in f [ f [ a ] TBool; TList a ] (TList a));
+  reg "drop-while" (fun () -> let a = v () in f [ f [ a ] TBool; TList a ] (TList a));
+  reg "zipmap" (fun () -> let k = v () and x = v () in f [ v (); v () ] (TMap (k, x)));
+  reg "sort" (fun () -> f [ v () ] (v ()));
+  reg "sort-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (v ()));
+  reg "group-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (TMap (k, TList a)));
+  reg "frequencies" (fun () -> let a = v () in f [ TList a ] (TMap (a, TInt)));
   ()
 
 let is_numeric_op = function "+" | "-" | "*" | "/" | "+." | "-." | "*." | "/." -> true | _ -> false
@@ -211,7 +236,12 @@ let is_special_builtin = function
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
   | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
-  | "str" | "println" | "print" | "pr-str" | "swap!" -> true
+  | "str" | "println" | "print" | "pr-str" | "swap!"
+  | "select-keys" | "update" | "get-in" | "assoc-in" | "comp" | "juxt"
+  | "partial" | "mapcat" | "interpose" | "reverse" | "distinct" | "second"
+  | "last" | "butlast" | "min" | "max" | "every?" | "some" | "take-while"
+  | "drop-while" | "zipmap" | "sort" | "sort-by" | "group-by" | "frequencies"
+  | "vec" | "set" -> true
   | _ -> false
 
 (* ---------- inference ---------- *)
@@ -318,7 +348,48 @@ and infer_defn ctx f =
        let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared) } in
        register_global ctx name sch variadic;
        top
-     | _ -> type_error l "defn requires a single arity [params] body (multi-arity is v1)")
+     | (List (_, Vector _ :: _) :: _) as rest when List.for_all (function List (_, Vector _ :: _) -> true | _ -> false) rest ->
+       (* multi-arity: (defn f ([p] b) ([p p] b) ...)
+          Each arity compiles to its own global `f__a<argc>`; calls to `f`
+          are rewritten to the matching arity in infer_app_no_macro.
+          Placeholder schemes are registered up-front so recursive calls
+          dispatch before bodies are inferred. *)
+       let arities =
+         List.map
+           (fun af ->
+             match af with
+             | List (al, Vector (_, ps) :: body) -> (al, ps, body)
+             | _ -> type_error l "malformed arity")
+           rest
+       in
+       let infos =
+         List.map
+           (fun (al, ps, body) ->
+             let an = Printf.sprintf "%s__a%d" name (Array.length ps) in
+             let ph = TFun (List.init (Array.length ps) (fun _ -> fresh_var ()), fresh_var ()) in
+             register_global ctx an (mono ph) false;
+             (al, ps, body, an, ph))
+           arities
+       in
+       let tops =
+         List.map
+           (fun (al, ps, body, an, ph) ->
+             let fe = infer_fn ctx al (Some an) ps body in
+             unify al ph fe.ety;
+             { tname = an; tloc = al; tsch = generalize [] fe.ety; texpr = fe;
+               tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared) })
+           infos
+       in
+       List.iter (fun t -> register_global ctx t.tname t.tsch false) tops;
+       (* `f` aliases the first arity: value use gets arity 1's type; direct
+          calls are arity-rewritten. *)
+       let first = List.hd tops in
+       let alias_e = mk l first.texpr.ety (EGlobal (ctx.modl.ocaml_name, munge first.tname, first.tname)) in
+       let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared } in
+       register_global ctx name alias.tsch false;
+       ctx.modl.defs <- ctx.modl.defs @ tops;
+       alias
+     | _ -> type_error l "malformed defn body (want [params] body or ([params] body)+)")
   | _ -> type_error l "malformed defn"
 
 and register_global ctx name sch variadic =
@@ -338,26 +409,42 @@ and infer_fn ctx l name params body : expr =
     | x :: xs -> split (x :: acc) xs
   in
   let ps, variadic = split [] items in
+  (* non-symbol params destructure into a temp + extra bindings; the
+     destructured names see each other only inside the body *)
   let mk_param f =
     let _, ta, inner = split_meta f in
     match inner with
     | Atom (_, Symbol s) ->
       let b = fresh_binder s in
       b.bty <- (match ta with Some t -> t | None -> fresh_var ());
-      (s, b)
-    | _ -> type_error l "fn params must be symbols (destructuring is v1)"
+      ((s, b), None)
+    | (Vector _ | Map _) ->
+      let b = fresh_binder "dp" in
+      b.bty <- (match ta with Some t -> t | None -> fresh_var ());
+      (("", b), Some (inner, b))
+    | _ -> type_error l "fn params must be symbols or destructuring patterns"
   in
-  let binders = List.map mk_param ps in
+  let binders, destr_jobs = List.split (List.map mk_param ps) in
+  let destr_jobs = List.filter_map (fun x -> x) destr_jobs in
   let vbinder =
     match variadic with
     | None -> None
     | Some s -> let b = fresh_binder s in b.bty <- TList (fresh_var ()); Some (s, b)
   in
   let saved = ctx.env in
-  List.iter (fun (s, b) -> ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env) binders;
+  List.iter
+    (fun (s, b) -> if s <> "" then ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env)
+    binders;
   (match vbinder with
    | Some (s, b) -> ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env
    | None -> ());
+  (* destructure jobs: each temp binder feeds bind_pattern, extending env *)
+  let d_pairs =
+    List.concat
+      (List.map
+         (fun (pat, tb) -> bind_pattern ctx l pat (mk l tb.bty (ELocal tb)))
+         destr_jobs)
+  in
   let body_es = List.map (infer_expr ctx) body in
   ctx.env <- saved;
   let body_e =
@@ -366,6 +453,7 @@ and infer_fn ctx l name params body : expr =
     | [ e ] -> e
     | es -> mk l (last es).ety (EDo es)
   in
+  let body_e = match d_pairs with [] -> body_e | _ -> mk l body_e.ety (ELet (d_pairs, body_e)) in
   let ptys = List.map (fun (_, b) -> b.bty) binders in
   let fty =
     match vbinder with
@@ -386,6 +474,7 @@ and infer_expr ctx f : expr =
      | Str s -> mk l TString (EStr s)
      | Keyword k -> mk l TKeyword (EKeyword k)
      | Nil -> mk l TUnit ENil
+     | Symbol "None" -> mk l (TOption (fresh_var ())) (EOpt None)
      | Symbol s -> infer_symbol ctx l s)
   | Vector (l, items) ->
     let es = List.map (infer_expr ctx) (Array.to_list items) in
@@ -538,6 +627,10 @@ and infer_call ctx l items : expr =
   | Atom (_, Symbol "cond") :: args -> infer_cond ctx l args
   | Atom (_, Symbol "->") :: x :: steps -> infer_expr ctx (desugar_thread l true x steps)
   | Atom (_, Symbol "->>") :: x :: steps -> infer_expr ctx (desugar_thread l false x steps)
+  | Atom (_, Symbol "match") :: scrut :: clauses -> infer_match ctx l scrut clauses
+  | Atom (_, Symbol "Some") :: [ arg ] ->
+    let e = infer_expr ctx arg in
+    mk l (TOption e.ety) (EOpt (Some e))
   | Atom (_, Symbol "if-let") :: Vector (_, [| b; src |]) :: body -> infer_if_let ctx l b src body
   | Atom (_, Symbol "when-let") :: Vector (_, [| b; src |]) :: body ->
     infer_if_let ctx l b src [ List (l, Atom (l, Symbol "do") :: body); Atom (l, Nil) ]
@@ -549,16 +642,150 @@ and infer_call ctx l items : expr =
       (kw :: List.map (infer_expr ctx) args)
   | callee :: args -> infer_app ctx l callee args
 
+and join_branches l a b =
+  match repr a.ety, repr b.ety with
+  | TAny, TAny -> (TAny, a, b)
+  | TAny, _ -> (TAny, a, mk b.loc TAny (EBox b))
+  | _, TAny -> (TAny, mk a.loc TAny (EBox a), b)
+  | _ -> unify l a.ety b.ety; (a.ety, a, b)
+
 and infer_if ctx l c t e =
   let ce = infer_expr ctx c in
   unify ce.loc ce.ety TBool;
   let te = infer_expr ctx t and ee = infer_expr ctx e in
-  unify ee.loc te.ety ee.ety;
-  mk l te.ety (EIf (ce, te, ee))
+  let ret, te, ee = join_branches l te ee in
+  mk l ret (EIf (ce, te, ee))
 
 and infer_do ctx l body =
   let es = List.map (infer_expr ctx) body in
   match es with [] -> mk l TUnit ENil | _ -> mk l (last es).ety (EDo es)
+
+(* Destructuring: a binding pattern is a symbol, a vector `[p ..]` whose
+   elements destructure by index, or a map `{ :keys [..] :as s :or {..} |
+   (:kw p) }`. bind_pattern appends (temp/elem) binder pairs and registers
+   names in ctx.env. *)
+and bind_pattern ctx l pat rhs : (binder * expr) list =
+  let _, ta, inner = split_meta pat in
+  let bind_one b rhs =
+    (match ta with Some t -> unify l rhs.ety t; b.bty <- t | None -> ());
+    b.bty <- rhs.ety;
+    [(b, rhs)]
+  in
+  let bind_sym s rhs =
+    let b = fresh_binder s in
+    b.bty <- rhs.ety;
+    ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+    bind_one b rhs
+  in
+  match inner with
+  | Atom (_, Symbol s) -> bind_sym s rhs
+  | Atom (_, Nil) -> []  (* nil pattern binds nothing *)
+  | Vector (vl, items) ->
+    let rhs =
+      match repr rhs.ety with
+      | TAny -> mk vl (TVec TAny) (EUnbox (rhs, TVec TAny))
+      | _ -> rhs
+    in
+    let tmp = fresh_binder "dv" in
+    tmp.bty <- rhs.ety;
+    let el = fresh_var () in
+    unify vl rhs.ety (TVec el);
+    let tmp_e = mk vl rhs.ety (ELocal tmp) in
+    (tmp, rhs)
+    :: List.concat
+         (List.mapi
+            (fun i p ->
+              let ith =
+                mk vl el
+                  (ECall (mk vl (TFun ([ TVec el; TInt ], el)) (EBuiltin "nth"),
+                          [ tmp_e; mk vl TInt (EInt i) ]))
+              in
+              bind_pattern ctx vl p ith)
+            (Array.to_list items))
+  | Map (ml, kvs) ->
+    let rhs =
+      match repr rhs.ety with
+      | TAny -> mk ml (TMap (TAny, TAny)) (EUnbox (rhs, TMap (TAny, TAny)))
+      | _ -> rhs
+    in
+    let tmp = fresh_binder "dm" in
+    tmp.bty <- rhs.ety;
+    let tmp_e = mk ml rhs.ety (ELocal tmp) in
+    (* :or defaults are collected before the other entries are bound *)
+    let or_defaults =
+      match
+        List.find_map
+          (fun (k, v) -> match k with Atom (_, Keyword "or") -> Some v | _ -> None)
+          kvs
+      with
+      | Some (Map (_, ds)) -> ds
+      | _ -> []
+    in
+    let default_for kname =
+      List.find_map
+        (fun (dk, dv) ->
+          match dk with
+          | Atom (_, Keyword k) when k = kname -> Some dv
+          | Atom (_, Symbol k) when k = kname -> Some dv
+          | _ -> None)
+        or_defaults
+    in
+    (* (:kw m) or (:kw m default) *)
+    let kw_get kw def =
+      let kw_e = mk ml TKeyword (EKeyword kw) in
+      let vt = fresh_var () in
+      unify ml rhs.ety (TMap (TKeyword, vt));
+      match def with
+      | Some df ->
+        let de = infer_expr ctx df in
+        unify ml de.ety vt;
+        mk ml vt (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt); vt ], vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e; de ]))
+      | None ->
+        mk ml (TOption vt) (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt) ], TOption vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e ]))
+    in
+    (* (get m "s" def) — string keys *)
+    let str_get skey def =
+      let sk_e = mk ml TString (EStr skey) in
+      let vt = fresh_var () in
+      unify ml rhs.ety (TMap (TString, vt));
+      match def with
+      | Some df ->
+        let de = infer_expr ctx df in
+        unify ml de.ety vt;
+        mk ml vt (ECall (mk ml (TFun ([ TString; TMap (TString, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; de ]))
+      | None ->
+        mk ml (TOption vt) (ECall (mk ml (TFun ([ TString; TMap (TString, vt) ], TOption vt)) (EBuiltin "get"), [ tmp_e; sk_e ]))
+    in
+    (tmp, rhs)
+    :: List.concat
+         (List.map
+            (fun (kf, pf) ->
+              match kf, pf with
+              | Atom (_, Keyword "keys"), Vector (_, syms) ->
+                List.concat
+                  (List.map
+                     (fun sf ->
+                       match sf with
+                       | Atom (sl, Symbol sn) -> bind_pattern ctx sl sf (kw_get sn (default_for sn))
+                       | _ -> type_error l ":keys entries must be symbols")
+                     (Array.to_list syms))
+              | Atom (_, Keyword "strs"), Vector (_, syms) ->
+                List.concat
+                  (List.map
+                     (fun sf ->
+                       match sf with
+                       | Atom (sl, Symbol sn) -> bind_pattern ctx sl sf (str_get sn (default_for sn))
+                       | _ -> type_error l ":strs entries must be symbols")
+                     (Array.to_list syms))
+              | Atom (_, Keyword "as"), Atom (sl, Symbol sn) -> bind_pattern ctx sl (Atom (sl, Symbol sn)) (mk ml rhs.ety (ELocal tmp))
+              | Atom (_, Keyword "or"), Map _ -> []
+              | Atom (_, Symbol _), Atom (_, Keyword kw) -> bind_pattern ctx ml kf (kw_get kw (default_for kw))
+              | Atom (_, Symbol _), Atom (_, Str sk) -> bind_pattern ctx ml kf (str_get sk (default_for sk))
+              | Atom (_, Keyword kw), _ -> bind_pattern ctx ml pf (kw_get kw (default_for kw))
+              | Atom (_, Str sk), _ -> bind_pattern ctx ml pf (str_get sk (default_for sk))
+              | _ -> type_error l "unsupported map destructuring entry")
+            kvs)
+  | _ -> type_error l "unsupported destructuring pattern"
 
 and infer_let ctx l binds body =
   let items = Array.to_list binds in
@@ -566,16 +793,9 @@ and infer_let ctx l binds body =
   let rec go acc = function
     | [] -> List.rev acc
     | bform :: eform :: rest ->
-      let _, ta, inner = split_meta bform in
-      (match inner with
-       | Atom (_, Symbol s) ->
-         let e = infer_expr ctx eform in
-         (match ta with Some t -> unify e.loc e.ety t | None -> ());
-         let b = fresh_binder s in
-         b.bty <- e.ety;
-         ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
-         go ((b, e) :: acc) rest
-       | _ -> type_error l "let bindings must be symbols (destructuring is v1)")
+      let e = infer_expr ctx eform in
+      let pairs = bind_pattern ctx l bform e in
+      go (List.rev_append pairs acc) rest
     | _ -> type_error l "let requires an even number of binding forms"
   in
   let pairs = go [] items in
@@ -629,8 +849,144 @@ and infer_if_let ctx l b src body =
   let te = infer_expr ctx then_f in
   ctx.env <- saved;
   let ee = infer_expr ctx else_f in
-  unify ee.loc te.ety ee.ety;
-  mk l te.ety (EMatchOpt (src_e, binder, te, ee))
+  let ret, te, ee = join_branches l te ee in
+  mk l ret (EMatchOpt (src_e, binder, te, ee))
+
+(* match lowers to a nested if/let chain over existing forms — no new edesc.
+   Clause forms:
+     literal atom          -> guard `=` then body
+     _ or symbol           -> (bind &) body   (irrefutable)
+     [p1 .. pn]            -> guard count=n, then per-elem destructure
+     {map pattern}         -> irrefutable destructure *)
+and infer_match ctx l scrut clauses =
+  let se = infer_expr ctx scrut in
+  if List.length clauses mod 2 <> 0 then type_error l "match requires pattern/body pairs";
+  let ret = fresh_var () in
+  let lit_expr = function
+    | Atom (al, a) ->
+      (match a with
+       | Int i -> Some (mk al TInt (EInt i))
+       | Float x -> Some (mk al TFloat (EFloat x))
+       | Bool b -> Some (mk al TBool (EBool b))
+       | Char c -> Some (mk al TChar (EChar c))
+       | Str s2 -> Some (mk al TString (EStr s2))
+       | Keyword k -> Some (mk al TKeyword (EKeyword k))
+       | Nil -> Some (mk al TUnit ENil)
+       | _ -> None)
+    | _ -> None
+  in
+  let scrut_any = match repr se.ety with TAny -> true | _ -> false in
+  let eq_guard le =
+    unify le.loc se.ety le.ety;
+    let ce = mk l (TFun ([ se.ety; se.ety ], TBool)) (EBuiltin (if scrut_any then "dyn-eq" else "=")) in
+    mk l TBool (ECall (ce, [ se; le ]))
+  in
+  let rec analyze = function
+    | [] -> []
+    | pat :: body_f :: rest ->
+      let clause =
+        (match lit_expr pat with
+         | Some le ->
+           let saved = ctx.env in
+           let te = infer_expr ctx body_f in
+           ctx.env <- saved;
+           (te, fun te' next -> mk l ret (EIf (eq_guard le, te', next)))
+         | None ->
+           (match pat with
+            | Atom (_, Symbol "None") ->
+              let dead = fresh_binder "_" in
+              dead.bty <- fresh_var ();
+              unify l se.ety (TOption dead.bty);
+              let saved = ctx.env in
+              let te = infer_expr ctx body_f in
+              ctx.env <- saved;
+              (te, fun te' next -> mk l ret (EMatchOpt (se, dead, next, te')))
+            | Atom (_, Symbol "_") ->
+              let te = infer_expr ctx body_f in
+              (te, fun te' _ -> te')
+            | Atom (_, Symbol _) ->
+              let saved = ctx.env in
+              let pairs = bind_pattern ctx (atom_loc pat) pat se in
+              let te = infer_expr ctx body_f in
+              ctx.env <- saved;
+              (te, fun te' _ -> mk l ret (ELet (pairs, te')))
+            | Map (ml, _) ->
+              if scrut_any then (
+                let dm = fresh_binder "mm" in
+                dm.bty <- TMap (TAny, TAny);
+                let saved = ctx.env in
+                let pairs = bind_pattern ctx ml pat (mk ml (TMap (TAny, TAny)) (ELocal dm)) in
+                let te = infer_expr ctx body_f in
+                ctx.env <- saved;
+                (te, fun te' next -> mk l ret (EDynMap (se, dm, mk l ret (ELet (pairs, te')), next))))
+              else (
+                let saved = ctx.env in
+                let pairs = bind_pattern ctx ml pat se in
+                let te = infer_expr ctx body_f in
+                ctx.env <- saved;
+                (te, fun te' _ -> mk l ret (ELet (pairs, te'))))
+            | Vector (vl, items) ->
+              let n = Array.length items in
+              if scrut_any then (
+                let dv = fresh_binder "mv" in
+                dv.bty <- TVec TAny;
+                let dv_e = mk vl (TVec TAny) (ELocal dv) in
+                let pairs = bind_pattern ctx vl pat dv_e in
+                let cnt = mk vl TInt (ECall (mk vl (TFun ([ TVec TAny ], TInt)) (EBuiltin "count"), [ dv_e ])) in
+                let guard = mk vl TBool (ECall (mk vl (TFun ([ TInt; TInt ], TBool)) (EBuiltin "="), [ cnt; mk vl TInt (EInt n) ])) in
+                let saved = ctx.env in
+                let te = infer_expr ctx body_f in
+                ctx.env <- saved;
+                (te, fun te' next -> mk l ret (EDynVec (se, dv, mk l ret (EIf (guard, mk l ret (ELet (pairs, te')), next)), next))))
+              else (
+                let el = fresh_var () in
+                unify vl se.ety (TVec el);
+                let cnt = mk vl TInt (ECall (mk vl (TFun ([ TVec el ], TInt)) (EBuiltin "count"), [ se ])) in
+                let guard = mk vl TBool (ECall (mk vl (TFun ([ TInt; TInt ], TBool)) (EBuiltin "="), [ cnt; mk vl TInt (EInt n) ])) in
+                let saved = ctx.env in
+                let pairs = bind_pattern ctx vl pat se in
+                let te = infer_expr ctx body_f in
+                ctx.env <- saved;
+                (te, fun te' next -> mk l ret (EIf (guard, mk l ret (ELet (pairs, te')), next))))
+            | List (_, Atom (_, Symbol "Some") :: [ p ]) ->
+              let pl = atom_loc p in
+              let nb = fresh_binder "ov" in
+              nb.bty <- fresh_var ();
+              unify pl se.ety (TOption nb.bty);
+              let saved = ctx.env in
+              let pairs = bind_pattern ctx pl p (mk pl nb.bty (ELocal nb)) in
+              let te = infer_expr ctx body_f in
+              ctx.env <- saved;
+              (te, fun te' next -> mk l ret (EMatchOpt (se, nb, mk l ret (ELet (pairs, te')), next)))
+            | List (_, Atom (_, Symbol "quote") :: [ qf ]) ->
+              (match lit_expr qf with
+               | Some le ->
+                 let saved = ctx.env in
+                 let te = infer_expr ctx body_f in
+                 ctx.env <- saved;
+                 (te, fun te' next -> mk l ret (EIf (eq_guard le, te', next)))
+               | None -> type_error l "unsupported quoted match pattern")
+            | _ -> type_error l "unsupported match pattern"))
+      in
+      clause :: analyze rest
+    | _ -> type_error l "match requires pattern/body pairs"
+  in
+  let items = analyze clauses in
+  let ret_any =
+    List.exists (fun (te, _) -> match repr te.ety with TAny -> true | _ -> false) items
+  in
+  if ret_any then
+    (match repr ret with TVar v -> v.link <- Some TAny | _ -> ())
+  else
+    List.iter (fun (te, _) -> unify te.loc ret te.ety) items;
+  let join te =
+    if ret_any && not (match repr te.ety with TAny -> true | _ -> false)
+    then mk te.loc TAny (EBox te) else te
+  in
+  List.fold_right
+    (fun (te, build) next -> build (join te) next)
+    items
+    (mk l ret (ECall (mk l (TFun ([ TUnit ], ret)) (EBuiltin "no-match"), [ mk l TUnit ENil ])))
 
 and infer_fn_call ctx l rest =
   match rest with
@@ -670,6 +1026,26 @@ and infer_app ctx l callee args =
     mk l ret (ECall (ce, arg_es))
 
 and infer_app_no_macro ctx l s args =
+  (* multi-arity dispatch: (f x y) where `f` was defined with arity 2
+     resolves to the `f__a2` global. *)
+  let s =
+    let candidate = s ^ "__a" ^ string_of_int (List.length args) in
+    let target =
+      match String.index_opt s '/' with
+      | Some i ->
+        let ns = String.sub s 0 i and n = String.sub s (i + 1) (String.length s - i - 1) in
+        let tgt = match List.assoc_opt ns ctx.modl.requires with Some f -> f | None -> ns in
+        (match Hashtbl.find_opt ctx.globals tgt with
+         | Some tbl when Hashtbl.mem tbl (n ^ "__a" ^ string_of_int (List.length args)) ->
+           Some (String.sub s 0 (i + 1) ^ n ^ "__a" ^ string_of_int (List.length args))
+         | _ -> None)
+      | None ->
+        (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
+         | Some tbl when Hashtbl.mem tbl candidate -> Some candidate
+         | _ -> None)
+    in
+    match target with Some s2 -> s2 | None -> s
+  in
   let arg_es = List.map (infer_expr ctx) args in
   let ce = infer_symbol ctx l s in
   (match ce.desc with
@@ -740,7 +1116,10 @@ and infer_numeric l name arg_es =
     let nty = if float_op then TFloat else (match repr a.ety with TFloat -> TFloat | _ -> TInt) in
     unify a.loc a.ety nty;
     mk l nty (ECall (mk l (TFun ([ nty ], nty)) (EBuiltin (if nty = TFloat then "neg." else "neg")), arg_es))
-  | _ -> type_error l (name ^ " expects 1 or 2 numeric arguments")
+  | a :: b :: rest ->
+    (* variadic arithmetic: (+ a b c) = (+ (+ a b) c) *)
+    List.fold_left (fun acc e -> infer_numeric l name [ acc; e ]) (infer_numeric l name [ a; b ]) rest
+  | _ -> type_error l (name ^ " expects at least 1 numeric argument")
 
 and infer_cmp l name arg_es =
   match arg_es with
@@ -749,7 +1128,22 @@ and infer_cmp l name arg_es =
     unify a.loc a.ety nty; unify b.loc b.ety nty;
     let op = match repr nty with TFloat -> name ^ "." | _ -> name in
     mk l TBool (ECall (mk l (TFun ([ nty; nty ], TBool)) (EBuiltin op), arg_es))
-  | _ -> type_error l (name ^ " expects 2 arguments")
+  | a1 :: (_ :: _ as rest) ->
+    (* variadic comparison: (< a b c) = (and (< a b) (< b c)); each argument
+       is bound once so effects are not repeated *)
+    let temps =
+      List.map
+        (fun e ->
+          let b = fresh_binder "c" in
+          b.bty <- e.ety;
+          (b, e))
+        (a1 :: rest)
+    in
+    let locals = List.map (fun (b, e) -> mk l e.ety (ELocal b)) temps in
+    let cmps = List.map2 (fun x y -> infer_cmp l name [ x; y ]) locals (List.tl locals) in
+    let chain = List.fold_right (fun c acc -> mk l TBool (EIf (c, acc, mk l TBool (EBool false)))) (List.tl cmps) (List.hd cmps) in
+    mk l TBool (ELet (temps, chain))
+  | _ -> type_error l (name ^ " expects at least 2 arguments")
 
 (* Special builtins: typing depends on argument shapes. *)
 and infer_special ctx l name ce arg_es =
@@ -875,11 +1269,24 @@ and infer_special ctx l name ce arg_es =
     unify l f (TFun ([ a ], TBool));
     let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
     mk l (TVec a) (ECall (ce, arg_es))
+  | "vec", [ c ] ->
+    let a = with_coll c (fun x -> x) (fun x -> x) (fun x -> x) (fun _ _ -> type_error l "vec on map") (fun _ -> TChar) in
+    mk l (TVec a) (ECall (ce, arg_es))
+  | "set", [ c ] ->
+    let a = with_coll c (fun x -> x) (fun x -> x) (fun x -> x) (fun _ _ -> type_error l "set on map") (fun _ -> TChar) in
+    mk l (TSet a) (ECall (ce, arg_es))
   | "into", [ dst; src ] ->
     let a = fresh_var () in
-    unify l dst (TVec a);
+    let ret =
+      match repr dst with
+      | TVec x -> unify l a x; TVec a
+      | TList x -> unify l a x; TList a
+      | TSet x -> unify l a x; TSet a
+      | TVar _ -> unify l dst (TVec a); TVec a
+      | _ -> type_error l "into expects a collection destination"
+    in
     let _ = with_coll src (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
-    mk l (TVec a) (ECall (ce, arg_es))
+    mk l ret (ECall (ce, arg_es))
   | "take", [ n; c ] | "drop", [ n; c ] ->
     unify l n TInt;
     let _ = with_coll c (fun _ -> ()) (fun _ -> ()) (fun _ -> ()) (fun _ _ -> ()) (fun _ -> ()) in
@@ -928,7 +1335,119 @@ and infer_special ctx l name ce arg_es =
     let a = fresh_var () in
     List.iter (fun t -> unify l t a) ty_args;
     mk l (TSet a) (ESetLit arg_es)
+  | "select-keys", [ m; ks ] ->
+    let kk = fresh_var () and v = fresh_var () in
+    unify l m (TMap (kk, v));
+    (match repr ks with
+     | TList k2 | TVec k2 | TSet k2 -> unify l kk k2
+     | TVar _ -> unify l ks (TList kk)
+     | _ -> type_error l "select-keys: key list must be a seqable collection");
+    mk l (TMap (kk, v)) (ECall (ce, arg_es))
+  | "update", [ m; k; f ] ->
+    let kk = fresh_var () and v = fresh_var () in
+    unify l m (TMap (kk, v));
+    unify l k kk;
+    unify l f (TFun ([ v ], v));
+    mk l (TMap (kk, v)) (ECall (ce, arg_es))
+  | "get-in", [ m; ks ] ->
+    unify l m (TMap (TKeyword, TAny));
+    (match repr ks with
+     | TList k2 | TVec k2 -> unify l TKeyword k2
+     | TVar _ -> unify l ks (TList TKeyword)
+     | _ -> type_error l "get-in: path must be a list/vector of keywords");
+    mk l (TOption TAny) (ECall (ce, arg_es))
+  | "assoc-in", [ m; ks; v2 ] ->
+    unify l m (TMap (TKeyword, TAny));
+    (match repr ks with
+     | TList k2 | TVec k2 -> unify l TKeyword k2
+     | TVar _ -> unify l ks (TList TKeyword)
+     | _ -> type_error l "assoc-in: path must be a list/vector of keywords");
+    unify l v2 TAny;
+    mk l (TMap (TKeyword, TAny)) (ECall (ce, arg_es))
+  | "comp", [ f; g ] ->
+    let x = fresh_var () and a = fresh_var () and b = fresh_var () in
+    unify l g (TFun ([ x ], a));
+    unify l f (TFun ([ a ], b));
+    mk l (TFun ([ x ], b)) (ECall (ce, arg_es))
+  | "juxt", [ f; g ] ->
+    let a = fresh_var () and b = fresh_var () and c = fresh_var () in
+    unify l f (TFun ([ a ], b));
+    unify l g (TFun ([ a ], c));
+    mk l (TFun ([ a ], TTuple [ b; c ])) (ECall (ce, arg_es))
+  | "partial", f :: fixed ->
+    let x = fresh_var () and r = fresh_var () in
+    unify l f (TFun (fixed @ [ x ], r));
+    mk l (TFun ([ x ], r)) (ECall (ce, arg_es))
+  | "mapcat", [ f; c ] ->
+    let a = fresh_var () and b = fresh_var () in
+    unify l f (TFun ([ a ], TList b));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l (TList b) (ECall (ce, arg_es))
+  | "interpose", [ sep; c ] ->
+    let a = fresh_var () in
+    let _ = with_coll c (fun x -> unify l a x; unify l sep a) (fun x -> unify l a x; unify l sep a) (fun x -> unify l a x; unify l sep a) (fun k v -> unify l a (TTuple [ k; v ]); unify l sep a) (fun _ -> unify l a TChar; unify l sep a) in
+    mk l (TList a) (ECall (ce, arg_es))
+  | "reverse", [ c ] ->
+    (match repr c with TVec _ | TList _ -> () | TVar _ -> unify l c (TList (fresh_var ())) | _ -> type_error l "reverse expects a list/vector");
+    mk l c (ECall (ce, arg_es))
+  | "distinct", [ c ] ->
+    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "distinct on map") (fun _ -> TList TChar) in
+    mk l ret (ECall (ce, arg_es))
+  | "second", [ c ] ->
+    let ret = with_coll c (fun a -> TOption a) (fun a -> TOption a) (fun a -> TOption a) (fun _ _ -> TOption TAny) (fun _ -> TOption TChar) in
+    mk l ret (ECall (ce, arg_es))
+  | "last", [ c ] ->
+    let ret = with_coll c (fun a -> TOption a) (fun a -> TOption a) (fun a -> TOption a) (fun _ _ -> TOption TAny) (fun _ -> TOption TChar) in
+    mk l ret (ECall (ce, arg_es))
+  | "butlast", [ c ] ->
+    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "butlast on map") (fun _ -> TList TChar) in
+    mk l ret (ECall (ce, arg_es))
+  | "min", [ a; b ] | "max", [ a; b ] ->
+    let nty = if match repr a with TFloat -> true | _ -> (match repr b with TFloat -> true | _ -> false) then TFloat else TInt in
+    unify l a nty; unify l b nty;
+    mk l nty (ECall (ce, arg_es))
+  | "every?", [ f; c ] | "some", [ f; c ] ->
+    let a = fresh_var () in
+    unify l f (TFun ([ a ], TBool));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun k v -> unify l a (TTuple [ k; v ])) (fun _ -> unify l a TChar) in
+    mk l TBool (ECall (ce, arg_es))
+  | "take-while", [ f; c ] | "drop-while", [ f; c ] ->
+    let a = fresh_var () in
+    unify l f (TFun ([ a ], TBool));
+    (match repr c with
+     | TList x -> unify l a x
+     | TVar _ -> unify l c (TList a)
+     | _ -> type_error l (name ^ " expects a list"));
+    mk l (TList a) (ECall (ce, arg_es))
+  | "zipmap", [ ks; vs ] ->
+    let kk = fresh_var () and v = fresh_var () in
+    unify l ks (TList kk); unify l vs (TList v);
+    mk l (TMap (kk, v)) (ECall (ce, arg_es))
+  | "sort", [ c ] ->
+    let ret = with_coll c (fun a -> TList a) (fun a -> TList a) (fun a -> TList a) (fun _ _ -> type_error l "sort on map") (fun _ -> TList TChar) in
+    mk l ret (ECall (ce, arg_es))
+  | "sort", [ cmp; c ] ->
+    let a = fresh_var () in
+    unify l cmp (TFun ([ a; a ], TInt));
+    unify l c (TList a);
+    mk l (TList a) (ECall (ce, arg_es))
+  | "sort-by", [ f; c ] ->
+    let a = fresh_var () and k = fresh_var () in
+    unify l f (TFun ([ a ], k));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "sort-by on map") (fun _ -> unify l a TChar) in
+    mk l (TList a) (ECall (ce, arg_es))
+  | "group-by", [ f; c ] ->
+    let a = fresh_var () and k = fresh_var () in
+    unify l f (TFun ([ a ], k));
+    let _ = with_coll c (fun x -> unify l a x) (fun x -> unify l a x) (fun x -> unify l a x) (fun _ _ -> type_error l "group-by on map") (fun _ -> unify l a TChar) in
+    mk l (TMap (k, TList a)) (ECall (ce, arg_es))
+  | "frequencies", [ c ] ->
+    let ret = with_coll c (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun _ _ -> type_error l "frequencies on map") (fun _ -> TMap (TChar, TInt)) in
+    mk l ret (ECall (ce, arg_es))
   | ("str" | "println" | "print" | "pr-str"), _ ->
+    (* printing accepts any value: unresolved vars become `any` (emitted as
+       Lg_rt.dyn), concrete types keep their static printer *)
+    List.iter (fun a -> unify l a TAny) ty_args;
     let ret = if name = "str" || name = "pr-str" then TString else TUnit in
     mk l ret (ECall (ce, arg_es))
   | "swap!", [ a; f ] ->

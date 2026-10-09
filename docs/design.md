@@ -170,14 +170,38 @@ Rules: the emitter must produce `Clj_core.*` calls for all Clojure data
 structures — never hand-rolled collections, never vendored copies, never
 `Obj.magic`. `Lg_rt` holds only what `Clj_core` does not provide.
 
-## 8. v1 plan
-
-Not in v0, in priority order:
+## 8. Done in v1
 
 - **Multi-arity `defn`** — `(defn f ([x] …) ([x y] …))` dispatched on
-  arity.
-- **Destructuring** — sequential `[a b & rest]` and map `{:keys […]}`
-  binding forms in `let`/`fn`/`defn`.
+  arity; arities emit as a `let rec .. and ..` group so they can call
+  each other.
+- **Destructuring** — sequential `[a [b c]]` and map
+  `{:keys [..] :strs [..] :as s :or {..}}` / `{sym :kw}` / `{sym "s"}`
+  binding forms in `let`/`fn`/`defn`; nested and `any`-valued patterns
+  unbox recursively.
+- **`match` special form** — literal/quoted/vector/map/`Some`/`None`
+  patterns on typed and `any` scrutinees; clauses with `any` results
+  widen the match result to `any` and concrete branches deep-box.
+
+## 9. Design decisions (v1+)
+
+- **No `defprotocol`, no `defmulti`.** Static polymorphism goes through
+  OCaml modules/functors (free, fully checked); open dispatch on `any`
+  goes through `match` dyn-tag arms. A dedicated dyn-dispatch sugar can
+  be added later without taking on Clojure protocol semantics.
+- **Modular implicits — as a compiler feature, not an OCaml dependency.**
+  OCaml mainline (and OxCaml) has no modular implicits. lg can implement
+  implicit *parameters* itself: declare implicit args, resolve them at
+  call sites by type from the lexical scope, and elaborate to ordinary
+  OCaml argument passing (Haskell/Scala-style dictionary passing). That
+  is the intended v2 route for protocol-like abstraction.
+- **Keep `dyn` confined.** `any` only enters via explicit `^any` and
+  mixed-type literals; it never propagates through unification, and
+  every use at the boundary is a checked unbox. A future `--strict`
+  mode can require annotations even on hetero literals.
+
+## 10. v2+ plan
+
 - **Cross-file mode signatures (`.lgi`).** A sidecar per `.lg` file that
   caches each public definition's mode signature, so mode inference
   composes across modules instead of assuming everything escapes.
@@ -190,6 +214,7 @@ Not in v0, in priority order:
   collections (`into`, `conj`-chains, `transient`-style builders) to
   update in place when the reference is provably unique.
 - **Private API surface** via `^{:sig …}`/`.lgi` export control.
+- **Implicit parameters** (dictionary-passing elaboration), per §9.
 
 ## Invariants (do not break)
 

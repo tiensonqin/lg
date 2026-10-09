@@ -1,0 +1,52 @@
+add 6
+sub 5
+mul 24
+div 4
+mod 1
+neg -5
+flt 4
+abs 7
+int 3
+eq true true
+cmp true true true true
+vec [1 2 3]
+conj [1 2 3 4]
+nth 2 -1
+count 3
+first 1 last 3 second 2
+peek 3 pop [1 2]
+mapv [2 3 4] filterv [2 3]
+list (1 2 3)
+cons (0 1 2 3)
+map (2 3 4)
+filter (1 3)
+reduce 6
+concat (1 2 3 1 2 3)
+apply 6
+range (0 1 2 3) (2 3 4)
+map {:a 1, :b 2}
+get 1 0
+kwcall 1
+assoc {:a 1, :b 2, :c 3}
+dissoc {:b 2}
+merge {:a 1, :b 20, :d 4}
+keys (:a :b) vals (1 2)
+contains true
+select {:a 1}
+zipmap {a 1, b 2}
+set #{1 2 3}
+sconj #{1 2 3 4}
+disj #{2 3}
+union #{1 2 3 4}
+scontains true
+vec-of [1 2 3] list-of #{1 2 3}
+into [1 2 3]
+empty true false
+opt true false true
+atom 42
+kw :k name abc
+comp 3
+juxt (6, 4)
+partial 15
+const 9
+ident 7

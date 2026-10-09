@@ -1,3 +1,11 @@
 _build/
 *.exe
 *.install
+.test-bin/
+*.cmi
+*.cmx
+*.o
+*.cmo
+*.byte
+*.js
+.DS_Store

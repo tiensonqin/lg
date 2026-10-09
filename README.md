@@ -28,6 +28,18 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
   derived from the path. An `(ns ...)` form is optional. Cross-file
   dependencies are declared with `(:require [ns :as alias])` and resolved
   transitively via `-I` include dirs.
+- **Multi-arity `defn`, destructuring, and `match`.**
+  `(defn f ([x] …) ([x y] …))` dispatches on arity (each arity is its own
+  checked definition). `let`/`fn`/parameters destructure vectors
+  `[a [b c]]` and maps `{:keys [..] :strs [..] :as s :or {..}}` plus
+  explicit `{sym :kw}` / `{sym "s"}` bindings. `match` is a special form:
+  literals, quoted literals, `[…]` (arity-checked), `{…}`, `(Some x)` /
+  `None`, `_` and symbol binding — on typed *and* `any` scrutinees.
+- **A confined `any` boundary.** Mixed-type literals and `^any` produce
+  `dyn`-boxed values (`Lg_rt.dyn`, a closed variant — no `Obj.magic`).
+  `any` never leaks into surrounding inference (it unifies as a no-op);
+  `get`, `match`, and `:keys` destructuring do checked unboxing at the
+  boundary (`option any` for possibly-missing keys — `if-let` unwraps).
 - **Hygienic `defmacro`.** Macros run at compile time on a form-level
   evaluator with the full `syntax-quote` / `~` (unquote) / `~@`
   (unquote-splicing) reader support. Bindings introduced by a macro are
@@ -108,7 +120,9 @@ the non-native OCaml backends reachable later.
 bin/        lg CLI entry point
 src/        compiler: syntax → reader → macro → infer → modes → emit
 runtime/    Lg_rt prelude (printers/helpers) embedded into emitted files
-examples/   hello.lg, util.lg
+examples/   hello.lg, util.lg, features.lg
+test/       golden tests (.lg + .out); should_fail/ negative tests
+test.sh     runner: check → build → run → diff
 docs/       design contract, research report
 ```
 

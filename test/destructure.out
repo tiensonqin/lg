@@ -1,0 +1,10 @@
+vec 10 20
+addpair 7
+nested 1 2 3
+keys ann 7
+or 1 99
+kw 5 6
+strs h 80
+as 1 2
+fnmap 11
+dynid 3

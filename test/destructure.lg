@@ -1,0 +1,45 @@
+(ns destructure-test)
+
+;; vector destructuring in let
+(let [[a b] [10 20]]
+  (println (str "vec " a " " b)))
+
+;; vector destructuring in fn params
+(defn addpair ^(fn [(vec int)] int) [[x y]] (+ x y))
+(println (str "addpair " (addpair [3 4])))
+
+;; nested vector
+(let [[x [y z]] [1 [2 3]]]
+  (println (str "nested " x " " y " " z)))
+
+;; map destructuring :keys
+(let [{:keys [name age]} {:name "ann" :age 7}]
+  (println (str "keys " name " " age)))
+
+;; map destructuring :keys with :or defaults
+(let [{:keys [a b] :or {b 99}} {:a 1}]
+  (println (str "or " a " " b)))
+
+;; map destructuring explicit kw keys
+(let [{x :px y :py} {:px 5 :py 6}]
+  (println (str "kw " x " " y)))
+
+;; map destructuring :strs
+(let [{:strs [host port]} {"host" "h" "port" 80}]
+  (println (str "strs " host " " port)))
+
+;; :as binds the whole map
+(let [{:keys [q] :as whole} {:q 1 :r 2}]
+  (println (str "as " q " " (count whole))))
+
+;; map destructuring in fn params
+(defn greet2 ^(fn [(map keyword int)] int) [{:keys [v]}] v)
+(println (str "fnmap " (greet2 {:v 11})))
+
+;; destructure a dyn (any) map via match
+(def dm {:name "bob" :id 3})
+(defn dynid [^any m]
+  (match m
+    {:keys [id]} (if-let [v id] v -1)
+    _ -1))
+(println (str "dynid " (dynid dm)))

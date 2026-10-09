@@ -1,0 +1,80 @@
+(ns core-test)
+
+;; arithmetic / comparison / str
+(println (str "add " (+ 1 2 3)))
+(println (str "sub " (- 10 3 2)))
+(println (str "mul " (* 2 3 4)))
+(println (str "div " (/ 12 3)))
+(println (str "mod " (mod 10 3)))
+(println (str "neg " (- 5)))
+(println (str "flt " (+. 1.5 2.5)))
+(println (str "abs " (abs -7)))
+(println (str "int " (int 3.9)))
+(println (str "eq " (= 1 1) " " (not= 1 2)))
+(println (str "cmp " (< 1 2) " " (> 3 2) " " (<= 2 2) " " (>= 3 3)))
+
+;; vec ops
+(def v [1 2 3])
+(println (str "vec " v))
+(println (str "conj " (conj v 4)))
+(println (str "nth " (nth v 1) " " (nth v 9 -1)))
+(println (str "count " (count v)))
+(println (str "first " (first v) " last " (last v) " second " (second v)))
+(println (str "peek " (peek v) " pop " (pop v)))
+(println (str "mapv " (mapv inc v) " filterv " (filterv (fn [x] (> x 1)) v)))
+
+;; list ops
+(def l '(1 2 3))
+(println (str "list " l))
+(println (str "cons " (cons 0 l)))
+(println (str "map " (map inc l)))
+(println (str "filter " (filter (fn [x] (not= x 2)) l)))
+(println (str "reduce " (reduce + 0 l)))
+(println (str "concat " (concat l l)))
+(println (str "apply " (apply + l)))
+(println (str "range " (range 4) " " (range 2 5)))
+
+;; map ops
+(def m {:a 1 :b 2})
+(println (str "map " m))
+(println (str "get " (get m :a) " " (get m :z 0)))
+(println (str "kwcall " (:a m)))
+(println (str "assoc " (assoc m :c 3)))
+(println (str "dissoc " (dissoc m :a)))
+(println (str "merge " (merge m {:b 20 :d 4})))
+(println (str "keys " (keys m) " vals " (vals m)))
+(println (str "contains " (contains? m :a)))
+(println (str "select " (select-keys m [:a])))
+(println (str "zipmap " (zipmap '(a b) '(1 2))))
+
+;; set ops
+(def s #{1 2 3})
+(println (str "set " s))
+(println (str "sconj " (conj s 4)))
+(println (str "disj " (disj s 1)))
+(println (str "union " (union s #{3 4})))
+(println (str "scontains " (contains? s 2)))
+
+;; seq conversions
+(println (str "vec-of " (vec l) " list-of " (set s)))
+(println (str "into " (into [1] '(2 3))))
+(println (str "empty " (empty? '()) " " (empty? v)))
+
+;; option
+(println (str "opt " (some? (Some 1)) " " (none? (Some 1)) " " (none? None)))
+
+;; atom
+(def a (atom 0))
+(swap! a inc)
+(reset! a 42)
+(println (str "atom " (deref a)))
+
+;; keywords / symbols / names
+(println (str "kw " (keyword "k") " name " (name :abc)))
+
+;; fn values / composition
+(println (str "comp " ((comp inc inc) 1)))
+(println (str "juxt " ((juxt inc dec) 5)))
+(println (str "partial " ((partial + 10) 5)))
+(println (str "const " ((constantly 9) "x")))
+(println (str "ident " (identity 7)))

@@ -1,0 +1,2 @@
+(defn g [^int x] x)
+(println (g "s"))
