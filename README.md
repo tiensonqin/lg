@@ -175,6 +175,10 @@ lib/        standard library in lg (test/ test framework)
 examples/   hello.lg, util.lg, features.lg
 test/       golden tests (.lg + .out); should_fail/ negative tests
 test.sh     runner: check → build → run → diff
+test/emit_matrix.py
+            self-host matrix: every builtin x type combo `lg check`
+            accepts must emit well-typed OCaml (CI enforces 0 FAILs)
+.github/    CI: opam 5.5.0 + clj-core/rrbvec pins + melange + node
 docs/       design contract, research report
 ```
 
