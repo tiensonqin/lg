@@ -28,13 +28,18 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
   derived from the path. An `(ns ...)` form is optional. Cross-file
   dependencies are declared with `(:require [ns :as alias])` and resolved
   transitively via `-I` include dirs.
-- **Multi-arity `defn`, destructuring, and `match`, `case`, `loop`/`recur`, `defrecord`.**
+- **Multi-arity `defn`, destructuring, `match`/`case`, named-fn
+  recursion, `defrecord`.**
   `(defn f ([x] …) ([x y] …))` dispatches on arity (each arity is its own
   checked definition). `let`/`fn`/parameters destructure vectors
   `[a [b c]]` and maps `{:keys [..] :strs [..] :as s :or {..}}` plus
   explicit `{sym :kw}` / `{sym "s"}` bindings. `match` is a special form:
   literals, quoted literals, `[…]` (arity-checked), `{…}`, `(Some x)` /
-  `None`, `_` and symbol binding — on typed *and* `any` scrutinees.
+  `None`, `_` and symbol binding — on typed *and* `any` scrutinees;
+  `case` is literal-dispatch sugar over it. `(fn f [x] … (f …))` binds
+  `f` to itself (emitted `let rec`) — the recursion idiom. `(defrecord
+  Point [x y])` generates a map-backed `->Point` constructor and a
+  `Point?` predicate. `& rest` varargs on `fn`/`defn`.
 - **A confined `any` boundary.** Mixed-type literals and `^any` produce
   `dyn`-boxed values (`Lg_rt.dyn`, a closed variant — no `Obj.magic`).
   `any` never leaks into surrounding inference (it unifies as a no-op);
@@ -56,6 +61,29 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
     surfaced by `lg modes` (a per-binding report). The planned OxCaml
     backend lowers `Local`/`Owned` to real `@local`/`unique` mode
     annotations, re-checked by the OxCaml typechecker.
+- **`.lgi` interface files (mli-style).** A per-module sidecar lists each
+  exported definition's type and per-parameter `:escapes` modes. What a
+  `.lgi` lists is the module's export surface (unlisted = private);
+  consumers can `check`/`modes` against an interface without the `.lg`
+  implementation. `lg lgi` regenerates additively.
+- **Implicit parameters (modular-implicit-style).** Trailing
+  `^:implicit` / `^{:implicit T}` params are resolved by type at call
+  sites and elaborated to ordinary OCaml arguments — dictionary passing
+  with zero runtime cost. `(:require [ns :implicits true])` merges a
+  module's exported implicit dicts. Signature-level
+  `^(fn [a (implicit (fn [a] string))] string)` ties the dict to the
+  argument's type var — call-site-type dispatch (see
+  `examples/impdemo/`).
+- **FBIP builder lowering.** Provably single-use collection literals —
+  unique-owner `conj`/`assoc`/`dissoc`/`pop`/`update`/`into`/`disj`
+  chains — emit `Lg_rt` growable builders plus a single freeze instead
+  of persistent-structure copies. Everything else stays persistent.
+- **OxCaml emit (`--backend=oxcaml`).** `Local` literals → `stack_`,
+  let bindings → `(local_ …)` / `(unique_ …)`, non-escaping params →
+  `(local_ p)`. Vanilla `ocaml` stays the default backend.
+- **`--strict` mode.** Heterogeneous literals require an explicit
+  `^any`-family annotation — every `any` in a program is one the author
+  wrote down.
 
 ## Pipeline
 
@@ -76,8 +104,12 @@ lg source (.lg)
 lg check  <file.lg> [-I dir]   # parse + macro-expand + typecheck, no output
 lg emit   <file.lg> [-I dir]   # write the emitted .ml next to the source
 lg modes  <file.lg> [-I dir]   # print the Local/Owned/Shared mode report
+lg lgi    <file.lg> [-I dir]   # regenerate the module's .lgi interface file
 lg build  <file.lg> [-I dir]   # emit + compile with ocamlfind (native, byte fallback)
 ```
+
+Flags: `--backend=ocaml|oxcaml` selects the emit backend; `--strict`
+requires `^any` on heterogeneous literals.
 
 `-I dir` adds an include directory used to resolve `:require`d modules.
 

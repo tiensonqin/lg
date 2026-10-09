@@ -101,10 +101,14 @@ let ty_of_form f : ty =
        | "string" -> TString | "keyword" -> TKeyword | "symbol" -> TSymbol
        | "unit" -> TUnit | "any" -> TAny | "nil" -> TUnit
        | v when String.length v = 1 || v.[0] = '\'' ->
-         (* type variable; same name maps to same rigid var *)
+         (* type variable; same name maps to the same var within one
+            annotation. Flexible (not rigid): it unifies with what the
+            body actually is, then generalize() makes it polymorphic —
+            this is what lets `(fn [a (implicit (fn [a] string))] string)`
+            dispatch on the call-site type. *)
          (match Hashtbl.find_opt tbl v with
           | Some t -> t
-          | None -> let t = fresh_rigid () in Hashtbl.replace tbl v t; t)
+          | None -> let t = fresh_var () in Hashtbl.replace tbl v t; t)
        | v -> TCon (v, []))
     | List (_, [ Atom (_, Symbol "vec"); t ]) -> TVec (go t)
     | List (_, [ Atom (_, Symbol "list"); t ]) -> TList (go t)
@@ -470,7 +474,22 @@ and infer_defn ctx f =
        unify l self_v fe.ety;
        (match ty_ann with Some t -> unify l fe.ety t | None -> ());
        (match imp with Some (Some t) -> unify l fe.ety t | _ -> ());
-       let sch = generalize [] fe.ety in
+       (* carry (implicit …) marks from the signature onto the stored
+          scheme — unify is transparent over TImplicit so the inferred
+          type alone would forget which params are implicit *)
+       let sch_ty =
+         match ty_ann with
+         | Some t ->
+           (match repr t, repr fe.ety with
+            | TFun (sts, _), TFun (its, r) when List.length sts = List.length its ->
+              TFun (List.map2
+                      (fun st it -> match repr st with TImplicit _ -> TImplicit it | _ -> it)
+                      sts its,
+                    r)
+            | _ -> fe.ety)
+         | None -> fe.ety
+       in
+       let sch = generalize [] sch_ty in
        let variadic = match fe.desc with EFun fn -> fn.variadic <> None | _ -> false in
        let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
        register_global ctx name sch variadic;
@@ -1218,8 +1237,15 @@ and fill_implicits ctx l (ce : expr) (arg_es : expr list) : expr list =
   match repr ce.ety with
   | TFun (ts, _) ->
     let nexplicit, implicits = Typ.split_implicit_params ts in
-    if implicits <> [] && List.length arg_es = nexplicit then
+    if implicits <> [] && List.length arg_es = nexplicit then begin
+      (* pin shared type vars with the explicit arg types first —
+         otherwise resolution order, not the argument type, picks the
+         dict (e.g. a later string->string instance would steal an
+         int call by unifying `a` to string) *)
+      let explicit_ts = List.filteri (fun i _ -> i < nexplicit) ts in
+      List.iter2 (fun st ae -> unify l st ae.ety) explicit_ts arg_es;
       arg_es @ List.map (fun t -> implicit_resolve ctx l (dimp t)) implicits
+    end
     else arg_es
   | _ -> arg_es
 
@@ -1667,9 +1693,17 @@ and infer_special ctx l name ce arg_es =
     let ret = with_coll c (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun a -> TMap (a, TInt)) (fun _ _ -> type_error l "frequencies on map") (fun _ -> TMap (TChar, TInt)) in
     mk l ret (ECall (ce, arg_es))
   | ("str" | "println" | "print" | "pr-str"), _ ->
-    (* printing accepts any value: unresolved vars become `any` (emitted as
-       Lg_rt.dyn), concrete types keep their static printer *)
-    List.iter (fun a -> unify l a TAny) ty_args;
+    (* a bare binder (ELocal) whose type is still free gets marked `any`:
+       nothing else will constrain it, and the dyn-at-boundary contract
+       lets call sites box literals for it. Non-binder args (calls, lets)
+       keep their inferred type — unifying a free application-result var
+       with `any` would poison it before a signature can pin it down. *)
+    List.iter
+      (fun e ->
+        (match e.desc with
+         | ELocal b -> (match repr b.bty with TVar _ -> unify l b.bty TAny | _ -> ())
+         | _ -> ()))
+      arg_es;
     let ret = if name = "str" || name = "pr-str" then TString else TUnit in
     mk l ret (ECall (ce, arg_es))
   | "swap!", [ a; f ] ->

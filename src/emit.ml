@@ -8,7 +8,9 @@ open Infer
 
 (* TImplicit is invisible downstream: binders, args and printers see
    the wrapped dictionary type *)
-let repr t = Typ.dimp t
+(* leftover free vars are emitted as `any` — dynamic at the OCaml
+   boundary (printer falls back to str_dyn, call sites box literals) *)
+let repr t = match Typ.dimp t with TVar _ -> TAny | u -> u
 
 let uid_ctr = ref 0
 let fresh_uid () = incr uid_ctr; !uid_ctr

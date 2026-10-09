@@ -2,3 +2,4 @@
 ;; (:require [dicts :implicits true])
 (def ^{:implicit (fn [int] string)} int-show (fn [^int x] (str "int#" x)))
 (def ^{:implicit int} default-port 8080)
+(def ^{:implicit (fn [string] string)} str-show (fn [^string s] (str "len-" (count s))))

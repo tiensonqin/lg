@@ -17,3 +17,9 @@
 
 ;; qualified explicit use still works
 (println (d/int-show 9))
+
+;; signature-level implicit: `a` ties shower to the argument type
+(defn describe ^(fn [a (implicit (fn [a] string))] string) [x shower]
+  (str "value: " (shower x)))
+(println (describe 42))     ;; -> int dict
+(println (describe "hi"))   ;; -> string dict (needs a string dict in scope)

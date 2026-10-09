@@ -1,0 +1,14 @@
+;; signature-level implicit params: the type var ties the dict to
+;; the argument type — call-site type picks the dictionary.
+(def ^{:implicit (fn [int] string)} show-int (fn [^int x] (str "int#" x)))
+(def ^{:implicit (fn [string] string)} show-str (fn [^string s] (str "len-" (count s))))
+
+;; `a` is shared between x and the implicit shower — true per-call dispatch
+(defn describe ^(fn [a (implicit (fn [a] string))] string) [x shower]
+  (str "value: " (shower x)))
+
+(println (describe 42))
+(println (describe "hello"))
+
+;; str on application results keeps the inferred type (no dyn poisoning)
+(println (str "pair: " (describe 7)))
