@@ -1,0 +1,3 @@
+(ns _lib)
+(defn sq ^(fn [int] int) [x] (* x x))
+(defn dbl ^(fn [int] int) [x] (+ x x))

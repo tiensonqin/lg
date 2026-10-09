@@ -19,8 +19,9 @@ type vbind = { vscheme : scheme; vkind : vkind; vvariadic : bool }
 
 type env = (string * vbind) list
 
-(* ns -> (name -> (scheme * variadic)) *)
-type globals = (string, (string, scheme * bool) Hashtbl.t) Hashtbl.t
+(* ns -> (name -> gbind); gexp=false marks a def hidden by an .lgi *)
+type gbind = { mutable gsch : scheme; gvar : bool; mutable gexp : bool }
+type globals = (string, (string, gbind) Hashtbl.t) Hashtbl.t
 
 type ctx = {
   modl : modl;
@@ -55,7 +56,10 @@ let ocaml_mod_of_ns ns =
   String.split_on_char '.' ns
   |> List.map (fun seg ->
          let seg = String.map (fun c -> if c = '-' then '_' else c) seg in
-         if String.length seg > 0 then String.capitalize_ascii seg else seg)
+         if String.length seg = 0 then "M"
+         else if seg.[0] >= 'a' && seg.[0] <= 'z' then String.capitalize_ascii seg
+         else if seg.[0] >= 'A' && seg.[0] <= 'Z' then seg
+         else "M" ^ seg)
   |> String.concat "_"
 
 (* ---------- type-expression parsing (for ^T metadata) ---------- *)
@@ -398,7 +402,7 @@ and register_global ctx name sch variadic =
     | Some t -> t
     | None -> let t = Hashtbl.create 17 in Hashtbl.replace ctx.globals ctx.modl.mname t; t
   in
-  Hashtbl.replace tbl name (sch, variadic)
+  Hashtbl.replace tbl name { gsch = sch; gvar = variadic; gexp = true }
 
 and infer_fn ctx l name params body : expr =
   let items = Array.to_list params in
@@ -540,7 +544,9 @@ and infer_symbol ctx l s : expr =
       match Hashtbl.find_opt ctx.globals target with
       | Some tbl ->
         (match Hashtbl.find_opt tbl n with
-         | Some (sch, _) -> mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
+         | Some { gsch = sch; gexp = true; _ } ->
+           mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
+         | Some _ -> type_error l (Printf.sprintf "%s is not exported by module %s" s target)
          | None -> type_error l (Printf.sprintf "unresolved symbol %s (no such var in %s)" s target))
       | None -> type_error l (Printf.sprintf "unresolved symbol %s (module %s not loaded)" s target))
   | _ ->
@@ -550,8 +556,9 @@ and infer_symbol ctx l s : expr =
      | _ ->
        (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
         | Some tbl when Hashtbl.mem tbl s ->
-          let sch, _ = Hashtbl.find tbl s in
-          mk l (instantiate sch) (EGlobal (ctx.modl.ocaml_name, munge s, s))
+          (match Hashtbl.find_opt tbl s with
+           | Some { gsch = sch; _ } -> mk l (instantiate sch) (EGlobal (ctx.modl.ocaml_name, munge s, s))
+           | None -> type_error l ("unresolved symbol " ^ s))
         | _ ->
           (match Hashtbl.find_opt builtin_table s with
            | Some _ -> mk l (instantiate_builtin_ty s) (EBuiltin s)
@@ -1068,7 +1075,7 @@ and rewrite_variadic_call ctx s l arg_es =
     (match Hashtbl.find_opt ctx.globals target with
      | Some tbl ->
        (match Hashtbl.find_opt tbl n with
-        | Some (sch, true) ->
+        | Some { gsch = sch; gvar = true; gexp = true } ->
           (match repr sch.sty with
            | TFun (ts, _) when List.length ts >= 1 ->
              let fixed = List.length ts - 1 in
@@ -1085,7 +1092,7 @@ and rewrite_variadic_call ctx s l arg_es =
     (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
      | Some tbl ->
        (match Hashtbl.find_opt tbl s with
-        | Some (sch, true) ->
+        | Some { gsch = sch; gvar = true; gexp = true } ->
           (match repr sch.sty with
            | TFun (ts, _) ->
              let fixed = List.length ts - 1 in

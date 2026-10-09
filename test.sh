@@ -9,6 +9,7 @@ fail=0
 
 for src in test/*.lg; do
   name=$(basename "$src" .lg)
+  case "$name" in _*) continue;; esac
   out="test/$name.out"
   bin=".test-bin/$name"
   if ! "$LG" check "$src" >/dev/null 2>&1; then
@@ -34,6 +35,7 @@ done
 for src in should_fail/*.lg; do
   [ -e "$src" ] || continue
   name=$(basename "$src" .lg)
+  case "$name" in _*) continue;; esac
   if "$LG" check "$src" > ".test-bin/$name.err" 2>&1; then
     echo "FAIL(expected-error) $name: typechecked but should not"
     fail=1

@@ -1,0 +1,3 @@
+;; util.lgi — interface; defs not listed are private
+(def fib (fn [int] int) :escapes [true])
+(def sum (fn [(list int)] int) :escapes [true])

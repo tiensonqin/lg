@@ -20,12 +20,48 @@ let is_alloc e =
 (* propagated mode: a binding/expr is "escaping" when it can outlive the
    current region. *)
 
+(* per-global per-param escape flags, keyed "Ocaml_module.munged_name";
+   filled from .lgi files and from analyzing the defining module *)
+let global_escapes : (string, bool list) Hashtbl.t = Hashtbl.create 31
+
+let rec occurs_anywhere p e =
+  match e.desc with
+  | ELocal b -> b.bid = p.bid
+  | EFun fn -> occurs_anywhere p fn.body
+  | ECall (c, args) -> occurs_anywhere p c || List.exists (occurs_anywhere p) args
+  | EIf (c, t, x) -> occurs_anywhere p c || occurs_anywhere p t || occurs_anywhere p x
+  | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.exists (occurs_anywhere p) es
+  | EMapLit kes -> List.exists (fun (k, v) -> occurs_anywhere p k || occurs_anywhere p v) kes
+  | ELet (ps, b) -> List.exists (fun (_, i) -> occurs_anywhere p i) ps || occurs_anywhere p b
+  | EMatchOpt (s, _, t, x) -> occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p x
+  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> occurs_anywhere p e
+  | EOpt (Some e) -> occurs_anywhere p e
+  | EDynVec (s, _, t, e) | EDynMap (s, _, t, e) ->
+    occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p e
+  | _ -> false
+
+(* does p occur in the fn's result-carrying positions (the value returned
+   to callers) — conservative over-approximation *)
+let rec occurs_in_result p e =
+  match e.desc with
+  | EIf (_, t, x) -> occurs_in_result p t || occurs_in_result p x
+  | ELet (_, b) -> occurs_in_result p b
+  | EDo es -> (match List.rev es with [] -> false | l :: _ -> occurs_in_result p l)
+  | EMatchOpt (_, _, t, x) -> occurs_in_result p t || occurs_in_result p x
+  | EDynVec (_, _, t, _) | EDynMap (_, _, t, _) -> occurs_in_result p t
+  | _ -> occurs_anywhere p e
+
 let escapes_of_callee callee =
   match callee.desc with
   | EBuiltin _ -> false (* builtins that retain args marked individually *)
   | ELocal _ | EGlobal _ -> true (* unknown fn: assume args escape *)
   | EFun _ -> false    (* immediately-applied lambda: args stay in region *)
   | _ -> true
+
+let arg_escapes callee =
+  match callee.desc with
+  | EGlobal (m, n, _) -> Hashtbl.find_opt global_escapes (m ^ "." ^ n)
+  | _ -> None
 
 let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
   (* [region_ret] = true when this position is the region's return path:
@@ -35,8 +71,17 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
    | EFun fn -> analyze_fn fn
    | ECall (ce, args) ->
      let callee_escapes = escapes_of_callee ce in
+     let escs = arg_escapes ce in
      analyze_expr ~region_ret:true ce;
-     List.iter (fun a -> analyze_expr ~region_ret:callee_escapes a) args
+     List.iteri
+       (fun i a ->
+         let esc =
+           match escs with
+           | Some l -> (match List.nth_opt l i with Some e -> e | None -> true)
+           | None -> callee_escapes
+         in
+         analyze_expr ~region_ret:esc a)
+       args
    | EIf (c, t, x) ->
      analyze_expr ~region_ret:true c;
      analyze_expr ~region_ret t;
@@ -90,6 +135,15 @@ and is_escaping_use b body : bool =
   in
   go false body;
   !found
+
+let param_escapes (fn : func) : bool list =
+  List.map (fun p -> is_escaping_use p fn.body || occurs_in_result p fn.body) fn.params
+
+let record_escapes ocaml_mod (d : topdef) =
+  match d.texpr.desc with
+  | EFun fn ->
+    Hashtbl.replace global_escapes (ocaml_mod ^ "." ^ d.tname) (param_escapes fn)
+  | _ -> ()
 
 let owned_hint () =
   (* An escaping allocation may still be Owned when it has a single-use

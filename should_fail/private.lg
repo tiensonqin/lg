@@ -1,0 +1,2 @@
+(ns private (:require [_privdep :as P]))
+(println (P/hidden 3))

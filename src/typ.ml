@@ -90,6 +90,26 @@ and string_of_ty t =
     if ts = [] then n else "(" ^ n ^ " " ^ String.concat " " (List.map string_of_ty ts) ^ ")"
   | TVar v -> "'a" ^ string_of_int v.id
 
+(* printer in the `^`-annotation grammar (what ty_of_form reads) — used
+   for .lgi interface files *)
+let rec string_of_lg_ty t =
+  match repr t with
+  | TInt -> "int" | TFloat -> "float" | TBool -> "bool" | TChar -> "char"
+  | TString -> "string" | TKeyword -> "keyword" | TSymbol -> "symbol"
+  | TUnit -> "unit" | TAny -> "any"
+  | TList t -> "(list " ^ string_of_lg_ty t ^ ")"
+  | TVec t -> "(vec " ^ string_of_lg_ty t ^ ")"
+  | TMap (k, v) -> "(map " ^ string_of_lg_ty k ^ " " ^ string_of_lg_ty v ^ ")"
+  | TSet t -> "(set " ^ string_of_lg_ty t ^ ")"
+  | TAtom t -> "(atom " ^ string_of_lg_ty t ^ ")"
+  | TOption t -> "(option " ^ string_of_lg_ty t ^ ")"
+  | TTuple ts -> "(tuple " ^ String.concat " " (List.map string_of_lg_ty ts) ^ ")"
+  | TFun (ts, r) ->
+    "(fn [" ^ String.concat " " (List.map string_of_lg_ty ts) ^ "] " ^ string_of_lg_ty r ^ ")"
+  | TCon (n, ts) ->
+    if ts = [] then n else "(" ^ n ^ " " ^ String.concat " " (List.map string_of_lg_ty ts) ^ ")"
+  | TVar v -> "'a" ^ string_of_int v.id
+
 (* ---- schemes ---- *)
 
 type scheme = { svars : int list; sty : ty }

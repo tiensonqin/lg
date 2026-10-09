@@ -25,7 +25,7 @@ let () =
   Arg.parse speclist
     (fun a ->
       match !cmd with
-      | None when List.mem a [ "check"; "emit"; "modes"; "build" ] -> cmd := Some a
+      | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build" ] -> cmd := Some a
       | None -> cmd := Some "emit"; file := Some a
       | Some _ -> (match !file with None -> file := Some a | Some _ -> raise (Exit 2)))
     usage;
@@ -38,6 +38,11 @@ let () =
         | Some "check" ->
           Printf.printf "ok (%d module%s)\n" (List.length mods)
             (if List.length mods = 1 then "" else "s")
+        | Some "lgi" ->
+          let entry = List.hd (List.rev mods) in
+          Lgc.Compiler.write_lgi entry;
+          Printf.printf "wrote %s
+" (Lgc.Compiler.lgi_path entry.mpath)
         | Some "modes" ->
           let l, o, s = Lgc.Compiler.mode_stats mods in
           let total = l + o + s in

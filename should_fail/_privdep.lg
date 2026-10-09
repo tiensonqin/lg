@@ -1,0 +1,3 @@
+(ns _privdep)
+(defn pub ^(fn [int] int) [x] (+ x 1))
+(defn hidden ^(fn [int] int) [x] (+ x 2))

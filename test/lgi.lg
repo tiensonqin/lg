@@ -1,0 +1,3 @@
+(ns lgi
+  (:require [_lib :as L]))
+(println (str "lgi " (L/sq 7)))
