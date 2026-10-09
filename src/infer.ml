@@ -27,7 +27,12 @@ type ctx = {
   modl : modl;
   globals : globals;
   mutable env : env;
+  mutable implicits : (ty * (unit -> expr)) list;  (* implicit dicts, innermost first *)
+  mimplicits : (string * ty) list ref;           (* exported implicit defs of this module *)
 }
+
+(* ns -> (name * dict type) entries exported via (:implicits true) *)
+let module_implicits : (string, (string * ty) list) Hashtbl.t = Hashtbl.create 16
 
 let lookup env n = List.assoc_opt n env
 
@@ -86,6 +91,7 @@ let ty_of_form f : ty =
     | List (_, [ Atom (_, Symbol "set"); t ]) -> TSet (go t)
     | List (_, [ Atom (_, Symbol "atom"); t ]) -> TAtom (go t)
     | List (_, [ Atom (_, Symbol "option"); t ]) -> TOption (go t)
+    | List (_, [ Atom (_, Symbol "implicit"); t ]) -> TImplicit (go t)
     | List (_, [ Atom (_, Symbol "map"); k; v ]) -> TMap (go k, go v)
     | List (_, Atom (_, Symbol "tuple") :: ts) -> TTuple (List.map go ts)
     | List (_, Atom (_, Symbol "fn") :: Vector (_, args) :: rest) ->
@@ -99,6 +105,31 @@ let ty_of_form f : ty =
     | bad -> raise (Type_error (atom_loc bad, "unsupported type expression"))
   in
   go f
+
+(* scan a form's metadata for `^:implicit` / `^{:implicit T}`:
+   None = not implicit, Some None = implicit (key = inferred type),
+   Some (Some t) = implicit (key = declared T) *)
+let rec implicit_ann f : ty option option =
+  match f with
+  | Meta (_, m, inner) ->
+    (match implicit_ann inner with
+     | Some _ as r -> r
+     | None ->
+       (match m with
+        | Atom (_, Keyword "implicit") | Atom (_, Symbol "implicit") -> Some None
+        | Map (_, kvs) ->
+          (match
+             List.find_map
+               (fun (k, v) ->
+                 match k with
+                 | Atom (_, Keyword "implicit") | Atom (_, Symbol "implicit") -> Some v
+                 | _ -> None)
+               kvs
+           with
+           | Some (Atom (_, Bool true)) | None -> Some None
+           | Some tf -> Some (try Some (ty_of_form tf) with Type_error _ -> None))
+        | _ -> None))
+  | _ -> None
 
 (* Split metadata attached to a form.
    Returns (mode_hint, type_annotation option, inner form). *)
@@ -256,8 +287,10 @@ let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = []; iface_only = false } in
-  let ctx = { modl = m; globals; env = [] } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref [] } in
   List.iter (infer_top ctx) forms;
+  if !(ctx.mimplicits) <> [] then
+    Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
   m
 
 and infer_top ctx f =
@@ -280,26 +313,60 @@ and parse_ns ctx l rest =
           List.iter
             (fun spec ->
               match spec with
-              | Vector (_, [| Atom (_, Symbol ns) |]) ->
-                ctx.modl.requires <- ctx.modl.requires @ [ (ns, ns) ]
-              | Vector (_, [| Atom (_, Symbol ns); Atom (_, Keyword "as"); Atom (_, Symbol alias) |]) ->
-                ctx.modl.requires <- ctx.modl.requires @ [ (alias, ns) ]
-              | _ -> type_error l "unsupported :require spec (want [ns] or [ns :as alias])")
+              | Vector (_, els) when Array.length els >= 1 ->
+                (match els.(0) with
+                 | Atom (_, Symbol ns) ->
+                   let rec opts i alias implicits =
+                     if i >= Array.length els then (alias, implicits)
+                     else
+                       match els.(i), (if i + 1 < Array.length els then Some els.(i + 1) else None) with
+                       | Atom (_, Keyword "as"), Some (Atom (_, Symbol a)) -> opts (i + 2) (Some a) implicits
+                       | Atom (_, Keyword "implicits"), Some (Atom (_, Bool b)) -> opts (i + 2) alias b
+                       | Atom (_, Keyword "implicits"), _ -> opts (i + 1) alias true
+                       | _ -> type_error l "unsupported :require option"
+                   in
+                   let alias, implicits = opts 1 None false in
+                   ctx.modl.requires <- ctx.modl.requires @ [ (Option.value ~default:ns alias, ns) ];
+                   (match implicits with
+                    | true ->
+                      (match Hashtbl.find_opt module_implicits ns with
+                       | Some entries ->
+                         List.iter
+                           (fun (n, k) ->
+                             ctx.implicits <-
+                               (k, fun () -> mk l k (EGlobal (ocaml_mod_of_ns ns, munge n, n)))
+                               :: ctx.implicits)
+                           entries
+                       | None -> ())
+                    | false -> ())
+                 | _ -> type_error l "unsupported :require spec (want [ns] or [ns :as alias] :implicits true)")
+              | _ -> type_error l "unsupported :require spec (want a vector)")
             specs
         | _ -> type_error l "unsupported ns clause (only :require is supported)")
       clauses
   | _ -> type_error l "malformed ns form"
 
+and register_implicit ctx l name imp (top : topdef) =
+  match imp with
+  | None -> ()
+  | Some key_ann ->
+    let key = match key_ann with Some t -> t | None -> top.tsch.sty in
+    top.timplicit <- Some key;
+    ctx.mimplicits := (name, key) :: !(ctx.mimplicits);
+    ctx.implicits <-
+      (key, fun () -> mk l key (EGlobal (ctx.modl.ocaml_name, munge name, name)))
+      :: ctx.implicits
+
 and infer_def ctx f =
   let l = atom_loc f in
   match f with
   | List (_, _ :: namef :: rest) ->
-    let name, mode_hint, ty_ann, rest =
+    let name, mode_hint, ty_ann, rest, imp =
       match namef with
-      | Atom (_, Symbol n) -> (n, None, None, rest)
-      | Meta (_, m, Atom (_, Symbol n)) ->
-        let mh, ta, _ = split_meta (Meta (no_loc, m, Atom (no_loc, Symbol n))) in
-        (n, mh, ta, rest)
+      | Atom (_, Symbol n) -> (n, None, None, rest, None)
+      | Meta (_, _, Atom (_, Symbol n)) as mf ->
+        let mh, ta, _ = split_meta mf in
+        (n, mh, ta, rest, implicit_ann mf)
       | _ -> type_error l "def requires a name"
     in
     let e = match rest with
@@ -309,9 +376,11 @@ and infer_def ctx f =
     in
     let texpr = infer_expr ctx e in
     (match ty_ann with Some t -> unify texpr.loc texpr.ety t | None -> ());
+    (match imp with Some (Some t) -> unify texpr.loc texpr.ety t | _ -> ());
     let sch = generalize [] texpr.ety in
-    let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared) } in
+    let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
     register_global ctx name sch false;
+    register_implicit ctx l name imp top;
     top
   | _ -> type_error l "malformed def"
 
@@ -319,12 +388,12 @@ and infer_defn ctx f =
   let l = atom_loc f in
   match f with
   | List (_, _ :: namef :: rest) ->
-    let name, mode_hint, ty_ann =
+    let name, mode_hint, ty_ann, imp =
       match namef with
-      | Atom (_, Symbol n) -> (n, None, None)
-      | Meta (_, m, Atom (_, Symbol n)) ->
-        let mh, ta, _ = split_meta (Meta (no_loc, m, Atom (no_loc, Symbol n))) in
-        (n, mh, ta)
+      | Atom (_, Symbol n) -> (n, None, None, None)
+      | Meta (_, _, Atom (_, Symbol n)) as mf ->
+        let mh, ta, _ = split_meta mf in
+        (n, mh, ta, implicit_ann mf)
       | _ -> type_error l "defn requires a name"
     in
     let rest = match rest with Atom (_, Str _) :: r -> r | r -> r in
@@ -340,17 +409,19 @@ and infer_defn ctx f =
      | Vector (_, params) :: body ->
        (* allow self-recursion: bind name to a fresh var while the body is
           inferred, then unify it with the inferred fn type *)
-       let saved = ctx.env in
+       let saved = ctx.env and saved_imp = ctx.implicits in
        let self_v = fresh_var () in
        ctx.env <- (name, { vscheme = mono self_v; vkind = KGlobal (ctx.modl.ocaml_name, munge name); vvariadic = false }) :: ctx.env;
        let fe = infer_fn ctx l (Some name) params body in
-       ctx.env <- saved;
+       ctx.env <- saved; ctx.implicits <- saved_imp;
        unify l self_v fe.ety;
        (match ty_ann with Some t -> unify l fe.ety t | None -> ());
+       (match imp with Some (Some t) -> unify l fe.ety t | _ -> ());
        let sch = generalize [] fe.ety in
        let variadic = match fe.desc with EFun fn -> fn.variadic <> None | _ -> false in
-       let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared) } in
+       let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
        register_global ctx name sch variadic;
+       register_implicit ctx l name imp top;
        top
      | (List (_, Vector _ :: _) :: _) as rest when List.for_all (function List (_, Vector _ :: _) -> true | _ -> false) rest ->
        (* multi-arity: (defn f ([p] b) ([p p] b) ...)
@@ -381,7 +452,7 @@ and infer_defn ctx f =
              let fe = infer_fn ctx al (Some an) ps body in
              unify al ph fe.ety;
              { tname = an; tloc = al; tsch = generalize [] fe.ety; texpr = fe;
-               tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared) })
+               tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None })
            infos
        in
        List.iter (fun t -> register_global ctx t.tname t.tsch false) tops;
@@ -389,7 +460,7 @@ and infer_defn ctx f =
           calls are arity-rewritten. *)
        let first = List.hd tops in
        let alias_e = mk l first.texpr.ety (EGlobal (ctx.modl.ocaml_name, munge first.tname, first.tname)) in
-       let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared } in
+       let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared; timplicit = None } in
        register_global ctx name alias.tsch false;
        ctx.modl.defs <- ctx.modl.defs @ tops;
        alias
@@ -421,6 +492,10 @@ and infer_fn ctx l name params body : expr =
     | Atom (_, Symbol s) ->
       let b = fresh_binder s in
       b.bty <- (match ta with Some t -> t | None -> fresh_var ());
+      (match implicit_ann f with
+       | Some (Some t) -> b.bty <- TImplicit t
+       | Some None -> b.bty <- TImplicit b.bty
+       | None -> ());
       ((s, b), None)
     | (Vector _ | Map _) ->
       let b = fresh_binder "dp" in
@@ -435,7 +510,7 @@ and infer_fn ctx l name params body : expr =
     | None -> None
     | Some s -> let b = fresh_binder s in b.bty <- TList (fresh_var ()); Some (s, b)
   in
-  let saved = ctx.env in
+  let saved = ctx.env and saved_imp = ctx.implicits in
   List.iter
     (fun (s, b) -> if s <> "" then ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env)
     binders;
@@ -450,7 +525,7 @@ and infer_fn ctx l name params body : expr =
          destr_jobs)
   in
   let body_es = List.map (infer_expr ctx) body in
-  ctx.env <- saved;
+  ctx.env <- saved; ctx.implicits <- saved_imp;
   let body_e =
     match body_es with
     | [] -> mk l TUnit ENil
@@ -682,6 +757,11 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
     let b = fresh_binder s in
     b.bty <- rhs.ety;
     ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+    (match implicit_ann pat with
+     | Some key_ann ->
+       let key = match key_ann with Some t -> t | None -> b.bty in
+       ctx.implicits <- (key, fun () -> mk rhs.loc key (ELocal b)) :: ctx.implicits
+     | None -> ());
     bind_one b rhs
   in
   match inner with
@@ -796,7 +876,7 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
 
 and infer_let ctx l binds body =
   let items = Array.to_list binds in
-  let saved = ctx.env in
+  let saved = ctx.env and saved_imp = ctx.implicits in
   let rec go acc = function
     | [] -> List.rev acc
     | bform :: eform :: rest ->
@@ -807,7 +887,7 @@ and infer_let ctx l binds body =
   in
   let pairs = go [] items in
   let body_es = List.map (infer_expr ctx) body in
-  ctx.env <- saved;
+  ctx.env <- saved; ctx.implicits <- saved_imp;
   let body_e = match body_es with [] -> mk l TUnit ENil | [ e ] -> e | es -> mk l (last es).ety (EDo es) in
   mk l body_e.ety (ELet (pairs, body_e))
 
@@ -848,13 +928,13 @@ and infer_if_let ctx l b src body =
   let name = match inner with Atom (_, Symbol s) -> s | _ -> type_error l "if-let binding must be a symbol" in
   let binder = fresh_binder name in
   binder.bty <- payload;
-  let saved = ctx.env in
+  let saved = ctx.env and saved_imp = ctx.implicits in
   ctx.env <- (name, { vscheme = mono payload; vkind = KLocal binder; vvariadic = false }) :: ctx.env;
   let then_f, else_f =
     match body with [ t ] -> (t, Atom (l, Nil)) | [ t; e ] -> (t, e) | _ -> type_error l "if-let takes then/else"
   in
   let te = infer_expr ctx then_f in
-  ctx.env <- saved;
+  ctx.env <- saved; ctx.implicits <- saved_imp;
   let ee = infer_expr ctx else_f in
   let ret, te, ee = join_branches l te ee in
   mk l ret (EMatchOpt (src_e, binder, te, ee))
@@ -894,9 +974,9 @@ and infer_match ctx l scrut clauses =
       let clause =
         (match lit_expr pat with
          | Some le ->
-           let saved = ctx.env in
+           let saved = ctx.env and saved_imp = ctx.implicits in
            let te = infer_expr ctx body_f in
-           ctx.env <- saved;
+           ctx.env <- saved; ctx.implicits <- saved_imp;
            (te, fun te' next -> mk l ret (EIf (eq_guard le, te', next)))
          | None ->
            (match pat with
@@ -904,33 +984,33 @@ and infer_match ctx l scrut clauses =
               let dead = fresh_binder "_" in
               dead.bty <- fresh_var ();
               unify l se.ety (TOption dead.bty);
-              let saved = ctx.env in
+              let saved = ctx.env and saved_imp = ctx.implicits in
               let te = infer_expr ctx body_f in
-              ctx.env <- saved;
+              ctx.env <- saved; ctx.implicits <- saved_imp;
               (te, fun te' next -> mk l ret (EMatchOpt (se, dead, next, te')))
             | Atom (_, Symbol "_") ->
               let te = infer_expr ctx body_f in
               (te, fun te' _ -> te')
             | Atom (_, Symbol _) ->
-              let saved = ctx.env in
+              let saved = ctx.env and saved_imp = ctx.implicits in
               let pairs = bind_pattern ctx (atom_loc pat) pat se in
               let te = infer_expr ctx body_f in
-              ctx.env <- saved;
+              ctx.env <- saved; ctx.implicits <- saved_imp;
               (te, fun te' _ -> mk l ret (ELet (pairs, te')))
             | Map (ml, _) ->
               if scrut_any then (
                 let dm = fresh_binder "mm" in
                 dm.bty <- TMap (TAny, TAny);
-                let saved = ctx.env in
+                let saved = ctx.env and saved_imp = ctx.implicits in
                 let pairs = bind_pattern ctx ml pat (mk ml (TMap (TAny, TAny)) (ELocal dm)) in
                 let te = infer_expr ctx body_f in
-                ctx.env <- saved;
+                ctx.env <- saved; ctx.implicits <- saved_imp;
                 (te, fun te' next -> mk l ret (EDynMap (se, dm, mk l ret (ELet (pairs, te')), next))))
               else (
-                let saved = ctx.env in
+                let saved = ctx.env and saved_imp = ctx.implicits in
                 let pairs = bind_pattern ctx ml pat se in
                 let te = infer_expr ctx body_f in
-                ctx.env <- saved;
+                ctx.env <- saved; ctx.implicits <- saved_imp;
                 (te, fun te' _ -> mk l ret (ELet (pairs, te'))))
             | Vector (vl, items) ->
               let n = Array.length items in
@@ -941,36 +1021,36 @@ and infer_match ctx l scrut clauses =
                 let pairs = bind_pattern ctx vl pat dv_e in
                 let cnt = mk vl TInt (ECall (mk vl (TFun ([ TVec TAny ], TInt)) (EBuiltin "count"), [ dv_e ])) in
                 let guard = mk vl TBool (ECall (mk vl (TFun ([ TInt; TInt ], TBool)) (EBuiltin "="), [ cnt; mk vl TInt (EInt n) ])) in
-                let saved = ctx.env in
+                let saved = ctx.env and saved_imp = ctx.implicits in
                 let te = infer_expr ctx body_f in
-                ctx.env <- saved;
+                ctx.env <- saved; ctx.implicits <- saved_imp;
                 (te, fun te' next -> mk l ret (EDynVec (se, dv, mk l ret (EIf (guard, mk l ret (ELet (pairs, te')), next)), next))))
               else (
                 let el = fresh_var () in
                 unify vl se.ety (TVec el);
                 let cnt = mk vl TInt (ECall (mk vl (TFun ([ TVec el ], TInt)) (EBuiltin "count"), [ se ])) in
                 let guard = mk vl TBool (ECall (mk vl (TFun ([ TInt; TInt ], TBool)) (EBuiltin "="), [ cnt; mk vl TInt (EInt n) ])) in
-                let saved = ctx.env in
+                let saved = ctx.env and saved_imp = ctx.implicits in
                 let pairs = bind_pattern ctx vl pat se in
                 let te = infer_expr ctx body_f in
-                ctx.env <- saved;
+                ctx.env <- saved; ctx.implicits <- saved_imp;
                 (te, fun te' next -> mk l ret (EIf (guard, mk l ret (ELet (pairs, te')), next))))
             | List (_, Atom (_, Symbol "Some") :: [ p ]) ->
               let pl = atom_loc p in
               let nb = fresh_binder "ov" in
               nb.bty <- fresh_var ();
               unify pl se.ety (TOption nb.bty);
-              let saved = ctx.env in
+              let saved = ctx.env and saved_imp = ctx.implicits in
               let pairs = bind_pattern ctx pl p (mk pl nb.bty (ELocal nb)) in
               let te = infer_expr ctx body_f in
-              ctx.env <- saved;
+              ctx.env <- saved; ctx.implicits <- saved_imp;
               (te, fun te' next -> mk l ret (EMatchOpt (se, nb, mk l ret (ELet (pairs, te')), next)))
             | List (_, Atom (_, Symbol "quote") :: [ qf ]) ->
               (match lit_expr qf with
                | Some le ->
-                 let saved = ctx.env in
+                 let saved = ctx.env and saved_imp = ctx.implicits in
                  let te = infer_expr ctx body_f in
-                 ctx.env <- saved;
+                 ctx.env <- saved; ctx.implicits <- saved_imp;
                  (te, fun te' next -> mk l ret (EIf (eq_guard le, te', next)))
                | None -> type_error l "unsupported quoted match pattern")
             | _ -> type_error l "unsupported match pattern"))
@@ -1010,6 +1090,52 @@ and macro_lookup ctx s =
     Macro.find_macro target n
   | None -> Macro.find_macro ctx.modl.mname s'
 
+(* clone a type with fresh unification vars — used to match an implicit
+   entry against a needed dictionary type without mutating the entry *)
+and shallow_clone t =
+  let tbl = Hashtbl.create 7 in
+  let rec go t =
+    match repr t with
+    | TVar v ->
+      (match Hashtbl.find_opt tbl v.id with
+       | Some x -> x
+       | None -> let x = fresh_var () in Hashtbl.replace tbl v.id x; x)
+    | TImplicit t -> TImplicit (go t)
+    | TList t -> TList (go t)
+    | TVec t -> TVec (go t)
+    | TSet t -> TSet (go t)
+    | TAtom t -> TAtom (go t)
+    | TOption t -> TOption (go t)
+    | TMap (k, v) -> TMap (go k, go v)
+    | TTuple ts -> TTuple (List.map go ts)
+    | TCon (n, ts) -> TCon (n, List.map go ts)
+    | TFun (ts, r) -> TFun (List.map go ts, go r)
+    | t -> t
+  in
+  ignore tbl; go t
+
+and implicit_resolve ctx l (needed : ty) : expr =
+  let rec go = function
+    | [] -> type_error l ("no implicit instance of type " ^ string_of_ty needed ^ " in scope")
+    | (ety, thunk) :: rest ->
+      let cand = shallow_clone ety in
+      (match (try unify l cand needed; true with Type_error _ -> false) with
+       | true -> thunk ()
+       | false -> go rest)
+  in
+  go ctx.implicits
+
+(* append resolved implicit dictionaries when the callee's trailing
+   params are TImplicit and the call supplies only the explicit prefix *)
+and fill_implicits ctx l (ce : expr) (arg_es : expr list) : expr list =
+  match repr ce.ety with
+  | TFun (ts, _) ->
+    let nexplicit, implicits = Typ.split_implicit_params ts in
+    if implicits <> [] && List.length arg_es = nexplicit then
+      arg_es @ List.map (fun t -> implicit_resolve ctx l (dimp t)) implicits
+    else arg_es
+  | _ -> arg_es
+
 and infer_app ctx l callee args =
   match callee with
   | Atom (_, Symbol s) ->
@@ -1028,6 +1154,7 @@ and infer_app ctx l callee args =
   | _ ->
     let ce = infer_expr ctx callee in
     let arg_es = List.map (infer_expr ctx) args in
+    let arg_es = fill_implicits ctx l ce arg_es in
     let ret = fresh_var () in
     unify ce.loc ce.ety (TFun (List.map (fun e -> e.ety) arg_es, ret));
     mk l ret (ECall (ce, arg_es))
@@ -1063,6 +1190,7 @@ and infer_app_no_macro ctx l s args =
      (* variadic callsite rewrite: if callee is a global fn declared
         variadic (a & rest param), wrap extra args into a list literal *)
      let arg_es = rewrite_variadic_call ctx s l arg_es in
+     let arg_es = fill_implicits ctx l ce arg_es in
      let ret = fresh_var () in
      unify ce.loc ce.ety (TFun (List.map (fun e -> e.ety) arg_es, ret));
      mk l ret (ECall (ce, arg_es)))

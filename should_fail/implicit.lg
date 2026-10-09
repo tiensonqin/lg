@@ -1,0 +1,3 @@
+;; no implicit instance in scope → resolution error at the call site
+(defn show [x ^{:implicit (fn [int] string)} s] (s x))
+(println (show 1))

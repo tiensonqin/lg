@@ -17,6 +17,7 @@ type ty =
   | TOption of ty
   | TTuple of ty list
   | TFun of ty list * ty
+  | TImplicit of ty               (* a trailing implicit (dictionary) param *)
   | TVar of tvar
   | TCon of string * ty list  (* user-defined named type, e.g. records *)
   | TAny                     (* unchecked dynamic boundary; only via explicit ^any *)
@@ -58,6 +59,7 @@ let rec unify loc a b =
         type_error loc "rigid type variable cannot be unified with a concrete type";
       if occurs v t then type_error loc "occurs check failed (infinite type)";
       v.link <- Some t
+    | TImplicit t, u | u, TImplicit t -> unify loc t u
     | TAny, _ | _, TAny -> ()
     | TInt, TInt | TFloat, TFloat | TBool, TBool | TChar, TChar | TString, TString
     | TKeyword, TKeyword | TSymbol, TSymbol | TUnit, TUnit -> ()
@@ -83,6 +85,7 @@ and string_of_ty t =
   | TSet t -> "(set " ^ string_of_ty t ^ ")"
   | TAtom t -> "(atom " ^ string_of_ty t ^ ")"
   | TOption t -> "(option " ^ string_of_ty t ^ ")"
+  | TImplicit t -> "(implicit " ^ string_of_ty t ^ ")"
   | TTuple ts -> "(tuple " ^ String.concat " " (List.map string_of_ty ts) ^ ")"
   | TFun (ts, r) ->
     "(fn [" ^ String.concat " " (List.map string_of_ty ts) ^ "] -> " ^ string_of_ty r ^ ")"
@@ -103,6 +106,7 @@ let rec string_of_lg_ty t =
   | TSet t -> "(set " ^ string_of_lg_ty t ^ ")"
   | TAtom t -> "(atom " ^ string_of_lg_ty t ^ ")"
   | TOption t -> "(option " ^ string_of_lg_ty t ^ ")"
+  | TImplicit t -> "(implicit " ^ string_of_lg_ty t ^ ")"
   | TTuple ts -> "(tuple " ^ String.concat " " (List.map string_of_lg_ty ts) ^ ")"
   | TFun (ts, r) ->
     "(fn [" ^ String.concat " " (List.map string_of_lg_ty ts) ^ "] " ^ string_of_lg_ty r ^ ")"
@@ -116,11 +120,24 @@ type scheme = { svars : int list; sty : ty }
 
 let mono t = { svars = []; sty = t }
 
+(* trailing implicit params of a fn type: (explicit_count, implicit_ts) *)
+let split_implicit_params ts =
+  let rec take acc = function
+    | t :: rest -> (match repr t with TImplicit _ -> take (t :: acc) rest | _ -> acc)
+    | [] -> acc
+  in
+  let implicits = take [] (List.rev ts) in
+  (List.length ts - List.length implicits, implicits)
+
+(* strip TImplicit wrappers — for value-level uses of a binder *)
+let rec dimp t =
+  match repr t with TImplicit u -> dimp u | u -> u
+
 let free_tvars t acc =
   let rec go acc t =
     match repr t with
     | TVar v -> if List.mem v.id acc then acc else v.id :: acc
-    | TList t | TVec t | TSet t | TAtom t | TOption t -> go acc t
+    | TList t | TVec t | TSet t | TAtom t | TOption t | TImplicit t -> go acc t
     | TMap (k, v) -> go (go acc k) v
     | TTuple ts | TCon (_, ts) -> List.fold_left go acc ts
     | TFun (ts, r) -> go (List.fold_left go acc ts) r
@@ -148,6 +165,7 @@ let instantiate sch =
     | TSet t -> TSet (go t)
     | TAtom t -> TAtom (go t)
     | TOption t -> TOption (go t)
+    | TImplicit t -> TImplicit (go t)
     | TMap (k, v) -> TMap (go k, go v)
     | TTuple ts -> TTuple (List.map go ts)
     | TCon (n, ts) -> TCon (n, List.map go ts)

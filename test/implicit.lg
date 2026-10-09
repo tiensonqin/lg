@@ -1,0 +1,15 @@
+;; implicit params: dictionary passing resolved at call sites
+(def ^{:implicit (fn [int] string)} int-show (fn [^int x] (str x)))
+(def ^{:implicit (fn [string] string)} str-show (fn [^string x] (str "<" x ">")))
+
+(defn show [x ^{:implicit (fn [int] string)} s] (s x))
+(println (show 42))                            ;; picks int-show
+(println (show 42 (fn [^int n] (str "n=" n)))) ;; explicit overrides
+
+;; let-bound implicit shadows
+(let [^{:implicit (fn [int] string)} s (fn [^int x] (str "#" x))]
+  (println (show 7)))
+
+;; implicit param used as a value
+(defn twice [x ^{:implicit (fn [int] string)} s] (str (s x) (s x)))
+(println (twice 3))

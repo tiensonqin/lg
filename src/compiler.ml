@@ -31,8 +31,10 @@ let scan_ns (forms : form list) : string option * string list =
               List.iter
                 (fun spec ->
                   match spec with
-                  | Vector (_, [| Atom (_, Symbol rn) |]) -> reqs := rn :: !reqs
-                  | Vector (_, [| Atom (_, Symbol rn); Atom (_, Keyword "as"); Atom (_, Symbol _) |]) -> reqs := rn :: !reqs
+                  | Vector (_, els) when Array.length els >= 1 ->
+                    (match els.(0) with
+                     | Atom (_, Symbol rn) -> reqs := rn :: !reqs
+                     | _ -> raise (Compile_error (l, "unsupported :require spec")))
                   | _ -> raise (Compile_error (l, "unsupported :require spec")))
                 specs
             | _ -> ())
@@ -76,8 +78,9 @@ let lgi_of_module (m : Ast.modl) : string =
         | Some l -> " :escapes [" ^ String.concat " " (List.map string_of_bool l) ^ "]"
         | None -> ""
       in
+      let kw = match d.timplicit with Some _ -> "implicit" | None -> "def" in
       Buffer.add_string b
-        (Printf.sprintf "(def %s %s%s)\n" d.tname (Typ.string_of_lg_ty d.tsch.sty) esc))
+        (Printf.sprintf "(%s %s %s%s)\n" kw d.tname (Typ.string_of_lg_ty d.tsch.sty) esc))
     m.defs;
   Buffer.contents b
 
@@ -89,7 +92,7 @@ let write_lgi (m : Ast.modl) : unit =
   output_string oc (lgi_of_module m);
   close_out oc
 
-let parse_lgi path : (string * Typ.scheme * bool list) list =
+let parse_lgi path : (string * Typ.scheme * bool list * bool) list =
   let forms =
     try Reader.read_file ~file:path (read_file_text path)
     with Read_error (l, msg) -> raise (Compile_error (l, msg))
@@ -97,7 +100,8 @@ let parse_lgi path : (string * Typ.scheme * bool list) list =
   List.filter_map
     (fun f ->
       match f with
-      | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol "def") :: Syntax.Atom (_, Syntax.Symbol n) :: tyf :: rest) ->
+      | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol kw) :: Syntax.Atom (_, Syntax.Symbol n) :: tyf :: rest)
+        when kw = "def" || kw = "implicit" ->
         let t =
           try Infer.ty_of_form tyf
           with Typ.Type_error (l, msg) -> raise (Compile_error (l, "lgi: " ^ msg))
@@ -113,7 +117,7 @@ let parse_lgi path : (string * Typ.scheme * bool list) list =
           in
           go rest
         in
-        Some (n, Typ.generalize [] t, esc)
+        Some (n, Typ.generalize [] t, esc, kw = "implicit")
       | _ -> None)
     forms
 
@@ -126,23 +130,26 @@ let find_lgi ~roots ns =
   List.find_opt Sys.file_exists cands
 
 let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
-    (entries : (string * Typ.scheme * bool list) list) : unit =
+    (entries : (string * Typ.scheme * bool list * bool) list) : unit =
   match Hashtbl.find_opt globals m.mname with
   | None -> ()
   | Some tbl ->
-    let listed = List.map (fun (n, _, _) -> n) entries in
+    let listed = List.map (fun (n, _, _, _) -> n) entries in
     Hashtbl.iter
       (fun n (g : Infer.gbind) -> if not (List.mem n listed) then g.gexp <- false)
       tbl;
     List.iter
-      (fun (n, sch, esc) ->
-        match Hashtbl.find_opt tbl n with
-        | Some (g : Infer.gbind) ->
-          g.gsch <- sch;
-          g.gexp <- true;
-          Hashtbl.replace Modes.global_escapes (m.ocaml_name ^ "." ^ n) esc
-        | None ->
-          Hashtbl.replace tbl n { Infer.gsch = sch; gvar = false; gexp = true })
+      (fun (n, sch, esc, imp) ->
+        (match Hashtbl.find_opt tbl n with
+         | Some (g : Infer.gbind) ->
+           g.gsch <- sch;
+           g.gexp <- true;
+           Hashtbl.replace Modes.global_escapes (m.ocaml_name ^ "." ^ n) esc
+         | None ->
+           Hashtbl.replace tbl n { Infer.gsch = sch; gvar = false; gexp = true });
+        if imp then
+          let cur = match Hashtbl.find_opt Infer.module_implicits m.mname with Some l -> l | None -> [] in
+          Hashtbl.replace Infer.module_implicits m.mname (cur @ [ (n, sch.sty) ]))
       entries
 
 let compile_path ~(roots : string list) (path : string) : Ast.modl list =
@@ -205,11 +212,13 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
         | None -> let t = Hashtbl.create 16 in Hashtbl.replace globals rn t; t
       in
       List.iter
-        (fun (n, sch, esc) ->
+        (fun (n, sch, esc, imp) ->
           Hashtbl.replace tbl n { Infer.gsch = sch; gvar = false; gexp = true };
           if esc <> [] then
             Hashtbl.replace Modes.global_escapes
-              (Infer.ocaml_mod_of_ns rn ^ "." ^ n) esc)
+              (Infer.ocaml_mod_of_ns rn ^ "." ^ n) esc;
+          if imp then
+            Hashtbl.replace Infer.module_implicits rn [ (n, sch.sty) ])
         entries;
       order :=
         { Ast.mname = rn; ocaml_name = Infer.ocaml_mod_of_ns rn; mpath = lf;

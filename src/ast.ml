@@ -74,6 +74,7 @@ type topdef = {
   texpr : expr;
   tis_fn : bool;
   mutable tmode : mode;
+  mutable timplicit : ty option;  (* ^{implicit T} on the def name *)
 }
 
 type modl = {

@@ -6,6 +6,10 @@ open Ast
 open Typ
 open Infer
 
+(* TImplicit is invisible downstream: binders, args and printers see
+   the wrapped dictionary type *)
+let repr t = Typ.dimp t
+
 let sanitize s = munge s
 
 let buf_add = Buffer.add_string
