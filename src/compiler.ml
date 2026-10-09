@@ -22,6 +22,18 @@ let scan_ns (forms : form list) : string option * string list =
   List.iter
     (fun f ->
       match f with
+      | List (l, Atom (_, Keyword "require") :: specs) ->
+        (* bare top-level (:require [ns :as a]) — same spec surface as the
+           ns clause; only [ns ...] vector specs contribute dependencies *)
+        List.iter
+          (fun spec ->
+            match spec with
+            | Vector (_, els) when Array.length els >= 1 ->
+              (match els.(0) with
+               | Atom (_, Symbol rn) -> reqs := rn :: !reqs
+               | _ -> raise (Compile_error (l, "unsupported :require spec")))
+            | _ -> raise (Compile_error (l, "unsupported :require spec")))
+          specs
       | List (l, Atom (_, Symbol "ns") :: Atom (_, Symbol n) :: clauses) ->
         ns := Some n;
         List.iter

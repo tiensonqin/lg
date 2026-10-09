@@ -423,6 +423,7 @@ and infer_top ctx f =
     | _ -> f
   in
   match f with
+  | List (l, Atom (_, Keyword "require") :: specs) -> List.iter (require_spec ctx l) specs
   | List (l, Atom (_, Symbol "ns") :: rest) -> parse_ns ctx l rest
   | List (_, Atom (_, Symbol "def") :: _) -> ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_def ctx f) ]
   | List (_, Atom (_, Symbol "defn") :: _) -> ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_defn ctx f) ]
@@ -542,42 +543,42 @@ and parse_ns ctx l rest =
     List.iter
       (fun c ->
         match c with
-        | List (_, Atom (_, Keyword "require") :: specs) ->
-          List.iter
-            (fun spec ->
-              match spec with
-              | Vector (_, els) when Array.length els >= 1 ->
-                (match els.(0) with
-                 | Atom (_, Symbol ns) ->
-                   let rec opts i alias implicits =
-                     if i >= Array.length els then (alias, implicits)
-                     else
-                       match els.(i), (if i + 1 < Array.length els then Some els.(i + 1) else None) with
-                       | Atom (_, Keyword "as"), Some (Atom (_, Symbol a)) -> opts (i + 2) (Some a) implicits
-                       | Atom (_, Keyword "implicits"), Some (Atom (_, Bool b)) -> opts (i + 2) alias b
-                       | Atom (_, Keyword "implicits"), _ -> opts (i + 1) alias true
-                       | _ -> type_error l "unsupported :require option"
-                   in
-                   let alias, implicits = opts 1 None false in
-                   ctx.modl.requires <- ctx.modl.requires @ [ (Option.value ~default:ns alias, ns) ];
-                   (match implicits with
-                    | true ->
-                      (match Hashtbl.find_opt module_implicits ns with
-                       | Some entries ->
-                         List.iter
-                           (fun (n, k) ->
-                             ctx.implicits <-
-                               (k, fun () -> mk l k (EGlobal (ocaml_mod_of_ns ns, munge n, n)))
-                               :: ctx.implicits)
-                           entries
-                       | None -> ())
-                    | false -> ())
-                 | _ -> type_error l "unsupported :require spec (want [ns] or [ns :as alias] :implicits true)")
-              | _ -> type_error l "unsupported :require spec (want a vector)")
-            specs
+        | List (l, Atom (_, Keyword "require") :: specs) ->
+          List.iter (require_spec ctx l) specs
         | _ -> type_error l "unsupported ns clause (only :require is supported)")
       clauses
   | _ -> type_error l "malformed ns form"
+
+and require_spec ctx l spec =
+  match spec with
+  | Vector (_, els) when Array.length els >= 1 ->
+    (match els.(0) with
+     | Atom (_, Symbol ns) ->
+       let rec opts i alias implicits =
+         if i >= Array.length els then (alias, implicits)
+         else
+           match els.(i), (if i + 1 < Array.length els then Some els.(i + 1) else None) with
+           | Atom (_, Keyword "as"), Some (Atom (_, Symbol a)) -> opts (i + 2) (Some a) implicits
+           | Atom (_, Keyword "implicits"), Some (Atom (_, Bool b)) -> opts (i + 2) alias b
+           | Atom (_, Keyword "implicits"), _ -> opts (i + 1) alias true
+           | _ -> type_error l "unsupported :require option"
+       in
+       let alias, implicits = opts 1 None false in
+       ctx.modl.requires <- ctx.modl.requires @ [ (Option.value ~default:ns alias, ns) ];
+       (match implicits with
+        | true ->
+          (match Hashtbl.find_opt module_implicits ns with
+           | Some entries ->
+             List.iter
+               (fun (n, k) ->
+                 ctx.implicits <-
+                   (k, fun () -> mk l k (EGlobal (ocaml_mod_of_ns ns, munge n, n)))
+                   :: ctx.implicits)
+               entries
+           | None -> ())
+        | false -> ())
+     | _ -> type_error l "unsupported :require spec (want [ns] or [ns :as alias] :implicits true)")
+  | _ -> type_error l "unsupported :require spec (want a vector)"
 
 and add_implicit ctx l name key =
   ctx.mimplicits := (name, key) :: !(ctx.mimplicits);
