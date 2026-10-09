@@ -30,10 +30,10 @@ change or be removed without a major bump.
 | `` `f `` `~x` `~@xs` | a | read everywhere; **evaluated only inside `defmacro` bodies** — in ordinary code `syntax-quote` is an unresolved-symbol error. Freeze that restriction. |
 | `^meta` | a | which meta keys mean what: §1.4 |
 | `@x` → `(deref x)` | a | |
-| `\c`, `\newline space tab return backspace formfeed` | b | no `\uXXXX`; add or rule out before freeze |
-| `"…"` escapes `\n \t \r \\ \" \b` | b | unknown escape silently reads as the char (`"\q"` → `q`) — either reject unknown escapes or spec the leniency |
+| `\c`, `\newline …`, `\uXXXX`, `\oNNN` | a | `\u0041`→A, `\o101`→A (byte-wide, >255 is a read error). |
+| `"…"` escapes `\n \t \r \\ \" \b \f` | a | unknown escapes are E201 read errors. |
 | int literals: `±d`, `0x` hex | a | |
-| float literals: `a.b` only | b | `1e3` reads as a symbol (confusing error); `5.` reads as a symbol; `.5` parses. Pick a grammar and spec it. |
+| float literals | a | `[+-]?(d+(.d*)?|.d+)(e[+-]?d+)?` — `1e3` `5.` `.5` `1.5e-3` all read as float. |
 | `true` `false` `nil` (`nil` ≡ `unit`) | a | |
 | `:kw`, `:ns/name` | a | |
 | symbols `name`, `ns/name` | a | `name` may also carry `-` `?` `!` `*` `+` `<` `>` `=` `.` |

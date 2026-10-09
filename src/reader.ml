@@ -67,12 +67,27 @@ let is_hex_token s =
   && String.for_all (fun c -> is_digit c || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) (String.sub s 2 (String.length s - 2))
 
 let is_float_token s =
-  let s = if String.length s > 0 && s.[0] = '-' then String.sub s 1 (String.length s - 1) else s in
-  match String.index_opt s '.' with
-  | None -> false
-  | Some i ->
-    let a = String.sub s 0 i and b = String.sub s (i + 1) (String.length s - i - 1) in
-    (String.length a = 0 || String.for_all is_digit a) && String.length b > 0 && String.for_all is_digit b
+  (* [+-]? digit+ [. digit*]?  or  . digit+  with optional e/E exponent *)
+  let n = String.length s in
+  let i = ref (if n > 0 && (s.[0] = '-' || s.[0] = '+') then 1 else 0) in
+  let digits () =
+    let j = !i in
+    while !i < n && is_digit s.[!i] do incr i done;
+    !i - j
+  in
+  let whole = digits () in
+  let frac =
+    if !i < n && s.[!i] = '.' then (incr i; Some (digits ())) else None
+  in
+  let has_exp = !i < n && (s.[!i] = 'e' || s.[!i] = 'E') in
+  (if has_exp then
+     (incr i;
+      if !i < n && (s.[!i] = '+' || s.[!i] = '-') then incr i));
+  let expd = if has_exp then digits () else 0 in
+  !i = n &&
+  (match frac with
+   | Some f -> whole + f > 0 && (not has_exp || expd > 0)
+   | None -> whole > 0 && has_exp && expd > 0)
 
 let read_string r =
   let l = loc r in
@@ -87,7 +102,8 @@ let read_string r =
       Buffer.add_char buf
         (match e with
          | 'n' -> '\n' | 't' -> '\t' | 'r' -> '\r' | '\\' -> '\\' | '"' -> '"'
-         | 'b' -> '\b' | c -> c);
+         | 'b' -> '\b' | 'f' -> '\x0c'
+         | c -> read_error l ("unknown escape \\\\" ^ String.make 1 c ^ " in string literal"));
       loop ()
     | c -> Buffer.add_char buf c; loop ()
   in
@@ -99,6 +115,15 @@ let read_char r =
   ignore (next r);
   let tok = read_token r in
   if String.length tok = 0 then read_error l "empty character literal"
+  else if String.length tok = 5 && tok.[0] = 'u' then
+    let cp = int_of_string ("0x" ^ String.sub tok 1 4) in
+    if cp > 255 then read_error l ("char literal \\" ^ tok ^ " out of range (\\uXXXX is byte-wide)")
+    else Atom (l, Char (Char.chr cp))
+  else if tok.[0] = 'o' && String.length tok >= 2 && String.length tok <= 4
+          && String.for_all is_digit (String.sub tok 1 (String.length tok - 1)) then
+    let cp = int_of_string ("0o" ^ String.sub tok 1 (String.length tok - 1)) in
+    if cp > 255 then read_error l ("char literal \\" ^ tok ^ " out of range")
+    else Atom (l, Char (Char.chr cp))
   else Atom (l, Char (named_char tok))
 
 let atom_of_token l tok : form =
