@@ -664,37 +664,37 @@ and emit_builtin_call b ret name args =
    | "rest" -> buf_add b ("(match " ^ as_list (List.nth args 0) ^ " with [] -> [] | _ :: t -> t)")
    | "seq" -> buf_add b (as_list (List.nth args 0))
    | "exit" -> buf_add b ("(Stdlib.exit " ^ conv TInt (t 0) (a 0) ^ ")")
-   (* io / system builtins emit inline: channel/Sys/Unix primitives are
-      native-only, so every arm is guarded to the non-melange backend *)
+   (* io / system builtins: native emits inline channel/Sys/Unix code;
+      melange routes through the emitted Lg_node JS bridge *)
    | "slurp" ->
      buf_add b
-       (if !melange then "(failwith \"slurp: native only\")"
+       (if !melange then "(Lg_node.slurp " ^ conv TString (t 0) (a 0) ^ ")"
         else "(let ic__ = open_in_bin " ^ conv TString (t 0) (a 0) ^ " in "
              ^ "let s__ = really_input_string ic__ (in_channel_length ic__) in close_in ic__; s__)")
    | "spit" ->
      buf_add b
-       (if !melange then "(failwith \"spit: native only\")"
+       (if !melange then "(Lg_node.spit " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")"
         else "(let oc__ = open_out_bin " ^ conv TString (t 0) (a 0) ^ " in "
              ^ "output_string oc__ " ^ conv TString (t 1) (a 1) ^ "; close_out oc__)")
    | "read-line" ->
      buf_add b
-       (if !melange then "(failwith \"read-line: native only\")"
+       (if !melange then "(Lg_node.read_line ())"
         else "(try Some (Stdlib.read_line ()) with End_of_file -> None)")
    | "argv" ->
      buf_add b
-       (if !melange then "(failwith \"argv: native only\")"
+       (if !melange then "(Array.to_list (Lg_node.argv ()))"
         else "(List.tl (Array.to_list Sys.argv))")
    | "env" ->
      buf_add b
-       (if !melange then "(failwith \"env: native only\")"
+       (if !melange then "(Lg_node.env_opt " ^ conv TString (t 0) (a 0) ^ ")"
         else "(Sys.getenv_opt " ^ conv TString (t 0) (a 0) ^ ")")
    | "file-exists?" ->
      buf_add b
-       (if !melange then "(failwith \"file-exists?: native only\")"
+       (if !melange then "(Lg_node.file_exists " ^ conv TString (t 0) (a 0) ^ ")"
         else "(Sys.file_exists " ^ conv TString (t 0) (a 0) ^ ")")
    | "sh" ->
      buf_add b
-       (if !melange then "(failwith \"sh: native only\")"
+       (if !melange then "(Lg_node.sh " ^ conv TString (t 0) (a 0) ^ ")"
         else
           "(let ic__ = Unix.open_process_in " ^ conv TString (t 0) (a 0) ^ " in "
           ^ "let b__ = Buffer.create 64 in "
@@ -703,7 +703,7 @@ and emit_builtin_call b ret name args =
           ^ "Stdlib.ignore (Unix.close_process_in ic__); Buffer.contents b__)")
    | "now-ms" ->
      buf_add b
-       (if !melange then "(failwith \"now-ms: native only\")"
+       (if !melange then "(Lg_node.now_ms ())"
         else "(int_of_float (Unix.gettimeofday () *. 1000.))")
    (* string library *)
    | "subs" ->
@@ -738,31 +738,31 @@ and emit_builtin_call b ret name args =
    | "starts-with?" -> buf_add b ("(String.starts_with ~prefix:" ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
    | "ends-with?" -> buf_add b ("(String.ends_with ~suffix:" ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
    | "replace" -> buf_add b ("(Lg_rt.str_replace_lit " ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 2) (a 2) ^ " " ^ conv TString (t 0) (a 0) ^ ")")
-   (* regex-lite (Str): native only *)
+   (* regex-lite: Str on native, JS RegExp (Lg_node) on melange *)
    | "re-find" ->
      buf_add b
-       (if !melange then "(failwith \"re-find: native only\")"
+       (if !melange then "(Lg_node.re_find " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")"
         else "(try Stdlib.ignore (Str.search_forward (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") "
              ^ conv TString (t 1) (a 1) ^ " 0); Some (Str.matched_string " ^ a 1 ^ ") with Not_found -> None)")
    | "re-matches" ->
      buf_add b
-       (if !melange then "(failwith \"re-matches: native only\")"
+       (if !melange then "(Lg_node.re_matches " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")"
         else "(if Str.string_match (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") " ^ conv TString (t 1) (a 1)
              ^ " 0 && Str.match_end () = String.length " ^ a 1 ^ " then Some " ^ a 1 ^ " else None)")
    | "re-seq" ->
      buf_add b
-       (if !melange then "(failwith \"re-seq: native only\")"
+       (if !melange then "(Lg_node.re_seq " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")"
         else "(let re__ = Str.regexp " ^ conv TString (t 0) (a 0) ^ " in let rec go__ i acc = "
              ^ "match (try Some (Str.search_forward re__ " ^ conv TString (t 1) (a 1) ^ " i) with Not_found -> None) "
              ^ "with Some _ -> go__ (Str.match_end ()) (Str.matched_string " ^ a 1 ^ " :: acc) "
              ^ "| None -> List.rev acc in go__ 0 [])")
    | "re-split" ->
      buf_add b
-       (if !melange then "(failwith \"re-split: native only\")"
+       (if !melange then "(Lg_node.re_split " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ ")"
         else "(Str.split (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") " ^ conv TString (t 1) (a 1) ^ ")")
    | "re-replace" ->
      buf_add b
-       (if !melange then "(failwith \"re-replace: native only\")"
+       (if !melange then "(Lg_node.re_replace " ^ conv TString (t 0) (a 0) ^ " " ^ conv TString (t 1) (a 1) ^ " " ^ conv TString (t 2) (a 2) ^ ")"
         else "(Str.global_replace (Str.regexp " ^ conv TString (t 0) (a 0) ^ ") "
              ^ conv TString (t 2) (a 2) ^ " " ^ conv TString (t 1) (a 1) ^ ")")
    | "count" ->
@@ -1407,6 +1407,87 @@ let emit_module b (m : modl) =
   List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects;
   buf_add b "end\n\n"
 
+(* Melange-only node bridge: Node APIs are touched lazily (require() is
+   only evaluated when an io builtin is actually called), so browser
+   bundles load fine and only fail if io is invoked without Node. *)
+let lg_node_src = {|
+module Lg_node = struct
+  let slurp : string -> string = [%mel.raw
+    "function(p) { if (typeof require !== 'function') throw new Error('slurp requires Node.js'); return require('fs').readFileSync(p, 'utf8') }"]
+
+  let spit : string -> string -> unit = [%mel.raw
+    "function(p, s) { if (typeof require !== 'function') throw new Error('spit requires Node.js'); require('fs').writeFileSync(p, s, 'utf8') }"]
+
+  let file_exists : string -> bool = [%mel.raw
+    "function(p) { if (typeof require !== 'function') return false; try { return require('fs').existsSync(p) } catch (e) { return false } }"]
+
+  let argv : unit -> string array = [%mel.raw
+    "function() { if (typeof process === 'undefined' || !process.argv) return []; return process.argv.slice(2) }"]
+
+  let env_raw : string -> string Js.Undefined.t = [%mel.raw
+    "function(k) { if (typeof process === 'undefined' || !process.env) return undefined; return process.env[k] }"]
+
+  let env_opt k = Js.Undefined.toOption (env_raw k)
+
+  let sh : string -> string = [%mel.raw
+    "function(c) { if (typeof require !== 'function') throw new Error('sh requires Node.js'); return require('child_process').execSync(c, {encoding: 'utf8'}) }"]
+
+  let read_stdin_all : unit -> string Js.Nullable.t = [%mel.raw
+    "function() { if (typeof require !== 'function') return null; try { return require('fs').readFileSync(0, 'utf8') } catch (e) { return null } }"]
+
+  let stdin_lines = ref None
+  let read_line () =
+    let lines =
+      match !stdin_lines with
+      | Some ls -> ls
+      | None ->
+        let l =
+          (match Js.Nullable.toOption (read_stdin_all ()) with
+           | Some s -> String.split_on_char '\n' s
+           | None -> [])
+        in
+        stdin_lines := Some l; l
+    in
+    (match lines with
+     | h :: t -> stdin_lines := Some t; Some h
+     | [] -> stdin_lines := Some []; None)
+
+  let now_ms () = int_of_float (Js.Date.now ())
+
+  (* regex-lite over JS RegExp — available in every JS environment *)
+  let re_find pat s =
+    match Js.Re.exec (Js.Re.fromString pat) ~str:s with
+    | Some r ->
+      let cs = Js.Re.captures r in
+      if Array.length cs > 0 then Js.Nullable.toOption cs.(0) else None
+    | None -> None
+
+  let re_matches pat s =
+    if Js.Re.test (Js.Re.fromString ("^(?:" ^ pat ^ ")$")) ~str:s then Some s else None
+
+  let re_seq pat s =
+    let re = Js.Re.fromStringWithFlags pat ~flags:"g" in
+    let rec go acc =
+      match Js.Re.exec re ~str:s with
+      | Some r ->
+        let cs = Js.Re.captures r in
+        (match (if Array.length cs > 0 then Js.Nullable.toOption cs.(0) else None) with
+         | Some m ->
+           if m = "" then Js.Re.setLastIndex re (Js.Re.lastIndex re + 1);
+           go (m :: acc)
+         | None -> go acc)
+      | None -> List.rev acc
+    in
+    go []
+
+  let re_split pat s =
+    List.filter_map Fun.id (Array.to_list (Js.String.splitByRe ~regexp:(Js.Re.fromString pat) s))
+
+  let re_replace pat s rep =
+    Js.String.replaceByRe ~regexp:(Js.Re.fromStringWithFlags pat ~flags:"g") ~replacement:rep s
+end
+|}
+
 let emit_program (mods : modl list) : string =
   (match List.find_opt (fun m -> m.iface_only) mods with
    | Some m ->
@@ -1415,5 +1496,6 @@ let emit_program (mods : modl list) : string =
   let b = Buffer.create 8192 in
   buf_add b "(* generated by lg — do not edit *)\n";
   buf_add b ("module Lg_rt = struct\n" ^ Embedded_runtime.lg_rt_src ^ "\nend\n");
+  if !melange then buf_add b lg_node_src;
   List.iter (emit_module b) mods;
   Buffer.contents b

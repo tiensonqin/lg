@@ -26,7 +26,7 @@ for src in test/*.lg test/*.cljc; do
     echo "FAIL(check) $name"
     fail=1; continue
   fi
-  if [ "$name" = "mel" ]; then
+  if [ "$name" = "mel" ] || [ "$name" = "melio" ]; then
     if ! "$LG" build "$src" -I lib --backend=melange -o "$bin" >/dev/null 2>&1 || ! node "$bin.js" > ".test-bin/$name.out" 2>&1; then
       echo "FAIL(build/run) $name"
       fail=1; continue

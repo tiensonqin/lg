@@ -90,7 +90,7 @@ let () =
  (target js)
  (alias mel)
  (modules %s)
- (libraries clj-core rrbvec)
+ (libraries clj-core rrbvec melange.js)
  (preprocess (pps melange.ppx))
  (module_systems commonjs))
 " modname);
@@ -109,6 +109,7 @@ let () =
                 link the emitted node_modules next to the output *)
              let nm = Filename.concat (Filename.dirname dst) "node_modules" in
              let nmsrc = Filename.concat ws "_build/default/js/node_modules" in
+             (try Unix.unlink nm with Unix.Unix_error _ -> ());
              if Sys.file_exists nmsrc && not (Sys.file_exists nm) then
                Unix.symlink ~to_dir:true nmsrc nm;
              Printf.printf "wrote %s (node %s to run)
