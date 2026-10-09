@@ -181,14 +181,22 @@ let rec split_meta = function
       | None ->
         (match m with
          | Atom (_, Keyword k) when List.mem k primitive_type_names ->
-           (try Some (ty_of_form (Atom (no_loc, Symbol k))) with Type_error _ | Err.E _ -> None)
-         | Atom (_, Symbol _) -> (try Some (ty_of_form m) with Type_error _ | Err.E _ -> None)
-         | List _ -> (try Some (ty_of_form m) with Type_error _ | Err.E _ -> None)
+           (try Some (ty_of_form (Atom (no_loc, Symbol k)))
+            with Type_error (ml, msg) -> type_error ml msg | Err.E _ as e -> raise e)
+         | Atom (_, Symbol _) -> (try Some (ty_of_form m) with Type_error (ml, msg) -> type_error ml msg | Err.E _ as e -> raise e)
+         | List _ -> (try Some (ty_of_form m) with Type_error (ml, msg) -> type_error ml msg | Err.E _ as e -> raise e)
          | Map (_, kvs) ->
+           List.iter
+             (fun (k, _) ->
+               match k with
+               | Atom (_, Keyword k) when List.mem k [ "sig"; "implicit"; "local"; "owned"; "shared" ] -> ()
+               | Atom (kl, Keyword k) -> type_error kl ("unknown meta key :" ^ k)
+               | f -> type_error (atom_loc f) "meta keys must be keywords")
+             kvs;
            (match
               List.find_map (fun (k, v) -> match k with Atom (_, Keyword "sig") -> Some v | _ -> None) kvs
             with
-            | Some sigf -> (try Some (ty_of_form sigf) with Type_error _ | Err.E _ -> None)
+            | Some sigf -> (try Some (ty_of_form sigf) with Type_error (ml, msg) -> type_error ml msg | Err.E _ as e -> raise e)
             | None -> None)
          | _ -> None)
     in
@@ -666,7 +674,14 @@ and infer_defn ctx f =
        unify l self_v fe.ety;
        (match Hashtbl.find_opt ctx.declared name with
         | Some dv -> unify l dv fe.ety | None -> ());
-       (match ty_ann with Some t -> unify l fe.ety t | None -> ());
+       (match ty_ann with
+        | Some t ->
+          (match repr t with
+           | TFun _ -> unify l fe.ety t
+           (* `^T` on a defn name with a non-fn type annotates the return —
+              Clojure's (defn ^int f [x] …) convention *)
+           | _ -> unify l (final_ret fe.ety) t)
+        | None -> ());
        (match imp with Some (Some t) -> unify l fe.ety t | _ -> ());
        (* carry (implicit …) marks from the signature onto the stored
           scheme — unify is transparent over TImplicit so the inferred
@@ -1265,7 +1280,12 @@ and infer_do ctx l body =
    (:kw p) }`. bind_pattern appends (temp/elem) binder pairs and registers
    names in ctx.env. *)
 and bind_pattern ctx l pat rhs : (binder * expr) list =
-  let _, ta, inner = split_meta pat in
+  let mh, ta, inner = split_meta pat in
+  (* mode hints are topdef-only — silently dropping them on binders was
+     a spec hole, so reject loudly *)
+  (match mh with
+   | Some _ -> type_error l "mode hints (:local/:owned/:shared) are topdef-only"
+   | None -> ());
   let bind_one b rhs =
     (match ta with Some t -> unify l rhs.ety t; b.bty <- t | None -> ());
     b.bty <- rhs.ety;
@@ -1450,6 +1470,9 @@ and infer_or ctx l args =
       else mk l TBool (EBool true)
     in
     mk l rt (EIf (e, ethen, r'))
+
+and final_ret t =
+  match repr t with TFun (_, r) -> final_ret r | _ -> t
 
 and infer_cond ctx l args =
   match args with

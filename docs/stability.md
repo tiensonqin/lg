@@ -100,12 +100,12 @@ an unparseable annotation is **silently dropped** instead of erroring.
 |---|---|---|
 | `^T` on `let`/`fn`/`defn` binding or param | a | assertion — unifies with inferred type |
 | `^{:sig (fn [t …] r)}` / `^{:sig (fn [t …] -> r)}` on `def`/`defn` name | a | enforced; `'a` inside is rigid |
-| `^{:sig (fn [int -> int])}` (README/design.md form) | b | parses to *nothing* — the `->` inside the arg vector makes the whole annotation malformed and it is **dropped silently**. Either support the inside-vector arrow or make malformed sigs an error. Silent drop is the worst option. |
-| `^(fn [t …] r)` bare type on defn arglist | b | same silent drop (a `List` meta is not a `:sig` map) — tests pass only because destructuring re-derives the shape |
-| `^int` (or any bare `^T`) on `def`/`defn` name or arglist | b | unifies against the **whole** fn type — `(defn f ^int [x] x)` errors `fn vs int`. There is no return-type-only annotation. Decide: reject with a clear message, or define `^T` on defn name = return type. |
-| `^:local` `^:owned` `^:shared` on `def`/`defn` name | b | accepted, sets `tmode` — but modes are advisory v0, and the same hint on `let` binders is silently dropped. Freeze as topdef-only or drop until OxCaml (§6). |
+| `^{:sig (fn [int -> int])}` | a | malformed sigs are compile errors with caret (no silent drop); the inside-vector arrow form stays rejected. |
+| `^(fn [t …] r)` bare type on defn arglist | a | honored — a `List` meta parses as a type and unifies against the fn. |
+| `^T` on `defn` name | a | non-`fn` `^T` annotates the return type (Clojure convention); `^(fn …)` annotates the whole fn. |
+| `^:local` `^:owned` `^:shared` | a | topdef-only — on `let` binders they are a compile error. |
 | `^any`, `^(option T)` on an `any` expr | a | checked `EUnbox`/`EUnboxOpt` (`as_*` raises `invalid_arg` on wrong tag) |
-| unknown meta keys `^{:foo …}` | b | silently ignored. Freeze: either reject unknown keys or spec an ignore-list. |
+| unknown meta keys `^{:foo …}` | a | compile error — only `:sig :implicit :local :owned :shared` are keys. |
 
 ### 1.5 Builtins
 
