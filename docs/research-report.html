@@ -1,0 +1,2820 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content="Devin artifact kit" />
+    <title>lg 语言设计调研报告：无 GC 函数式语言 + Clojure 语法 + OCaml 后端</title>
+    <style>
+/* Devin artifact kit — self-contained styles for standalone HTML artifacts.
+   Tokens are translated from the Devin product design system. Light is the
+   default; dark is applied from `prefers-color-scheme` unless a host theme
+   signal (`?theme=`, `data-theme`, or a `devin:theme` message) says otherwise. */
+
+:root {
+  color-scheme: light;
+
+  --bg-page: 252 252 252;
+  --bg-wash: 248 248 248;
+  --bg-elevated: 255 255 255;
+  --tint-tertiary: 0 0 0 / 0.04;
+  --tint-secondary: 0 0 0 / 0.06;
+  --tint-primary: 0 0 0 / 0.08;
+  --text-primary: 25 25 25;
+  --text-secondary: 25 25 25 / 0.64;
+  --text-tertiary: 25 25 25 / 0.4;
+  --text-accent: 49 124 255;
+  --bg-accent: 49 124 255;
+  --border-secondary: 0 0 0 / 0.08;
+  --border-primary: 0 0 0 / 0.1;
+  --text-green: 0 165 88;
+  --text-orange: 245 142 58;
+  --text-red: 245 59 58;
+  --text-blue: 51 125 244;
+  --text-purple: 149 108 222;
+  --shadow-l1: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-l2: 0 4px 12px rgb(0 0 0 / 0.08);
+
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", "Roboto Mono", ui-monospace, monospace;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --unit: 4px;
+  --max-width: 1120px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-page: 20 20 20;
+  --bg-wash: 25 25 25;
+  --bg-elevated: 31 31 31;
+  --tint-tertiary: 255 255 255 / 0.03;
+  --tint-secondary: 255 255 255 / 0.05;
+  --tint-primary: 255 255 255 / 0.08;
+  --text-primary: 255 255 255 / 0.9;
+  --text-secondary: 255 255 255 / 0.52;
+  --text-tertiary: 255 255 255 / 0.4;
+  --text-accent: 73 176 255;
+  --bg-accent: 68 137 255;
+  --border-secondary: 255 255 255 / 0.04;
+  --border-primary: 255 255 255 / 0.08;
+  --text-green: 0 236 126;
+  --text-orange: 245 142 58;
+  --text-red: 255 108 107;
+  --text-blue: 92 154 255;
+  --text-purple: 178 145 240;
+  --shadow-l1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-l2: 0 4px 12px rgb(0 0 0 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --bg-page: 20 20 20;
+    --bg-wash: 25 25 25;
+    --bg-elevated: 31 31 31;
+    --tint-tertiary: 255 255 255 / 0.03;
+    --tint-secondary: 255 255 255 / 0.05;
+    --tint-primary: 255 255 255 / 0.08;
+    --text-primary: 255 255 255 / 0.9;
+    --text-secondary: 255 255 255 / 0.52;
+    --text-tertiary: 255 255 255 / 0.4;
+    --text-accent: 73 176 255;
+    --bg-accent: 68 137 255;
+    --border-secondary: 255 255 255 / 0.04;
+    --border-primary: 255 255 255 / 0.08;
+    --text-green: 0 236 126;
+    --text-orange: 245 142 58;
+    --text-red: 255 108 107;
+    --text-blue: 92 154 255;
+    --text-purple: 178 145 240;
+    --shadow-l1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-l2: 0 4px 12px rgb(0 0 0 / 0.5);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--bg-page));
+  color: rgb(var(--text-primary));
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+:where(button, a, input, select, summary, [tabindex]):focus-visible {
+  outline: 1px solid rgb(var(--bg-accent));
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- layout ---------- */
+
+.a-shell {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: calc(var(--unit) * 8) calc(var(--unit) * 6) calc(var(--unit) * 16);
+}
+
+.a-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(var(--unit) * 3);
+  padding-bottom: calc(var(--unit) * 4);
+  border-bottom: 1px solid rgb(var(--border-primary));
+}
+
+.a-header__title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.a-header__subtitle {
+  margin: calc(var(--unit) * 1) 0 0;
+  color: rgb(var(--text-secondary));
+  font-size: 13px;
+  line-height: 18px;
+  max-width: 68ch;
+}
+
+.a-section {
+  margin-top: calc(var(--unit) * 9);
+}
+
+.a-section__title {
+  margin: 0 0 calc(var(--unit) * 1);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+.a-section__note,
+.a-prose {
+  margin: 0 0 calc(var(--unit) * 4);
+  color: rgb(var(--text-secondary));
+  font-size: 13px;
+  line-height: 20px;
+  max-width: 72ch;
+}
+
+.a-grid {
+  display: grid;
+  gap: calc(var(--unit) * 3);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.a-grid--halves {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* ---------- surfaces ---------- */
+
+.a-panel {
+  background: rgb(var(--bg-elevated));
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-l1);
+  padding: calc(var(--unit) * 4);
+}
+
+.a-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--unit) * 2);
+  margin-bottom: calc(var(--unit) * 3);
+}
+
+.a-panel__title {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.a-label {
+  color: rgb(var(--text-tertiary));
+  font-size: 12px;
+  line-height: 16px;
+  text-transform: none;
+}
+
+/* ---------- metrics ---------- */
+
+.a-metric {
+  background: rgb(var(--tint-tertiary));
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius);
+  padding: calc(var(--unit) * 3);
+}
+
+.a-metric__label {
+  color: rgb(var(--text-secondary));
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.a-metric__value {
+  margin-top: calc(var(--unit) * 1);
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.a-metric__delta {
+  margin-top: calc(var(--unit) * 1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: rgb(var(--text-secondary));
+}
+
+.a-metric__delta[data-trend="up"] {
+  color: rgb(var(--text-green));
+}
+
+.a-metric__delta[data-trend="down"] {
+  color: rgb(var(--text-red));
+}
+
+/* ---------- status ---------- */
+
+.a-status {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--unit) * 1.5);
+  font-size: 12px;
+  line-height: 16px;
+  color: rgb(var(--text-secondary));
+  white-space: nowrap;
+}
+
+.a-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.a-status[data-state="done"] {
+  color: rgb(var(--text-green));
+}
+
+.a-status[data-state="active"] {
+  color: rgb(var(--text-blue));
+}
+
+.a-status[data-state="at-risk"] {
+  color: rgb(var(--text-orange));
+}
+
+.a-status[data-state="blocked"] {
+  color: rgb(var(--text-red));
+}
+
+.a-status[data-state="planned"] {
+  color: rgb(var(--text-tertiary));
+}
+
+/* ---------- tables ---------- */
+
+.a-table-scroll {
+  overflow-x: auto;
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius);
+  background: rgb(var(--bg-elevated));
+}
+
+.a-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.a-table th,
+.a-table td {
+  text-align: left;
+  padding: calc(var(--unit) * 2) calc(var(--unit) * 3);
+  border-bottom: 1px solid rgb(var(--border-secondary));
+  vertical-align: top;
+}
+
+.a-table thead th {
+  position: sticky;
+  top: 0;
+  background: rgb(var(--bg-wash));
+  color: rgb(var(--text-secondary));
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16px;
+  z-index: 1;
+}
+
+.a-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.a-table tbody tr:hover td {
+  background: rgb(var(--tint-tertiary));
+}
+
+.a-table td[data-numeric],
+.a-table th[data-numeric] {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+/* Pinned columns: `data-a-sticky-columns="N"` keeps the first N columns in
+   view while the table scrolls sideways. CSS alone pins the first column, so
+   N=1 works without script; kit.js measures the leading columns, marks each
+   pinned cell `data-a-sticky` with its `--a-sticky-left` offset, and flags the
+   table `data-a-sticky-ready`. Pinned cells need opaque backgrounds or the
+   scrolled columns show through them. */
+.a-table[data-a-sticky-columns]:not([data-a-sticky-ready]):not([data-a-sticky-columns="0"])
+  tr
+  > :first-child,
+.a-table[data-a-sticky-ready] [data-a-sticky] {
+  position: sticky;
+  left: var(--a-sticky-left, 0);
+  z-index: 1;
+  background-color: rgb(var(--bg-elevated));
+}
+
+/* Header row above pinned body cells; the pinned corner above both. */
+.a-table[data-a-sticky-columns] thead th {
+  z-index: 2;
+}
+
+.a-table[data-a-sticky-columns]:not([data-a-sticky-ready]):not([data-a-sticky-columns="0"])
+  thead
+  tr
+  > :first-child,
+.a-table[data-a-sticky-ready] thead [data-a-sticky] {
+  z-index: 3;
+  background-color: rgb(var(--bg-wash));
+}
+
+/* The row tint is translucent, so layer it over the opaque surface. */
+.a-table[data-a-sticky-columns]:not([data-a-sticky-ready]):not([data-a-sticky-columns="0"])
+  tbody
+  tr:hover
+  > td:first-child,
+.a-table[data-a-sticky-ready] tbody tr:hover > td[data-a-sticky] {
+  background: linear-gradient(
+      rgb(var(--tint-tertiary)),
+      rgb(var(--tint-tertiary))
+    )
+    rgb(var(--bg-elevated));
+}
+
+/* Divider on the last pinned column. Table cells don't paint box-shadow when
+   borders collapse, so it is a pseudo-element. Without script there is no
+   scroll state and it is always shown; with it, only while scrolled. */
+.a-table[data-a-sticky-columns]:not([data-a-sticky-ready]):not([data-a-sticky-columns="0"])
+  tr
+  > :first-child::after,
+.a-table[data-a-sticky-ready] [data-a-sticky="edge"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 8px;
+  border-left: 1px solid rgb(var(--border-primary));
+  background: linear-gradient(to right, rgb(0 0 0 / 0.08), transparent);
+  pointer-events: none;
+}
+
+.a-table-scroll:not([data-a-scrolled])
+  .a-table[data-a-sticky-ready]
+  [data-a-sticky="edge"]::after {
+  display: none;
+}
+
+/* ---------- charts (inline SVG + CSS bars) ---------- */
+
+.a-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.a-chart__grid line {
+  stroke: rgb(var(--border-primary));
+  stroke-dasharray: 2 3;
+}
+
+.a-chart__axis text {
+  fill: rgb(var(--text-tertiary));
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.a-chart__series {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.a-chart__point {
+  stroke: rgb(var(--bg-elevated));
+  stroke-width: 1.5;
+}
+
+.a-bars {
+  display: grid;
+  gap: calc(var(--unit) * 2);
+  margin: 0;
+}
+
+.a-bars__row {
+  display: grid;
+  grid-template-columns: minmax(88px, 22%) 1fr auto;
+  align-items: center;
+  gap: calc(var(--unit) * 2);
+  font-size: 13px;
+}
+
+.a-bars__track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgb(var(--tint-secondary));
+  overflow: hidden;
+}
+
+.a-bars__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: rgb(var(--bg-accent));
+}
+
+.a-bars__value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: rgb(var(--text-secondary));
+}
+
+.a-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--unit) * 3);
+  margin: calc(var(--unit) * 3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: rgb(var(--text-secondary));
+}
+
+.a-legend li {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--unit) * 1.5);
+}
+
+.a-legend__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* Series colors stay stable across themes so legends keep meaning. */
+.a-series-1 {
+  --series: 49 124 255;
+}
+.a-series-2 {
+  --series: 0 165 88;
+}
+.a-series-3 {
+  --series: 149 108 222;
+}
+.a-series-4 {
+  --series: 245 142 58;
+}
+
+.a-chart__series.a-series-1,
+.a-chart__series.a-series-2,
+.a-chart__series.a-series-3,
+.a-chart__series.a-series-4 {
+  stroke: rgb(var(--series));
+}
+
+.a-chart__point.a-series-1,
+.a-chart__point.a-series-2,
+.a-chart__point.a-series-3,
+.a-chart__point.a-series-4 {
+  fill: rgb(var(--series));
+}
+
+.a-series-1 .a-legend__swatch,
+.a-series-2 .a-legend__swatch,
+.a-series-3 .a-legend__swatch,
+.a-series-4 .a-legend__swatch {
+  background: rgb(var(--series));
+}
+
+.a-chart__bar.a-series-1,
+.a-chart__bar.a-series-2,
+.a-chart__bar.a-series-3,
+.a-chart__bar.a-series-4 {
+  fill: rgb(var(--series));
+}
+
+/* Dimming the rest of the plot reads as "this is the value you asked for"
+   without moving anything, which keeps the highlight legible under
+   reduced motion. */
+.a-chart__bar,
+.a-chart__point,
+.a-chart__series {
+  transition: opacity 120ms ease;
+}
+
+.a-chart__plot:has([data-a-active]) .a-chart__bar:not([data-a-active]) {
+  opacity: 0.45;
+}
+
+.a-chart__point[data-a-active] {
+  r: 4.25;
+}
+
+.a-chart__crosshair {
+  stroke: rgb(var(--border-primary));
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.a-chart__band {
+  fill: transparent;
+  /* Vertical scrolling must still work when a finger lands on the plot. */
+  touch-action: pan-y;
+}
+
+.a-chart__band[data-a-active] {
+  fill: rgb(var(--tint-secondary));
+}
+
+.a-chart__band:focus-visible {
+  outline: 1px solid rgb(var(--bg-accent));
+  outline-offset: -2px;
+}
+
+.a-chart {
+  touch-action: pan-y;
+}
+
+/* Shown in place of the plot when a filter leaves the source table empty. */
+.a-chart__empty {
+  margin: 0 0 calc(var(--unit) * 3);
+  padding: calc(var(--unit) * 6) 0;
+  border: 1px dashed rgb(var(--border-secondary));
+  border-radius: var(--radius);
+  color: rgb(var(--text-secondary));
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---------- tooltip ---------- */
+
+.a-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 40;
+  min-width: 120px;
+  max-width: 260px;
+  padding: calc(var(--unit) * 2) calc(var(--unit) * 2.5);
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius);
+  background: rgb(var(--bg-elevated));
+  box-shadow: var(--shadow-l2);
+  color: rgb(var(--text-primary));
+  font-size: 12px;
+  line-height: 16px;
+  pointer-events: none;
+}
+
+.a-tip__title {
+  margin-bottom: var(--unit);
+  font-weight: 600;
+  color: rgb(var(--text-primary));
+}
+
+.a-tip__text {
+  color: rgb(var(--text-secondary));
+}
+
+.a-tip__row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--unit) * 1.5);
+  white-space: nowrap;
+}
+
+.a-tip__swatch {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px;
+  background: rgb(var(--series, var(--bg-accent)));
+}
+
+.a-tip__name {
+  color: rgb(var(--text-secondary));
+}
+
+.a-tip__value {
+  margin-left: auto;
+  padding-left: calc(var(--unit) * 2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- controls: tabs, filters, toggles ---------- */
+
+.a-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--unit) * 2);
+  margin-bottom: calc(var(--unit) * 4);
+}
+
+.a-tabs {
+  display: flex;
+  gap: calc(var(--unit) * 1);
+  padding: 2px;
+  background: rgb(var(--tint-tertiary));
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius);
+}
+
+.a-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--text-secondary));
+  font: inherit;
+  font-size: 13px;
+  padding: calc(var(--unit) * 1) calc(var(--unit) * 2.5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.a-btn:hover {
+  background: rgb(var(--tint-secondary));
+  color: rgb(var(--text-primary));
+}
+
+.a-btn[aria-selected="true"],
+.a-btn[aria-pressed="true"] {
+  background: rgb(var(--bg-elevated));
+  border-color: rgb(var(--border-primary));
+  color: rgb(var(--text-primary));
+  box-shadow: var(--shadow-l1);
+}
+
+.a-btn--outline {
+  border-color: rgb(var(--border-primary));
+  background: rgb(var(--bg-elevated));
+}
+
+.a-btn--icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+}
+
+.a-theme-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.a-theme-icon--moon {
+  display: none;
+}
+
+:root[data-theme="dark"] .a-theme-icon--sun {
+  display: none;
+}
+
+:root[data-theme="dark"] .a-theme-icon--moon {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .a-theme-icon--sun {
+    display: none;
+  }
+
+  :root:not([data-theme]) .a-theme-icon--moon {
+    display: block;
+  }
+}
+
+.a-select {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: rgb(var(--text-primary));
+  background: rgb(var(--bg-elevated));
+  border: 1px solid rgb(var(--border-primary));
+  border-radius: var(--radius-sm);
+  padding: calc(var(--unit) * 1) calc(var(--unit) * 2);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---------- diagram ---------- */
+
+.a-diagram {
+  position: relative;
+  background: rgb(var(--bg-wash));
+  border: 1px solid rgb(var(--border-secondary));
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.a-diagram__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.a-diagram__canvas:active {
+  cursor: grabbing;
+}
+
+.a-group rect {
+  fill: rgb(var(--tint-tertiary));
+  stroke: rgb(var(--border-primary));
+  stroke-dasharray: 4 4;
+  rx: 10;
+}
+
+.a-group text {
+  fill: rgb(var(--text-tertiary));
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.a-node rect {
+  fill: rgb(var(--bg-elevated));
+  stroke: rgb(var(--border-primary));
+  rx: 8;
+}
+
+.a-node__title {
+  fill: rgb(var(--text-primary));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.a-node__sub {
+  fill: rgb(var(--text-secondary));
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.a-node {
+  cursor: pointer;
+}
+
+.a-node:hover rect,
+.a-node:focus-visible rect {
+  stroke: rgb(var(--bg-accent));
+}
+
+.a-node[aria-current="true"] rect {
+  stroke: rgb(var(--bg-accent));
+  stroke-width: 2;
+}
+
+.a-edge {
+  fill: none;
+  stroke: rgb(var(--text-tertiary));
+  stroke-width: 1.25;
+}
+
+.a-edge--dim {
+  stroke: rgb(var(--border-primary));
+}
+
+.a-edge__label {
+  fill: rgb(var(--text-tertiary));
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.a-inspector {
+  border-top: 1px solid rgb(var(--border-secondary));
+  background: rgb(var(--bg-elevated));
+  padding: calc(var(--unit) * 3) calc(var(--unit) * 4);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.a-inspector__title {
+  margin: 0 0 calc(var(--unit) * 1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------- plan / process ---------- */
+
+.a-phase {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: calc(var(--unit) * 3);
+  padding: calc(var(--unit) * 4) 0;
+  border-bottom: 1px solid rgb(var(--border-secondary));
+}
+
+.a-phase:last-child {
+  border-bottom: none;
+}
+
+.a-phase__index {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: rgb(var(--text-tertiary));
+  padding-top: 2px;
+}
+
+.a-phase__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--unit) * 2);
+  justify-content: space-between;
+}
+
+.a-phase__title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.a-meta-list {
+  display: grid;
+  gap: calc(var(--unit) * 1);
+  margin: calc(var(--unit) * 2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: rgb(var(--text-secondary));
+}
+
+.a-meta-list li,
+.a-meta-list > div {
+  display: grid;
+  grid-template-columns: minmax(96px, 15%) 1fr;
+  gap: calc(var(--unit) * 2);
+}
+
+.a-meta-list dt,
+.a-meta-list .a-meta-list__key {
+  color: rgb(var(--text-tertiary));
+  font-size: 12px;
+}
+
+.a-meta-list dd {
+  margin: 0;
+}
+
+.a-timeline {
+  display: grid;
+  gap: calc(var(--unit) * 1);
+  margin: 0;
+  font-size: 12px;
+}
+
+.a-timeline__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 20%) 1fr;
+  align-items: center;
+  gap: calc(var(--unit) * 2);
+}
+
+.a-timeline__track {
+  position: relative;
+  height: 10px;
+  background: rgb(var(--tint-tertiary));
+  border-radius: var(--radius-sm);
+}
+
+.a-timeline__span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--radius-sm);
+  background: rgb(var(--bg-accent) / 0.75);
+}
+
+.a-timeline__span[data-state="at-risk"] {
+  background: rgb(var(--text-orange) / 0.75);
+}
+
+.a-timeline__span[data-state="done"] {
+  background: rgb(var(--text-green) / 0.7);
+}
+
+.a-timeline__scale {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  color: rgb(var(--text-tertiary));
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.a-callout {
+  border: 1px solid rgb(var(--border-secondary));
+  border-left: 2px solid rgb(var(--text-orange));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--tint-tertiary));
+  padding: calc(var(--unit) * 3);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.a-callout--decision {
+  border-left-color: rgb(var(--bg-accent));
+}
+
+.a-callout--risk {
+  border-left-color: rgb(var(--text-red));
+}
+
+.a-callout__title {
+  margin: 0 0 calc(var(--unit) * 1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+details.a-disclosure {
+  border-top: 1px solid rgb(var(--border-secondary));
+  padding: calc(var(--unit) * 2) 0;
+}
+
+details.a-disclosure > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: rgb(var(--text-secondary));
+  list-style: none;
+}
+
+details.a-disclosure > summary::marker,
+details.a-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.a-disclosure > summary::before {
+  content: "+ ";
+  font-family: var(--font-mono);
+}
+
+details.a-disclosure[open] > summary::before {
+  content: "− ";
+}
+
+/* ---------- empty and error states ---------- */
+
+.a-empty,
+.a-error {
+  border: 1px dashed rgb(var(--border-primary));
+  border-radius: var(--radius);
+  padding: calc(var(--unit) * 6);
+  text-align: center;
+  color: rgb(var(--text-secondary));
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.a-error {
+  border-style: solid;
+  border-color: rgb(var(--text-red) / 0.4);
+  color: rgb(var(--text-primary));
+  text-align: left;
+}
+
+.a-error__title {
+  margin: 0 0 calc(var(--unit) * 1);
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--text-red));
+}
+
+.a-footnote {
+  margin-top: calc(var(--unit) * 10);
+  padding-top: calc(var(--unit) * 4);
+  border-top: 1px solid rgb(var(--border-secondary));
+  color: rgb(var(--text-tertiary));
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.a-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 640px) {
+  .a-shell {
+    padding: calc(var(--unit) * 5) calc(var(--unit) * 4)
+      calc(var(--unit) * 12);
+  }
+
+  .a-header__title {
+    font-size: 18px;
+    line-height: 24px;
+  }
+
+  .a-bars__row,
+  .a-timeline__row,
+  .a-meta-list li,
+  .a-meta-list > div {
+    grid-template-columns: 1fr;
+    gap: calc(var(--unit) * 1);
+  }
+
+  .a-phase {
+    grid-template-columns: 1fr;
+  }
+
+  .a-phase__index {
+    padding-top: 0;
+  }
+
+  .a-toolbar {
+    align-items: stretch;
+  }
+
+  .a-tabs {
+    overflow-x: auto;
+  }
+}
+
+/* ---------- motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- print / export ---------- */
+
+@media print {
+  :root[data-theme],
+  :root:not([data-theme]) {
+    color-scheme: light only;
+    --bg-page: 252 252 252;
+    --bg-wash: 248 248 248;
+    --bg-elevated: 255 255 255;
+    --tint-tertiary: 0 0 0 / 0.04;
+    --tint-secondary: 0 0 0 / 0.06;
+    --tint-primary: 0 0 0 / 0.08;
+    --text-primary: 25 25 25;
+    --text-secondary: 25 25 25 / 0.64;
+    --text-tertiary: 25 25 25 / 0.4;
+    --text-accent: 49 124 255;
+    --bg-accent: 49 124 255;
+    --border-secondary: 0 0 0 / 0.08;
+    --border-primary: 0 0 0 / 0.1;
+    --text-green: 0 165 88;
+    --text-orange: 245 142 58;
+    --text-red: 245 59 58;
+    --text-blue: 51 125 244;
+    --text-purple: 149 108 222;
+    --shadow-l1: none;
+    --shadow-l2: none;
+  }
+
+  body {
+    background: #fff;
+    color: #111;
+  }
+
+  .a-no-print,
+  .a-toolbar,
+  .a-diagram__hint {
+    display: none !important;
+  }
+
+  .a-panel,
+  .a-table-scroll,
+  .a-diagram {
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .a-table[data-a-sticky-columns] tr > :first-child,
+  .a-table [data-a-sticky] {
+    position: static !important;
+  }
+
+  .a-table[data-a-sticky-columns] tr > :first-child::after,
+  .a-table [data-a-sticky]::after {
+    display: none !important;
+  }
+
+  .a-section {
+    break-inside: avoid;
+    margin-top: 24px;
+  }
+
+  [hidden].a-print-reveal {
+    display: revert !important;
+  }
+}
+    </style>
+  </head>
+  <body>
+    <main class="a-shell">
+      <header class="a-header">
+        <div>
+          <h1 class="a-header__title">lg 语言设计调研报告：无 GC 函数式语言 + Clojure 语法 + OCaml 后端</h1>
+          <p class="a-header__subtitle">OxCaml locality modes、Perceus/FBIP、Lobster 自动 ownership 推断的组合如何支撑「绝大多数程序不需要 GC、也不写 lifetime」的 lg 设计</p>
+        </div>
+        <button
+          type="button"
+          class="a-btn a-btn--icon a-no-print"
+          data-a-theme-toggle
+          aria-label="Switch to dark mode"
+          title="Switch to dark mode"
+        >
+          <svg
+            class="a-theme-icon a-theme-icon--moon"
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+          >
+            <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" />
+          </svg>
+          <svg
+            class="a-theme-icon a-theme-icon--sun"
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+          >
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+            />
+          </svg>
+        </button>
+      </header>
+
+      <section
+        class="a-section a-error"
+        data-a-error
+        role="alert"
+        aria-live="polite"
+        hidden
+      >
+        <p class="a-error__title">Something in this artifact failed to run</p>
+        <p>
+          The content below is still readable, but an interactive control may
+          not respond.
+          <span data-a-error-detail></span>
+        </p>
+      </section>
+
+<section class="a-section">
+  <h2 class="a-section__title">TL;DR</h2>
+  <div class="a-prose">
+    <p><strong>结论：lg 的目标（绝大多数程序不需要 GC、开发者不写 Rust 式 lifetime）在 2025–2026 年已经有多条被验证过的技术路线，最可行的组合是「OxCaml modes 式的 region/escape 推断 + Perceus 式精确引用计数（FBIP）+ Lobster 式自动 owner/borrow 推断」，后端通过“生成 OCaml 源码”复用 byte / native / js_of_ocaml / wasm_of_ocaml / Melange 五条编译路径，并在 OxCaml 目标上把推断结果直接落成 <code>local</code> / <code>stack_</code> 标注，由 OxCaml typechecker 二次验证。</strong></p>
+    <p>关键设计判断：</p>
+    <ul>
+      <li><strong>不做 GC-free-only 语言</strong>。采用三层内存模型：Local（region/栈分配）、Owned（唯一引用，确定性析构）、Shared（GC 堆）。推断不出来的一律落 Shared —— 正确性永远由底层 OCaml GC 兜底，性能由推断质量决定。这是与 Rust 的本质差异：Rust 把 memory 作为正确性前提，lg 把 GC 作为兜底、把 ownership 当作优化和 API 约束工具。</li>
+      <li><strong>不写 lifetime 不等于没有 lifetime 语义</strong>。OxCaml 已证明：region 抽象 + mode 推断可以让 typechecker 自动证明“值不逃逸”，程序员只在需要 API 约束时才写 <code>@ local</code>。Lobster 进一步证明 owner/borrow 推断在真实项目里只需极少量人工干预（作者报告几十个中型程序只有 2 处需要改动）。</li>
+      <li><strong>语言本身是 fresh design，不是 lg v1 的迭代</strong>。lg v1 的教训（静态化的 Clojure、.mli sidecar、closed-variant 数据建模）值得继承；v2 的增量是内存语义层。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">1. 问题空间：自动内存管理的四条路线</h2>
+  <div class="a-prose">
+    <p>“大多数程序不需要 GC、但开发者不写 lifetime”实质上是问：<strong>谁来承担 object lifetime 的证明负担</strong>。目前被验证的路线有四条，lg 应该全部吸收而不是只选一条：</p>
+  </div>
+  <div class="a-table-scroll">
+    <table class="a-table" data-a-sticky-columns="1">
+      <caption class="a-visually-hidden">内存管理路线对比</caption>
+      <thead>
+        <tr>
+          <th scope="col">路线</th>
+          <th scope="col">代表</th>
+          <th scope="col">机制</th>
+          <th scope="col">用户负担</th>
+          <th scope="col">局限性</th>
+          <th scope="col">对 lg 的意义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Tracing GC</td>
+          <td>OCaml, JVM, Go</td>
+          <td>运行期追踪可达性</td>
+          <td>零</td>
+          <td>堆分配开销、暂停、非确定性析构</td>
+          <td>兜底（Shared 层）</td>
+          </tr>
+        <tr>
+          <td>显式 ownership/lifetime</td>
+          <td>Rust</td>
+          <td>所有权 + borrow checker + lifetime 标注</td>
+          <td>高（签名、生命周期参数）</td>
+          <td>学习成本；lifetime 多态破坏类型推导</td>
+          <td>反面教材：证明这正是要避免的</td>
+        </tr>
+        <tr>
+          <td>Mode/region 推断</td>
+          <td>OxCaml</td>
+          <td>typechecker 推断值是否逃逸 region，逃逸失败即错误；stack_ / exclave_ 做栈分配</td>
+          <td>低（可选标注）</td>
+          <td>不消灭 GC，只绕开；推断不过 mli 边界</td>
+          <td><strong>Local 层的直接蓝本</strong></td>
+        </tr>
+        <tr>
+          <td>精确 RC + 自动 owner/borrow 推断</td>
+          <td>Perceus (Koka, Lean 4, Roc), Lobster</td>
+          <td>编译期插入 inc/dec/drop；borrow 推断消掉绝大多数计数操作；refcount==1 时原地更新</td>
+          <td>近零</td>
+          <td>不能收集 cycle（需要额外策略）</td>
+          <td><strong>Owned 层的直接蓝本</strong></td>
+        </tr>
+        <tr>
+          <td>Mutable value semantics</td>
+          <td>Hylo, Swift(value types)</td>
+          <td>没有引用，只有值 + inout projection</td>
+          <td>低</td>
+          <td>表达能力受限；lg 要保留 Clojure 引用语义，不采用</td>
+          <td>仅作对照</td>
+        </tr>
+        <tr>
+          <td>线性/唯一类型</td>
+          <td>Austral, Clean</td>
+          <td>每个值恰好使用一次 / 唯一性标注</td>
+          <td>高（线性约束改变写法）</td>
+          <td>太严格，违背“不需要写”的目标</td>
+          <td>仅作 API 层 optional 标注的参考</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">2. OxCaml：locality modes 与 stack allocation 详解</h2>
+  <div class="a-prose">
+    <p>OxCaml（Jane Street 的 OCaml fork）在普通 OCaml 的类型之外叠加了一套 <strong>mode 系统</strong>：mode 不描述数据形状，描述值的<em>属性</em>（能否逃逸、是否被别名、能否跨线程）。这是 lg 最重要的参照系 —— 它证明了在 ML 家族语言里，“不逃逸 ⇒ 可栈分配”可以完全由编译器推断。</p>
+  </div>
+  <h3>2.1 Mode 轴</h3>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">OxCaml mode 轴</caption>
+      <thead><tr><th scope="col">轴</th><th scope="col">值域（强 → 弱）</th><th scope="col">追踪什么</th></tr></thead>
+      <tbody>
+        <tr><td>locality</td><td><code>global</code> → <code>local</code></td><td>值能否逃逸出它的 region（决定可否栈分配）</td></tr>
+        <tr><td>uniqueness</td><td><code>unique</code> → <code>aliased</code></td><td>值是否有多个引用（决定可否原地更新）</td></tr>
+        <tr><td>linearity</td><td><code>many</code> → <code>once</code></td><td>值被使用的次数（once ⇒ 至多一次）</td></tr>
+        <tr><td>portability</td><td><code>portable</code> → <code>corruptible</code> → <code>shareable</code> → <code>nonportable</code></td><td>能否跨线程/capsule 传递</td></tr>
+        <tr><td>contention</td><td><code>uncontended</code> → <code>shared</code> → <code>corrupted</code> → <code>contended</code></td><td>值当前是否被别的 capsule 持有</td></tr>
+        <tr><td>yield / fork / statefulness / visibility</td><td>各自两至四档</td><td>更细的并发与效果约束（v2 暂不需要）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-prose">
+    <p>每条轴都是半格（meet 向下、join 向上），<strong>值永远可以被“弱化”（weaken）到更弱的 mode</strong>：global 值可以当作 local 用，unique 值可以当作 aliased 用。mode 之间有蕴含：<code>global ⇒ aliased · many · forkable · unyielding</code>。typechecker 的任务是推断每个位置最强的可证明 mode。</p>
+  </div>
+  <h3>2.2 Region 与 stack allocation 规则</h3>
+  <div class="a-prose">
+    <ul>
+      <li><strong>Region</strong> 是静态概念：函数体是一个 region；<code>while</code>/<code>for</code> 循环体、<code>lazy</code>、顶层 module binding 各自也是 region。Region 嵌套；最外层 region（整个文件）永不结束，global 值住在那里。</li>
+      <li>栈分配不写死在 call stack 上，而是写在与 minor heap 同构的<strong>独立 region 栈</strong>上，因此 local 返回值不需要拷贝（<code>exclave_</code>）。</li>
+      <li><code>stack_</code> 关键字强制栈分配：分配逃逸时是<em>编译错误</em>而不是悄悄回落到堆。没有 <code>stack_</code> 时编译器自行决定，安全就栈分配，否则堆分配——这正对应 lg 想要的“silent optimization”语义。</li>
+      <li><code>local</code> mode 标注≠强制栈分配，它只是禁止值逃逸 region；编译器继而可以自由选择栈分配。推断不写标注时已经是这个行为。</li>
+      <li><strong>Mode crossing</strong>：不分配在内存的类型（int、bool 等立即数）可以无条件穿越 locality 轴 —— local int 可以当 global 用。lg 里要保留这条规则。</li>
+      <li>不可栈分配：modules、exception（global 才能 raise）、objects。</li>
+    </ul>
+  </div>
+  <h3>2.3 函数类型上的 mode：四种函数</h3>
+  <div class="a-prose">
+    <p><code>a → b</code>、<code>a @ local → b</code>、<code>a → b @ local</code>、<code>a @ local → b @ local</code> 是四种不同的类型。参数位的 <code>local</code> 是“允许调用方传 local 值”；返回位的 <code>local</code> 是“返回值 local 到调用者的 region”（即 <code>exclave_</code> 的效果）。这给了 API 作者双向约束能力 —— <code>with_file</code> 式资源管理的静态化保证（fd 不许被 stash）就是 covariant local 参数的典型用法。</p>
+  </div>
+  <h3>2.4 推断的实际能力与边界（重要）</h3>
+  <div class="a-prose">
+    <ul>
+      <li>推断<strong>不跨文件边界</strong>：没有 mli 时，所有对外可见的函数参数默认 global。有 mli 时以 mli 为准。这直接决定了 lg 的模块设计必须为每个函数生成/缓存 mode 签名。</li>
+      <li>local 参数可以出现在任何位置，包括高阶函数；闭包捕获 outer-local 值是允许的（值不属于内层 region，所以逃逸内层 region 无碍）。</li>
+      <li>uniqueness 目前主要用于 API 约束与 future overwriting；OCaml 有 GC 兜底，所以“放弃 ownership”总是安全的——这条性质让 OxCaml 的 uniqueness 比 Rust 的 ownership 弱但好用得多，lg 要继承这个取舍。</li>
+      <li>Modality（<code>@@</code>）描述容器与元素之间的 mode 映射：record 字段 <code>@@ global</code> 意味着取出时是 global，无论容器本身 mode 如何。lg 的 record/map 访问规则照此建模。</li>
+    </ul>
+  </div>
+  <div class="a-callout a-callout--decision">
+    <strong>设计决定：</strong>lg 的 Local 层直接采用 OxCaml region/escape 模型，但不引入 mode 概念到 surface syntax —— 推断结果落在 IR 注解上；当用户需要 API 约束时才通过 <code>^:local</code> / <code>^:once</code> metadata 暴露。
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">3. Perceus / FBIP：让“绝大多数数据不需要 GC”的关键算法</h2>
+  <div class="a-prose">
+    <p>Perceus（PLDI'21，Reinking / Xie / de Moura / Leijen）是目前最完整的“自动精确引用计数 + 原地更新”方案，已落地于 Koka、Lean 4（生产级）、Roc。lg 的 Owned 层基本是 Perceus 的移植。</p>
+  </div>
+  <h3>3.1 算法骨架</h3>
+  <div class="a-prose">
+    <ol>
+      <li><strong>dup/drop 插入</strong>：在显式控制流 IR 上，对每个绑定在最后使用点之后插入 <code>drop</code>，对每个共享（第二个及以上）使用插入 <code>dup</code>。产生的程序 garbage-free：任何死亡对象立刻被释放，只有 live 引用被保留。</li>
+      <li><strong>Borrow inference</strong>：只“看一眼”的参数标记为 borrow，避免 dup/drop。Koka 的实现里这一步消掉了绝大多数 RC 操作。</li>
+      <li><strong>Drop specialization</strong>：匹配完不再需要的字段在对应分支就地 drop，而不是把整个 drop 延后到统一出口 —— fast path 上省掉大量计数操作。</li>
+      <li><strong>Reuse analysis</strong>：对象在构造点标记 reuse token；如果某对象的 refcount 为 1 且紧随其后的操作是“析构 + 立即构造同尺寸对象”，就用它的内存。<strong>这是 FBIP 的基础</strong>。</li>
+      <li><strong>Reuse specialization</strong>：把“先 drop 再 alloc 同形状”优化成“就地写字段”，消掉 in-place update 本身的分配。</li>
+    </ol>
+  </div>
+  <h3>3.2 FBIP（functional but in-place）</h3>
+  <div class="a-prose">
+    <p>FBIP 的语义：程序写出来是纯函数的，运行时如果某次更新操作的输入 refcount==1，就原地覆写；否则拷贝再改。<strong>用户不需要任何标注</strong>，正确性由拷贝语义保证。Roc 把这一点做成了语言级承诺（opportunistic mutation）；Koka 用它实现了接近 C 的 in-place 算法（例如 <code>map</code>/<code>filter</code> 在唯一输入时零分配）。</p>
+    <p>对 lg 的意义：<strong>Clojure 的 transient 语义可以全自动获得</strong> —— 只要输入向量的 refcount 是 1，<code>conj</code>/<code>assoc</code> 就地改 RRB/HAMT 节点；refcount&gt;1 时退化到 path-copying。Clojure 的 <code>transient!</code>+<code>persistent!</code> 手写 ceremony 变成编译器自动优化。</p>
+  </div>
+  <h3>3.3 Cycle 问题与三种对策</h3>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">Cycle 对策对比</caption>
+      <thead><tr><th scope="col">方案</th><th scope="col">代表</th><th scope="col">优点</th><th scope="col">缺点</th></tr></thead>
+      <tbody>
+        <tr><td>禁止 cycle + 运行时 leak 报告</td><td>Lobster</td><td>简单；实践里 cycle 极少</td><td>有 cycle 就漏</td></tr>
+        <tr><td>Backup cycle detector</td><td>Nim ORC</td><td>不漏</td><td>需要额外运行时</td></tr>
+        <tr><td>Shared 层回落到 tracing GC</td><td><strong>lg 选择</strong></td><td>语言天然双模：Owned 层禁 cycle，Shared 层允许</td><td>需要两个运行时共存</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-prose">
+    <p>lg 的选择：Owned 值里只允许 tree/DAG 结构（类型系统已经知道哪些类型可能成环 —— 含 ref/atom/延迟 seq 的类型），可能成环的一律 Shared。OCaml GC 作为 Shared 层的实现是免费的，这也让“绝大多数程序无 GC”变成可证明的目标而不是愿景。</p>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">4. Lobster：最接近“自动 ownership 推断”的现存证据</h2>
+  <div class="a-prose">
+    <p>Lobster（Wouter van Oortmerssen）做了一个语言设计圈少有人做的实验：把现成的 runtime RC 语言加上<em>编译期 owner/borrow 推断</em>，然后看程序要不要改。结果：几十个中型游戏原型里只有 <strong>2 处</strong>需要手动改动。这直接回答了 lg 的第一个问题 —— 自动 ownership 推断不仅可行，而且在真实代码里成功率极高。</p>
+  </div>
+  <div class="a-prose">
+    <p>Lobster 的算法要点：</p>
+    <ul>
+      <li>每个堆分配选一个 owner（通常是第一个接收它的变量/字段/vector 元素）；</li>
+      <li>从 owner 出发，后续所有 use 尽量标为 borrow（不产生 RC 操作）；</li>
+      <li>某处确实需要拥有时，<strong>插入局部 inc</strong>而不是报错 —— 与 Rust 的策略正好相反：Rust 拒绝，Lobster 降级到运行时 RC；</li>
+      <li>无法静态证明借用的存活关系时，也降级到 RC；</li>
+      <li>Cycle 由运行结束时的 leak 报告兜底，要求程序员手动打破。</li>
+    </ul>
+    <p>对 lg 的移植价值：<strong>owner/borrow 推断不需要 lifetime 标注</strong>，因为它求的是“这个 use 是不是 owner 的最后一次读”，是流分析而不是类型层问题。lg 把这个过程放在 mode inference 之后的 IR 上做，与 Perceus 的 borrow inference 是同一个 pass 的两面。</p>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">5. 其他必须知道的对照点</h2>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">其他语言对照</caption>
+      <thead><tr><th scope="col">语言/项目</th><th scope="col">要点</th><th scope="col">lg 借鉴什么</th></tr></thead>
+      <tbody>
+        <tr><td>Lean 4</td><td>运行时只有 RC，没有 tracing GC；FBIP 与 Perceus 原生实现</td><td>证明 RC-only 后端在生产里可用；lean 的 <code>borrow</code>/<code>owned</code> IR 标注可借鉴</td></tr>
+        <tr><td>Koka</td><td>Perceus 论文实现；effect types + RC</td><td>reuse analysis 的完整参考实现；drop specialization 细节</td></tr>
+        <tr><td>Roc</td><td>Atomic RC + opportunistic mutation；后端看不到 ownership，所有 RC 由 LIR ARC insertion 单点完成</td><td><strong>“ownership 推理只在一个 pass 里”</strong>的架构纪律 —— lg 照此组织</td></tr>
+        <tr><td>Nim (ARC/ORC)</td><td>确定性 RC + move 语义 + cursor 推断；ORC 加 cycle collection</td><td>cursor/borrow 启发式；cycle 备选方案</td></tr>
+        <tr><td>Swift</td><td>ARC + 约定式 ownership（<code>@guaranteed</code> vs <code>@owned</code> 由 SIL 推断）</td><td>调用约定层的 borrow/owned 参数传递规则</td></tr>
+        <tr><td>Hylo</td><td>MVS：没有引用类型，所有共享靠 inout projection</td><td>不采用（lg 保留 Clojure 引用语义），但 inout 概念对应 lg 的 consuming param</td></tr>
+        <tr><td>Austral / Clean</td><td>线性/唯一类型在类型层显式表达</td><td>作为可选标注 <code>^:linear</code> 的语义参考，不作为默认</td></tr>
+        <tr><td>Vale</td><td>Generational references：运行时校验 borrow，零静态 lifetime</td><td>备选 escape hatch；通常不需要</td></tr>
+        <tr><td>Erlang / BEAM</td><td>Per-process heap，无共享 ⇒ RC 简单</td><td>不直接采用，但证明“隔离堆”策略可行</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">6. Clojure 语法与数据结构：静态化时保什么</h2>
+  <h3>6.1 核心数据结构的真实实现</h3>
+  <div class="a-prose">
+    <ul>
+      <li><strong>PersistentVector</strong>：32 路 trie，尾插 O(log₃₂n)≈O(1)；严格版本用路径拷贝，<em>relaxed</em> 版本（RRB-tree）支持 O(log n) concat/slice。lg v1 用 <code>Rrbvec.t</code>，lg 沿用并叠加 uniqueness → 原地更新。</li>
+      <li><strong>PersistentHashMap</strong>：HAMT（hash array mapped trie）；JVM 新版为 CHAMP。静态类型 lg 中同 key/value 类型时可以直接用 OCaml 端 <code>ImMap</code>-style HAMT；keyword-keyed map 走 interned keyword，hash 常数化。</li>
+      <li><strong>PersistentHashSet / SortedSet / SortedMap</strong>：基于 map 或平衡树；Datascript 的 persistent-sorted-set 已有 OCaml 移植可直接复用。</li>
+      <li><strong>List / Seq / LazySeq</strong>：list = OCaml 原生 <code>'a list</code>；seq 是延迟视图，lazy 本身需要共享 ⇒ Shared 层。</li>
+      <li><strong>Transient</strong>：Clojure 用 <code>editable</code> flag + 单线程 token；lg 用 uniqueness 自动替代 —— <code>(into [] coll)</code> 内部循环拿到的中间向量 refcount==1 时自动是 transient 语义。</li>
+    </ul>
+  </div>
+  <h3>6.2 core 函数集的静态化重述</h3>
+  <div class="a-prose">
+    <p>Clojure core 是动态 API（<code>assoc</code> 接受任意 map-like），lg 需要静态版本。取舍已经在 lg v1 上验证过：closed sum 的 collection 抽象（vector / map / set / list / seq 是五个不同类型，不是五个接口实现），重载用多 arity <code>defn</code> 表达，keyword 做 <code>(:k m)</code> 调用糖但要求 m 的静态类型已知是 record 或 <code>keyword-keyed map</code>。类型层<strong>不引入</strong> JVM 式 protocol dispatch，而是 traitless overloading：编译期把 <code>(assoc m k v)</code> resolve 成 <code>Map.assoc</code> 或 <code>Record.assoc</code>。</p>
+  </div>
+  <h3>6.3 必须砍掉或改造的 Clojure 语义</h3>
+  <div class="a-prose">
+    <ul>
+      <li><code>atom</code>/<code>ref</code>/<code>agent</code>：保留 atom（= OCaml ref cell），但存的内容只能 Shared 或立即数；不允许 Owned 值进 atom（违反确定性析构）。</li>
+      <li><code>lazy-seq</code>：保留但只能 Shared —— thunk 捕获会让局部推断失败，不值得为它放宽。</li>
+      <li><code>volatile!</code>/transient：语义由 uniqueness 推断自动提供，不再暴露给用户。</li>
+      <li><code>defprotocol</code>/<code>defrecord</code> dynamic dispatch：改成编译期 resolution；runtime protocol 用 first-class module 或闭包 record。</li>
+      <li><code>*warn-on-reflection*</code> 类问题不存在：本来就全静态。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">7. Implicit modules：文件即模块</h2>
+  <div class="a-prose">
+    <p>“Implicit modules”取 OCaml 路线：<strong>每个 <code>.lg</code> 文件就是一个模块，模块名从路径推导</strong>，源文件里不写 <code>module</code> 声明；<code>ns</code> 表单可选 —— 省略时用路径，写了则以 <code>ns</code> 为准（但必须与路径一致，否则报错）。这同时满足 Clojure 习惯（显式 ns）和 OCaml 习惯（文件系统即命名空间）。</p>
+    <ul>
+      <li>路径规则：<code>src/foo/bar.lg</code> → <code>Foo_bar</code>（OCaml 模块命名）；引用时用 <code>foo.bar/f</code> 或 <code>(:require [foo.bar :as b])</code>。</li>
+      <li>visibility：默认全 public；需要私有 API 时加一个相邻 <code>.lgi</code>（继承 lg v1 的 sidecar 思想，但用 lg 语法而不是 OCaml mli）。lgi 同时是 mode 签名的缓存点 —— 解决 OxCaml “推断不过 mli 边界”的痛点：我们把推断结果<strong>写进</strong> lgi，下游模块直接用。</li>
+      <li>子模块：目录即 module pack（OCaml <code>-pack</code> 的现代等价物 = 目录命名空间）。不支持文件内嵌套 module —— 保持“implicit”承诺纯粹。</li>
+      <li>没有 functor / first-class module：需要时用 record-of-functions（Clojure 习惯）或行级 <code>module type</code> 语法（保留给 v3）。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">8. 类型系统：HM 推导 + 可选标注</h2>
+  <div class="a-prose">
+    <p>目标是 <strong>Hindley-Milner + let 泛化 + value restriction</strong>（OCaml 同款，经过 30 年验证），标注只在三种地方有意义：</p>
+    <ul>
+      <li><strong>API 边界</strong>：<code>(defn f ^{:sig (fn [int -&gt; int])} [x] ...)</code> 或 lgi 文件 —— 控制对外契约，跨模块推断边界。</li>
+      <li><strong>消歧</strong>：当同名字段在不同 record 间产生歧义时标注提示。</li>
+      <li><strong>Mode/API 约束</strong>：<code>^:local</code>、<code>^:once</code>、<code>^:shared</code> metadata —— 覆盖推断结果，但只允许往<em>更强约束</em>方向覆盖（函数参数从 global 加强为 local 是 API 承诺收紧，合法；反之非法）。</li>
+    </ul>
+    <p>几个关键设计点：</p>
+    <ul>
+      <li><strong>Record vs map</strong>：lg v1 已经解决 —— keyword-keyed map 与命名 record 是两个类型族，record 的字段访问是 O(1) 直接读，map 是 HAMT lookup。lg 继承这个分裂，不加 row polymorphism（复杂度不值）。</li>
+      <li><strong>多 arity defn</strong>：编码为嵌套 pair 签名（lg v1 的 <code>(unit-&gt;a) * ((a-&gt;b) * unit)</code> 形式）或直接 ADT dispatch —— v2 采用后者，更干净。</li>
+      <li><strong>变参 <code>&amp; rest</code></strong>：翻译成 <code>'a list -&gt; ...</code>，语法糖不变。</li>
+      <li><strong>泛型</strong>：HM 的 <code>'a</code> 足够；不允许 ad-hoc overloading（与 Clojure 的 ifn/invoke 魔法切割）。需要多态行为时用 <code>deftype</code> + 方法表（record of functions）。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">9. OCaml 后端矩阵：emit-OCaml 的回报</h2>
+  <div class="a-prose">
+    <p>lg 编译器输出 OCaml 源码，不直接产出二进制。这样一来所有现成后端都是免费获得的：</p>
+  </div>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">OCaml 后端矩阵</caption>
+      <thead><tr><th scope="col">后端</th><th scope="col">输入</th><th scope="col">产物</th><th scope="col">对 lg 的意义</th></tr></thead>
+      <tbody>
+        <tr><td><code>ocamlc</code> (bytecode)</td><td>OCaml .ml</td><td>bytecode</td><td>调试/快速迭代/REPL</td></tr>
+        <tr><td><code>ocamlopt</code> (native)</td><td>OCaml .ml</td><td>native exe</td><td>默认生产后端；OCaml GC 兜底 Shared 层</td></tr>
+        <tr><td><strong>OxCaml ocamlopt (flambda2)</strong></td><td>OCaml + mode 标注</td><td>native exe + stack alloc</td><td><strong>lg 推断出的 local/unique 落成 <code>@ local</code>/<code>stack_</code></strong>，OxCaml typechecker 二次验证 + flambda2 深度优化；unsafe 但快的路</td></tr>
+        <tr><td><code>js_of_ocaml</code></td><td>OCaml bytecode</td><td>JS</td><td>浏览器/Deno/Bun；OCaml GC 仍可用</td></tr>
+        <tr><td><code>wasm_of_ocaml</code></td><td>OCaml bytecode</td><td>WasmGC</td><td>2025-02 首个 feature-complete release；WasmGC 自带 GC，lg 的 Shared 层零成本映射</td></tr>
+        <tr><td><code>Melange</code></td><td>OCaml/Reason AST</td><td>可读 JS（ES modules）</td><td>面向 JS 生态深度集成；lg v1 已用</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-prose">
+    <p><strong>策略：</strong>lg 编译器有一个 <code>--flavor</code> 开关：<code>vanilla</code>（标准 OCaml，所有推断结果仅作注释，零风险）与 <code>oxcaml</code>（生成 mode 标注，需要 OxCaml 工具链）。同一套 IR，不同的 emission 规则。wasm/JS 路径共享 vanilla 输出（wasm_of_ocaml/js_of_ocaml 直接吃 bytecode）。</p>
+  </div>
+  <div class="a-callout a-callout--risk">
+    <strong>风险：</strong>OxCaml 是 fork，与 upstream OCaml 的同步需要跟进 Jane Street 的发布节奏。lg 必须保证 vanilla 输出永远是 first-class 路径，不能让 OxCaml 成为硬依赖 —— 否则 org 里没装 OxCaml 的用户无法构建。
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">10. lg 总体设计</h2>
+  <h3>10.1 三层内存模型（核心）</h3>
+  <div class="a-prose">
+    <p>每个 lg 值在 IR 上属于恰好一层；层是 Perceus + OxCaml 两种机制的统一视图：</p>
+  </div>
+  <div class="a-table-scroll">
+    <table class="a-table" data-a-sticky-columns="1">
+      <caption class="a-visually-hidden">三层内存模型</caption>
+      <thead><tr><th scope="col">层</th><th scope="col">含义</th><th scope="col">进入条件（推断）</th><th scope="col">释放方式</th><th scope="col">vanilla OCaml 端表现</th><th scope="col">OxCaml 端表现</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Local</strong></td>
+          <td>不逃逸当前 region</td>
+          <td>escape analysis 证明：不返回、不进 escaping closure、不进 ref、不进 Shared 容器</td>
+          <td>region 结束即回收</td>
+          <td>普通堆分配 + 注释；OCaml minor GC 兜底</td>
+          <td><code>@ local</code> / <code>stack_</code>，真实栈分配</td>
+        </tr>
+        <tr>
+          <td><strong>Owned</strong></td>
+          <td>唯一引用、确定性析构</td>
+          <td>逃逸出 region，但 ownership 分析证明任一时刻只有一个 owner；类型不含 ref/atom/lazy</td>
+          <td>最后使用点 drop（编译期插入）</td>
+          <td>普通堆分配，drop 实际是 no-op（GC 兜底）；但 IR 上保留 drop 标记供 OxCaml/Roc-style RC 后端用</td>
+          <td><code>@ unique</code>；允许 <code>overwrite_</code>/原地更新</td>
+        </tr>
+        <tr>
+          <td><strong>Shared</strong></td>
+          <td>任意别名、可能成环</td>
+          <td>默认回落层；ref/atom/lazy/第一-class module 容器、跨线程值</td>
+          <td>OCaml GC</td>
+          <td>普通堆分配</td>
+          <td>普通堆分配</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-prose">
+    <p>对应“绝大多数程序不需要 GC”：<strong>Local + Owned 两层都不触发 GC</strong>；只有 Shared 走 GC。实测目标（参考 Lobster 报告）：典型函数式业务代码 90%+ 分配落在 Local/Owned。</p>
+  </div>
+  <h3>10.2 编译管线</h3>
+  <figure class="a-panel" data-a-diagram>
+    <figcaption class="a-panel__title">lg 编译管线（共享 IR，多个 emitter）</figcaption>
+    <div class="a-diagram" role="img" aria-label="Pipeline: reader → AST → HM type inference → typed IR → locality/ownership inference → emitter → OCaml source → downstream OCaml toolchains (ocamlc/ocamlopt/oxcaml/jsoo/wsoo/melange)">
+      <svg viewBox="0 0 960 340" data-a-diagram-canvas>
+        <g data-a-diagram-viewport>
+          <g class="a-group"><rect x="10" y="20" width="930" height="60" rx="8"/><text x="30" y="55" class="a-node__title">Frontend</text></g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="Reader" data-a-detail="Clojure-syntax s-expression reader; produces raw form AST">
+            <rect x="30" y="100" width="110" height="44"/><text class="a-node__title" x="44" y="122">reader</text><text class="a-node__sub" x="44" y="137">.lg → forms</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="Analyze" data-a-detail="Macro-expands, resolves symbols, produces AST">
+            <rect x="170" y="100" width="110" height="44"/><text class="a-node__title" x="184" y="122">analyze</text><text class="a-node__sub" x="184" y="137">forms → ast</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="HM inference" data-a-detail="Hindley-Milner typing with value restriction; optional ^T annotations">
+            <rect x="310" y="100" width="130" height="44"/><text class="a-node__title" x="324" y="122">infer (HM)</text><text class="a-node__sub" x="324" y="137">ast → typed ir</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="Memory inference" data-a-detail="Region/escape analysis + owner/borrow inference; annotates every value Local/Owned/Shared">
+            <rect x="470" y="100" width="170" height="44"/><text class="a-node__title" x="484" y="122">mode infer</text><text class="a-node__sub" x="484" y="137">locality + own/borrow</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="Emit" data-a-detail="OCaml source emitter; vanilla or oxcaml flavor">
+            <rect x="670" y="100" width="120" height="44"/><text class="a-node__title" x="684" y="122">emit</text><text class="a-node__sub" x="684" y="137">typed ir → .ml</text>
+          </g>
+          <g class="a-group"><rect x="10" y="200" width="930" height="120" rx="8"/><text x="30" y="228" class="a-node__title">Downstream OCaml toolchains (unchanged)</text></g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="ocamlc / ocamlopt" data-a-detail="vanilla OCaml: bytecode + native, GC as fallback">
+            <rect x="40" y="250" width="150" height="48"/><text class="a-node__title" x="54" y="272">ocamlc/opt</text><text class="a-node__sub" x="54" y="288">byte · native</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="OxCaml ocamlopt" data-a-detail="flambda2 + modes; consumes emitted local/unique annotations">
+            <rect x="220" y="250" width="180" height="48"/><text class="a-node__title" x="234" y="272">oxcaml ocamlopt</text><text class="a-node__sub" x="234" y="288">native + stack alloc</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="js_of_ocaml" data-a-detail="bytecode → JS">
+            <rect x="430" y="250" width="130" height="48"/><text class="a-node__title" x="444" y="272">js_of_ocaml</text><text class="a-node__sub" x="444" y="288">JS</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="wasm_of_ocaml" data-a-detail="bytecode → WasmGC">
+            <rect x="590" y="250" width="150" height="48"/><text class="a-node__title" x="604" y="272">wasm_of_ocaml</text><text class="a-node__sub" x="604" y="288">WasmGC</text>
+          </g>
+          <g class="a-node" data-a-node tabindex="0" role="button" data-a-title="Melange" data-a-detail="OCaml AST → readable JS">
+            <rect x="770" y="250" width="130" height="48"/><text class="a-node__title" x="784" y="272">melange</text><text class="a-node__sub" x="784" y="288">JS (readable)</text>
+          </g>
+          <path class="a-edge" d="M140 122 L170 122"/><path class="a-edge" d="M280 122 L310 122"/><path class="a-edge" d="M440 122 L470 122"/><path class="a-edge" d="M640 122 L670 122"/>
+          <path class="a-edge" d="M730 144 L730 190 L115 190 L115 250"/><path class="a-edge" d="M730 144 L730 190 L310 190 L310 250"/><path class="a-edge" d="M730 144 L730 190 L495 190 L495 250"/><path class="a-edge" d="M730 144 L730 190 L665 190 L665 250"/><path class="a-edge" d="M730 144 L730 190 L835 190 L835 250"/>
+        </g>
+      </svg>
+    </div>
+  </figure>
+  <h3>10.3 Surface syntax 草样（示意）</h3>
+  <div class="a-prose">
+    <pre><code>;; hello.lg — implicit module hello
+;; (ns hello) 可选；路径即模块
+
+(defn sum
+  "Total of a vector of ints."
+  ^{:sig (fn [(vec int) -&gt; int])}     ; optional annotation
+  [xs]
+  (fold + 0 xs))                       ; xs is borrowed; fold's callback gets local xs
+
+(defn make-point [x y]
+  {:x x :y y})                          ; {:x :y} keyword-keyed record, all Local unless returned
+
+(defn dist ^:local [p q]                ; ^:local = promise not to escape p/q
+  (let [dx (- (:x p) (:x q))
+        dy (- (:y p) (:y q))]
+    (sqrt (+ (* dx dx) (* dy dy)))))    ; intermediate record/tuple is Local, stack-allocated
+
+(defn process [req]
+  (let [resp (handle req)]              ; resp Owned if handle returns owned
+    (log! resp)                          ; borrow
+    resp))                               ; move: ownership transfers to caller</code></pre>
+  </div>
+  <h3>10.4 “无 GC” 的诚实评估</h3>
+  <div class="a-prose">
+    <ul>
+      <li><strong>纯函数 + 树/图无环结构 ⇒ 完全 Local/Owned，GC 只在 Shared 层跑</strong>：这类程序跑起来 GC 几乎不工作（与 Koka/Lean 相同结论）。</li>
+      <li><strong>有 cycle 的结构</strong>（图、双向链表、相互引用的 record）：类型系统在编译期拒绝 Owned 层，程序员要么显式落到 Shared（<code>^:shared</code>），要么用 id/引用打破环 —— 这是 lg 对比 Clojure 新增的限制，比 Rust 的 lifetime 标注负担轻得多但非零。</li>
+      <li><strong>lazy / atom / 线程共享</strong>：默认 Shared。想要 Owned 化需要显式约束 —— 边界清晰。</li>
+      <li><strong>wasm_of_ocaml 的 WasmGC 与 lg Shared 层是天然匹配</strong>，浏览器/云场景下“GC”不再是缺点而是特性（sandboxed managed memory）。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">11. 实施路线与开放问题</h2>
+  <article class="a-phase">
+    <div class="a-phase__index">P0</div>
+    <div>
+      <div class="a-phase__head"><h3 class="a-phase__title">MVP：reader + HM + emit vanilla OCaml</h3><span class="a-status" data-state="active">本 session 已落地骨架</span></div>
+      <p class="a-prose">Clojure 语法 reader、HM 推导、emit OCaml、隐式模块、最小 core（vector/map/list/fn/atom）。通过 <code>dune</code>+<code>ocamlfind</code> 走通 byte/native。本阶段不做任何 mode 推断。</p>
+      <dl class="a-meta-list"><div><dt>Exit criteria</dt><dd><code>lg build examples/hello.lg -o hello && ./hello</code> 跑通；<code>--emit-ocaml</code> 产出可读 .ml</dd></div></dl>
+    </div>
+  </article>
+  <article class="a-phase">
+    <div class="a-phase__index">P1</div>
+    <div>
+      <div class="a-phase__head"><h3 class="a-phase__title">Locality / ownership inference</h3><span class="a-status" data-state="planned">planned</span></div>
+      <p class="a-prose">Escape analysis + owner/borrow 推断（Lobster 算法），IR 上生成 Local/Owned/Shared 注解；<code>--mode-report</code> 输出每层分配的统计。OxCaml emitter 落地 <code>@ local</code>/<code>stack_</code>/<code>@ unique</code>。</p>
+      <dl class="a-meta-list"><div><dt>Depends on</dt><dd>P0</dd></div><div><dt>Exit criteria</dt><dd>用 OxCaml 编译的示例程序里，至少 80% 的非顶层分配被标注 local；无 GC-only 路径逻辑错误</dd></div></dl>
+    </div>
+  </article>
+  <article class="a-phase">
+    <div class="a-phase__index">P2</div>
+    <div>
+      <div class="a-phase__head"><h3 class="a-phase__title">FBIP / transient 自动优化</h3><span class="a-status" data-state="planned">planned</span></div>
+      <p class="a-prose">在 Owned 层做 refcount==1 → 原地更新；让 <code>conj</code>/<code>assoc</code>/<code>into</code> 在唯一输入下走可变 fast path。需要 OCaml 端运行库支持 <code>refcounted</code> 值（vanilla 路径下是 no-op）。</p>
+      <dl class="a-meta-list"><div><dt>Depends on</dt><dd>P1</dd></div></dl>
+    </div>
+  </article>
+  <article class="a-phase">
+    <div class="a-phase__index">P3</div>
+    <div>
+      <div class="a-phase__head"><h3 class="a-phase__title">wasm / JS 后端打通</h3><span class="a-status" data-state="planned">planned</span></div>
+      <p class="a-prose">wasm_of_ocaml + js_of_ocaml + melange 三个发射目标；Shared 层直接落在 WasmGC/JVM-style GC 上。验证 logseq 的 datascript-ocaml 运行模式复用。</p>
+    </div>
+  </article>
+  <article class="a-phase">
+    <div class="a-phase__index">P4</div>
+    <div>
+      <div class="a-phase__head"><h3 class="a-phase__title">lgi sidecar + 跨模块 mode 签名缓存</h3><span class="a-status" data-state="planned">planned</span></div>
+      <p class="a-prose">.lgi 承载可见性 + mode 签名缓存，解决 OxCaml “推断不过 mli”的跨文件边界问题；增量编译友好。</p>
+    </div>
+  </article>
+  <h3>开放问题（需要用户决策或进一步实验）</h3>
+  <div class="a-prose">
+    <ul>
+      <li><strong>Lazy/atom 的 Owned 化要不要支持</strong>？技术上可行（thunk 捕获全 Local ⇒ lazy 本身可 Local），但会显著加大推断复杂度。建议 v1 不做。</li>
+      <li><strong>Cycle 报错还是回落 Shared</strong>？默认回落（不阻塞程序员），<code>--strict-owned</code> 模式下报错。</li>
+      <li><strong>是否做 <code>^:once</code>（linear）标注</strong>：建议 v2 引入（OxCaml 已支持 once），用于 IO 句柄类资源。</li>
+      <li><strong>Macro 系统</strong>：read macro（<code>#()</code>、<code>'</code>、<code>`</code>、<code>~</code>、<code>@</code>、<code>^</code>）必须保留；defmacro 是否 hygienic？建议先做 syntax-rules 级、不做 defmacro eval，等 v1 稳定再决定。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">12. 关键参考</h2>
+  <div class="a-prose">
+    <ul>
+      <li><a href="https://oxcaml.org/documentation/stack-allocation/reference/">OxCaml — Stack allocation reference</a>（本次调研主文档）</li>
+      <li><a href="https://blog.janestreet.com/oxidizing-ocaml-locality/">Jane Street — Oxidizing OCaml: Locality</a></li>
+      <li><a href="https://oxcaml.org/documentation/modes/reference/">OxCaml — Modes reference</a> · <a href="https://oxcaml.org/documentation/modes/syntax/">Modes syntax</a> · <a href="https://oxcaml.org/documentation/uniqueness/reference/">Uniqueness reference</a></li>
+      <li><a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2021/06/perceus-pldi21.pdf">Perceus: Garbage Free Reference Counting with Reuse (PLDI'21)</a></li>
+      <li><a href="https://aardappel.github.io/lobster/memory_management.html">Lobster — Memory management (compile-time ownership inference)</a></li>
+      <li><a href="https://github.com/roc-lang/roc/blob/main/design.md">Roc design — LIR ARC insertion</a> · <a href="https://www.roc-lang.org/docs/main/langref/expressions/">Roc expressions / opportunistic mutation</a></li>
+      <li><a href="https://hylo-lang.org/docs/reference/specification/">Hylo language specification (MVS)</a></li>
+      <li><a href="https://tarides.com/blog/2025-02-19-the-first-wasm-of-ocaml-release-is-out/">Tarides — First wasm_of_ocaml release</a> · <a href="https://ocsigen.org/js_of_ocaml/latest/js_of_ocaml/wasm_overview.html">wasm_of_ocaml overview</a></li>
+      <li>内部：<a href="https://github.com/logseq/lg">logseq/lg</a>（v1 设计契约、<code>docs/design.md</code>）、<a href="https://github.com/logseq/datascript-ocaml">logseq/datascript-ocaml</a>（persistent-sorted-set OCaml 移植）、<a href="https://github.com/logseq/lui">logseq/lui</a>（OCaml runtime 跨平台经验）</li>
+    </ul>
+  </div>
+</section>
+
+
+      <footer class="a-footnote">Generated by Devin deep research, 2026-10-09. Sources: OxCaml docs &amp; Jane Street blog, Perceus PLDI'21, Lobster memory management, Roc design docs, wasm_of_ocaml release notes. All inferences from cited sources are marked; the three-tier memory model and pipeline design are lg proposals, not external facts.</footer>
+    </main>
+    <script>
+/* Devin artifact kit — self-contained behavior for standalone HTML artifacts.
+   No build step, no imports, no network calls. Every widget is progressive
+   enhancement: the markup stays readable and printable with scripting off. */
+(function () {
+  "use strict";
+
+  var root = document.documentElement;
+  var THEMES = { light: 1, dark: 1 };
+
+  function showError(message) {
+    document.querySelectorAll("[data-a-error]").forEach(function (region) {
+      region.hidden = false;
+      var detail = region.querySelector("[data-a-error-detail]");
+      if (detail && message) detail.textContent = message;
+    });
+  }
+
+  window.addEventListener("error", function (event) {
+    showError(event.message);
+  });
+  window.addEventListener("unhandledrejection", function (event) {
+    showError(String(event.reason || "An interactive control failed."));
+  });
+
+  /* ---------- theme ----------
+     Order of precedence:
+       1. an explicit host signal (`?theme=`/`#theme=`, a `devin:theme`
+          message from an embedding page, or a preset `data-theme`),
+       2. a reader's in-document choice,
+       3. the OS/browser preference via `prefers-color-scheme`.
+     Hosts that expose no signal simply fall through to step 3. */
+  function hostTheme() {
+    var search = new URLSearchParams(
+      window.location.search + "&" + window.location.hash.replace(/^#/, "")
+    );
+    var fromUrl = search.get("theme");
+    if (fromUrl && THEMES[fromUrl]) return fromUrl;
+    var preset = root.getAttribute("data-theme");
+    if (preset && THEMES[preset]) return preset;
+    return null;
+  }
+
+  function systemTheme() {
+    return window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  }
+
+  var pinned = hostTheme();
+
+  function apply(theme) {
+    root.setAttribute("data-theme", theme);
+    document.querySelectorAll("[data-a-theme-toggle]").forEach(function (el) {
+      var label =
+        theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+      el.setAttribute("aria-label", label);
+      el.setAttribute("title", label);
+    });
+  }
+
+  apply(pinned || systemTheme());
+
+  if (window.matchMedia) {
+    var media = window.matchMedia("(prefers-color-scheme: dark)");
+    var onChange = function () {
+      if (!pinned) apply(systemTheme());
+    };
+    if (media.addEventListener) media.addEventListener("change", onChange);
+    else if (media.addListener) media.addListener(onChange);
+  }
+
+  window.addEventListener("message", function (event) {
+    if (window.parent === window || event.source !== window.parent) return;
+    var data = event.data;
+    if (!data || data.type !== "devin:theme" || !THEMES[data.theme]) return;
+    pinned = data.theme;
+    apply(pinned);
+  });
+
+  document.addEventListener("click", function (event) {
+    var toggle = event.target.closest("[data-a-theme-toggle]");
+    if (!toggle) return;
+    pinned = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    apply(pinned);
+  });
+
+  /* ---------- tabs ----------
+     <div data-a-tabs role="tablist">
+       <button class="a-btn" role="tab" aria-controls="panel-id">Label</button>
+     Panels are plain elements toggled with `hidden`, so print reveals the
+     active one and `.a-print-reveal` can opt others in. */
+  function selectTab(list, tab) {
+    list.querySelectorAll('[role="tab"]').forEach(function (candidate) {
+      var selected = candidate === tab;
+      candidate.setAttribute("aria-selected", String(selected));
+      candidate.tabIndex = selected ? 0 : -1;
+      var panel = document.getElementById(
+        candidate.getAttribute("aria-controls") || ""
+      );
+      if (panel) panel.hidden = !selected;
+    });
+  }
+
+  document.querySelectorAll("[data-a-tabs]").forEach(function (list) {
+    var tabs = Array.prototype.slice.call(
+      list.querySelectorAll('[role="tab"]')
+    );
+    if (!tabs.length) return;
+    var active =
+      tabs.filter(function (t) {
+        return t.getAttribute("aria-selected") === "true";
+      })[0] || tabs[0];
+    selectTab(list, active);
+
+    list.addEventListener("click", function (event) {
+      var tab = event.target.closest('[role="tab"]');
+      if (tab) selectTab(list, tab);
+    });
+
+    list.addEventListener("keydown", function (event) {
+      var step =
+        event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+      if (!step) return;
+      event.preventDefault();
+      var current = tabs.indexOf(document.activeElement);
+      var next = tabs[(current + step + tabs.length) % tabs.length];
+      next.focus();
+      selectTab(list, next);
+    });
+  });
+
+  /* ---------- row filters ----------
+     <select data-a-filter="#table-id" data-a-filter-key="team">
+     Rows opt in with a matching `data-team` attribute; "all" clears it. */
+  document.querySelectorAll("[data-a-filter]").forEach(function (control) {
+    var target = document.querySelector(control.getAttribute("data-a-filter"));
+    var key = control.getAttribute("data-a-filter-key") || "filter";
+    if (!target) return;
+
+    var emptySelector = control.getAttribute("data-a-filter-empty");
+    var empty = emptySelector ? document.querySelector(emptySelector) : null;
+
+    var applyFilter = function () {
+      var value = control.value;
+      var shown = 0;
+      /* Re-read the rows every time: a script may have replaced them since
+         the last pass, and those rows must obey the current selection too. */
+      target.querySelectorAll("[data-" + key + "]").forEach(function (row) {
+        var match = value === "all" || row.getAttribute("data-" + key) === value;
+        row.hidden = !match;
+        if (match) shown += 1;
+      });
+      if (empty) empty.hidden = shown !== 0;
+      target.hidden = shown === 0 && !!empty;
+    };
+
+    control.addEventListener("change", applyFilter);
+    applyFilter();
+
+    /* Rows swapped in by a script are filtered as soon as they land, so a
+       redraw never shows rows the current selection excludes. Only childList
+       is watched, so the `hidden` writes above cannot retrigger this. */
+    new MutationObserver(function () {
+      applyFilter();
+    }).observe(target, { childList: true, subtree: true });
+  });
+
+  /* ---------- pinned columns ----------
+     <table class="a-table" data-a-sticky-columns="2">
+     CSS pins the first column on its own. The kit measures the leading
+     columns so every pinned cell gets its cumulative `--a-sticky-left`, and
+     re-measures when the table resizes, its rows change, or a filter hides
+     rows. Cells spanning past the last pinned column stay unpinned. The
+     scroll wrapper carries `data-a-scrolled` while the table is scrolled
+     sideways, so the divider only shows with columns underneath it. */
+  function stickyCount(table) {
+    var count = parseInt(table.getAttribute("data-a-sticky-columns"), 10);
+    return count > 0 ? count : 0;
+  }
+
+  function layoutSticky(table) {
+    var count = stickyCount(table);
+    var pinned = [];
+    var widths = [];
+    var columns = 0;
+    /* Rows spanned into from above shift where later cells start. */
+    var carried = [];
+    Array.prototype.forEach.call(table.rows, function (row, index) {
+      var taken = carried[index] || [];
+      var column = 0;
+      Array.prototype.forEach.call(row.cells, function (cell) {
+        while (taken[column]) column += 1;
+        var end = column + Math.max(1, cell.colSpan || 1);
+        if (end <= count) {
+          pinned.push({ cell: cell, start: column, end: end });
+          /* Hidden rows measure 0, so a later visible row fills the gap. */
+          if (end === column + 1 && !widths[column]) {
+            widths[column] = cell.getBoundingClientRect().width;
+          }
+        }
+        for (var below = 1; below < (cell.rowSpan || 1); below += 1) {
+          var next = (carried[index + below] = carried[index + below] || []);
+          for (var spanned = column; spanned < end; spanned += 1) {
+            next[spanned] = true;
+          }
+        }
+        column = end;
+        columns = Math.max(columns, end);
+      });
+    });
+
+    var edge = Math.min(count, columns);
+    var offsets = [0];
+    for (var position = 1; position < edge; position += 1) {
+      /* Not rendered yet (a closed disclosure or hidden tab): keep the last
+         layout and measure again once the table has a size. */
+      if (!widths[position - 1]) return;
+      offsets[position] = offsets[position - 1] + widths[position - 1];
+    }
+
+    var keep = new Set();
+    pinned.forEach(function (entry) {
+      keep.add(entry.cell);
+      entry.cell.setAttribute("data-a-sticky", entry.end === edge ? "edge" : "");
+      entry.cell.style.setProperty(
+        "--a-sticky-left",
+        offsets[entry.start] + "px"
+      );
+    });
+    table.querySelectorAll("[data-a-sticky]").forEach(function (cell) {
+      if (keep.has(cell)) return;
+      cell.removeAttribute("data-a-sticky");
+      cell.style.removeProperty("--a-sticky-left");
+    });
+    if (count) table.setAttribute("data-a-sticky-ready", "");
+    else table.removeAttribute("data-a-sticky-ready");
+  }
+
+  document
+    .querySelectorAll(".a-table[data-a-sticky-columns]")
+    .forEach(function (table) {
+      var queued = false;
+      var schedule = function () {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(function () {
+          queued = false;
+          layoutSticky(table);
+        });
+      };
+      layoutSticky(table);
+      if (window.ResizeObserver) new ResizeObserver(schedule).observe(table);
+      /* Only structure and content are watched, so the kit's own
+         `data-a-sticky` and offset writes cannot retrigger this. */
+      new MutationObserver(schedule).observe(table, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["hidden", "colspan", "rowspan", "data-a-sticky-columns"]
+      });
+
+      /* The wrapper element survives a chart moving it into its "Data
+         table" disclosure, so the listener does too. */
+      var scroller = table.closest(".a-table-scroll");
+      if (!scroller) return;
+      var syncScrolled = function () {
+        scroller.toggleAttribute("data-a-scrolled", scroller.scrollLeft > 0);
+      };
+      scroller.addEventListener("scroll", syncScrolled, { passive: true });
+      syncScrolled();
+    });
+
+  /* ---------- tooltips ----------
+     One shared tooltip serves every chart and any element carrying
+     `data-a-tip`. Pointer, keyboard focus, and touch all route through the
+     same show/hide pair, so an exact value is never hover-only. */
+  var tipEl = null;
+  var tipRelease = null;
+  var tipHost = null;
+
+  function tipNode() {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement("div");
+    tipEl.className = "a-tip a-no-print";
+    tipEl.setAttribute("role", "tooltip");
+    tipEl.hidden = true;
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+
+  function hideTip() {
+    var release = tipRelease;
+    tipRelease = null;
+    tipHost = null;
+    if (release) release();
+    if (tipEl) tipEl.hidden = true;
+  }
+
+  function positionTip(anchor, pointer) {
+    var el = tipNode();
+    var width = el.offsetWidth;
+    var height = el.offsetHeight;
+    var edge = 8;
+    var x = pointer ? pointer.x + 14 : anchor.left + anchor.width / 2 - width / 2;
+    var y = pointer ? pointer.y - height - 16 : anchor.top - height - 10;
+    if (y < edge) y = pointer ? pointer.y + 22 : anchor.bottom + 10;
+    x = Math.max(edge, Math.min(x, window.innerWidth - width - edge));
+    y = Math.max(edge, Math.min(y, window.innerHeight - height - edge));
+    el.style.transform =
+      "translate(" + Math.round(x) + "px, " + Math.round(y) + "px)";
+  }
+
+  function tipRow(row) {
+    var line = document.createElement("div");
+    line.className =
+      "a-tip__row" + (row.series ? " a-series-" + row.series : "");
+    if (row.series) {
+      var swatch = document.createElement("span");
+      swatch.className = "a-tip__swatch";
+      line.appendChild(swatch);
+    }
+    var name = document.createElement("span");
+    name.className = "a-tip__name";
+    name.textContent = row.name || "";
+    line.appendChild(name);
+    var value = document.createElement("span");
+    value.className = "a-tip__value";
+    value.textContent = row.value == null || row.value === "" ? "—" : row.value;
+    line.appendChild(value);
+    return line;
+  }
+
+  /* `content` is { title, text, rows: [{ name, value, series }] }. `release`
+     runs when the tooltip is replaced or dismissed so the owner can drop its
+     highlight state. */
+  function showTip(content, host, anchor, pointer, release) {
+    if (tipRelease && tipRelease !== release) {
+      var previous = tipRelease;
+      tipRelease = null;
+      previous();
+    }
+    tipRelease = release || null;
+    tipHost = host || null;
+    var el = tipNode();
+    el.textContent = "";
+    if (content.title) {
+      var title = document.createElement("div");
+      title.className = "a-tip__title";
+      title.textContent = content.title;
+      el.appendChild(title);
+    }
+    if (content.text) {
+      var text = document.createElement("div");
+      text.className = "a-tip__text";
+      text.textContent = content.text;
+      el.appendChild(text);
+    }
+    (content.rows || []).forEach(function (row) {
+      el.appendChild(tipRow(row));
+    });
+    el.hidden = false;
+    positionTip(anchor, pointer);
+  }
+
+  /* Escape hatch for hand-authored marks: `data-a-tip` holds the value text
+     and the optional `data-a-tip-title` holds a heading. */
+  function annotatedHost(node) {
+    return node && node.closest ? node.closest("[data-a-tip]") : null;
+  }
+
+  function showAnnotatedTip(host, pointer) {
+    showTip(
+      {
+        title: host.getAttribute("data-a-tip-title") || "",
+        text: host.getAttribute("data-a-tip") || ""
+      },
+      host,
+      host.getBoundingClientRect(),
+      pointer,
+      null
+    );
+  }
+
+  document.addEventListener("pointerover", function (event) {
+    var host = annotatedHost(event.target);
+    if (!host) return;
+    showAnnotatedTip(
+      host,
+      event.pointerType === "touch" ? null : { x: event.clientX, y: event.clientY }
+    );
+  });
+
+  document.addEventListener("pointermove", function (event) {
+    if (!tipHost || event.pointerType === "touch") return;
+    if (!tipHost.hasAttribute || !tipHost.hasAttribute("data-a-tip")) return;
+    if (annotatedHost(event.target) !== tipHost) return;
+    positionTip(tipHost.getBoundingClientRect(), {
+      x: event.clientX,
+      y: event.clientY
+    });
+  });
+
+  document.addEventListener("pointerout", function (event) {
+    var host = annotatedHost(event.target);
+    if (!host || host !== tipHost) return;
+    if (event.relatedTarget && host.contains(event.relatedTarget)) return;
+    hideTip();
+  });
+
+  document.addEventListener("focusin", function (event) {
+    var host = annotatedHost(event.target);
+    if (host) showAnnotatedTip(host, null);
+  });
+
+  document.addEventListener("focusout", function (event) {
+    var host = annotatedHost(event.target);
+    if (!host || host !== tipHost) return;
+    /* A still-hovered mark keeps its tooltip; `pointerout` closes that one. */
+    if (host.matches && host.matches(":hover")) return;
+    hideTip();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") hideTip();
+  });
+
+  window.addEventListener("scroll", hideTip, true);
+  window.addEventListener("resize", hideTip);
+
+  /* ---------- charts ----------
+     <figure class="a-figure" data-a-chart="bar|stacked-bar|line"> wrapping a
+     plain <table> of the same numbers. The table is both the data source and
+     the no-script fallback: the kit draws the chart from it and then keeps it
+     under a disclosure as the exact-value equivalent. Each category gets a
+     hover band that also takes keyboard focus, so pointer, arrow keys, and
+     tap all produce the same readout. */
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var CHART_WIDTH = 640;
+  var CHART_TYPES = { bar: 1, "stacked-bar": 1, line: 1 };
+
+  function svgNode(name, attrs) {
+    var node = document.createElementNS(SVG_NS, name);
+    Object.keys(attrs || {}).forEach(function (key) {
+      node.setAttribute(key, String(attrs[key]));
+    });
+    return node;
+  }
+
+  /* `data-value` wins so cells can stay human-readable ("1,284", "18m 24s"). */
+  function cellNumber(cell) {
+    var explicit = cell.getAttribute("data-value");
+    var text = (explicit === null ? cell.textContent : explicit) || "";
+    var match = text
+      .replace(/\u2212/g, "-")
+      .replace(/,/g, "")
+      .match(/-?\d*\.?\d+/);
+    return match ? parseFloat(match[0]) : null;
+  }
+
+  function readChartTable(table) {
+    var headCells = table.querySelectorAll("thead th");
+    if (headCells.length < 2) return null;
+    var series = [];
+    for (var column = 1; column < headCells.length; column += 1) {
+      series.push(headCells[column].textContent.trim());
+    }
+    var categories = [];
+    table.querySelectorAll("tbody tr").forEach(function (row) {
+      var cells = row.children;
+      if (cells.length < 2) return;
+      /* A hidden row is filtered out, so the chart matches what is listed. */
+      if (row.hidden || row.hasAttribute("data-a-excluded")) return;
+      var point = {
+        label: cells[0].textContent.trim(),
+        row: row,
+        values: [],
+        texts: []
+      };
+      series.forEach(function (name, position) {
+        var cell = cells[position + 1];
+        point.values.push(cell ? cellNumber(cell) : null);
+        point.texts.push(cell ? cell.textContent.trim() : "");
+      });
+      categories.push(point);
+    });
+    return categories.length
+      ? { series: series, categories: categories }
+      : null;
+  }
+
+  function niceCeil(value) {
+    if (!(value > 0)) return 1;
+    var magnitude = Math.pow(10, Math.floor(Math.log(value) / Math.LN10));
+    var steps = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10];
+    for (var i = 0; i < steps.length; i += 1) {
+      if (value <= steps[i] * magnitude) return steps[i] * magnitude;
+    }
+    return 10 * magnitude;
+  }
+
+  function formatTick(value) {
+    var size = Math.abs(value);
+    if (size >= 1000000) {
+      return (value / 1000000).toFixed(size % 1000000 ? 1 : 0) + "M";
+    }
+    if (size >= 1000) return (value / 1000).toFixed(size % 1000 ? 1 : 0) + "k";
+    return String(Math.round(value * 100) / 100);
+  }
+
+  /* Per-figure render state so a chart can be drawn more than once: the
+     nodes from the previous pass are thrown away and rebuilt from whatever
+     the table says now. */
+  var chartState = new WeakMap();
+
+  function chartTable(figure) {
+    var details = figure.querySelector(".a-chart__data");
+    return (details || figure).querySelector("table");
+  }
+
+  /* The table is the source of truth, so any change to it — a filter hiding
+     rows, new rows, an edited cell — redraws the chart on its own. */
+  function watchChartTable(figure, state) {
+    if (state.observer) return;
+    var queued = false;
+    state.observer = new MutationObserver(function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(function () {
+        queued = false;
+        renderChart(figure);
+      });
+    });
+    /* Watching the disclosure rather than the table keeps the chart live even
+       when a script replaces the whole <table>. */
+    state.observer.observe(state.details, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["hidden", "data-a-excluded", "data-value"]
+    });
+  }
+
+  function renderChart(figure) {
+    var type = figure.getAttribute("data-a-chart");
+    var table = chartTable(figure);
+    if (!CHART_TYPES[type] || !table) return;
+
+    var state = chartState.get(figure);
+    if (!state) {
+      state = { nodes: [], details: null, observer: null, focused: null };
+      chartState.set(figure, state);
+    }
+
+    /* Keeping the reader's place: a re-render restores keyboard focus to the
+       same category when it survives. */
+    var hadFocus = state.nodes.some(function (node) {
+      return node.contains(document.activeElement);
+    });
+    var refocus = hadFocus ? state.focused : null;
+    if (tipHost && figure.contains(tipHost)) hideTip();
+    state.nodes.forEach(function (node) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    });
+    state.nodes = [];
+
+    if (!state.details) {
+      var source = table.closest(".a-table-scroll") || table;
+      var details = document.createElement("details");
+      details.className = "a-disclosure a-chart__data";
+      var summary = document.createElement("summary");
+      summary.textContent = "Data table";
+      details.appendChild(summary);
+      source.parentNode.insertBefore(details, source);
+      details.appendChild(source);
+      state.details = details;
+    }
+    watchChartTable(figure, state);
+
+    var data = readChartTable(table);
+    if (!data) {
+      var empty = document.createElement("p");
+      empty.className = "a-chart__empty";
+      empty.textContent =
+        figure.getAttribute("data-a-chart-empty") ||
+        "No data for this selection.";
+      figure.insertBefore(empty, state.details);
+      state.nodes.push(empty);
+      state.focused = null;
+      return;
+    }
+
+    var stacked = type === "stacked-bar";
+    var isLine = type === "line";
+    var height = parseFloat(figure.getAttribute("data-a-chart-height")) || 220;
+    var unit = figure.getAttribute("data-a-chart-unit") || "";
+    var tickUnit = unit.length <= 2 ? unit : "";
+    var pad = { top: 14, right: 14, bottom: 30, left: 46 };
+    var plotWidth = CHART_WIDTH - pad.left - pad.right;
+    var plotHeight = height - pad.top - pad.bottom;
+    var bandWidth = plotWidth / data.categories.length;
+
+    var high = 0;
+    var low = 0;
+    data.categories.forEach(function (point) {
+      var sum = 0;
+      point.values.forEach(function (value) {
+        if (value === null) return;
+        sum += value > 0 ? value : 0;
+        low = Math.min(low, value);
+        if (!stacked) high = Math.max(high, value);
+      });
+      if (stacked) high = Math.max(high, sum);
+    });
+    var declaredMax = parseFloat(figure.getAttribute("data-a-chart-max"));
+    var maxY = isFinite(declaredMax) ? declaredMax : niceCeil(high);
+    var minY = low < 0 ? -niceCeil(-low) : 0;
+    var span = maxY - minY || 1;
+
+    var scaleY = function (value) {
+      return pad.top + ((maxY - value) / span) * plotHeight;
+    };
+    var centerX = function (index) {
+      return pad.left + bandWidth * (index + 0.5);
+    };
+    var describe = function (index) {
+      var point = data.categories[index];
+      return (
+        point.label +
+        ": " +
+        data.series
+          .map(function (name, position) {
+            return name + " " + (point.texts[position] || "no value");
+          })
+          .join(", ")
+      );
+    };
+
+    var caption = figure.querySelector("figcaption");
+    var svg = svgNode("svg", {
+      class: "a-chart",
+      viewBox: "0 0 " + CHART_WIDTH + " " + height,
+      role: "group",
+      "aria-label":
+        (figure.getAttribute("data-a-chart-label") ||
+          (caption ? caption.textContent.trim() : "Chart")) +
+        ". Use the arrow keys to read each value."
+    });
+
+    var grid = svgNode("g", { class: "a-chart__grid" });
+    var axis = svgNode("g", { class: "a-chart__axis" });
+    for (var tick = 0; tick <= 4; tick += 1) {
+      var value = minY + (span * tick) / 4;
+      var y = scaleY(value);
+      grid.appendChild(
+        svgNode("line", {
+          x1: pad.left,
+          y1: y,
+          x2: CHART_WIDTH - pad.right,
+          y2: y
+        })
+      );
+      var tickLabel = svgNode("text", {
+        x: pad.left - 8,
+        y: y + 3.5,
+        "text-anchor": "end"
+      });
+      tickLabel.textContent = formatTick(value) + tickUnit;
+      axis.appendChild(tickLabel);
+    }
+
+    var labelStep = Math.ceil(data.categories.length / 8);
+    data.categories.forEach(function (point, index) {
+      if (index % labelStep) return;
+      var text = svgNode("text", {
+        x: centerX(index),
+        y: height - 10,
+        "text-anchor": "middle"
+      });
+      text.textContent = point.label;
+      axis.appendChild(text);
+    });
+
+    var plot = svgNode("g", { class: "a-chart__plot" });
+    /* Past ~30 points a marker per category reads as a scatter plot instead
+       of a line, so dense series drop to a bare stroke and only the active
+       point is drawn (CSS gives it a radius again). */
+    var pointRadius = data.categories.length > 30 ? 0 : 2.75;
+    if (isLine) {
+      data.series.forEach(function (name, position) {
+        /* A missing value breaks the line rather than bridging the gap. */
+        var segments = [[]];
+        data.categories.forEach(function (point, index) {
+          var value = point.values[position];
+          if (value === null) {
+            if (segments[segments.length - 1].length) segments.push([]);
+            return;
+          }
+          segments[segments.length - 1].push(
+            centerX(index) + "," + scaleY(value)
+          );
+          plot.appendChild(
+            svgNode("circle", {
+              class: "a-chart__point a-series-" + (position + 1),
+              cx: centerX(index),
+              cy: scaleY(value),
+              r: pointRadius,
+              "data-a-index": index
+            })
+          );
+        });
+        segments.forEach(function (coordinates) {
+          if (!coordinates.length) return;
+          plot.insertBefore(
+            svgNode("polyline", {
+              class: "a-chart__series a-series-" + (position + 1),
+              points: coordinates.join(" ")
+            }),
+            plot.firstChild
+          );
+        });
+      });
+    } else {
+      var inset = bandWidth * 0.18;
+      var slot = (bandWidth - inset * 2) / (stacked ? 1 : data.series.length);
+      var baseline = scaleY(Math.max(minY, 0));
+      data.categories.forEach(function (point, index) {
+        var stackTop = 0;
+        data.series.forEach(function (name, position) {
+          var value = point.values[position];
+          if (value === null) return;
+          var from = baseline;
+          var to;
+          if (stacked) {
+            from = scaleY(stackTop);
+            stackTop += value;
+            to = scaleY(stackTop);
+          } else {
+            to = scaleY(value);
+          }
+          plot.appendChild(
+            svgNode("rect", {
+              class: "a-chart__bar a-series-" + (position + 1),
+              x:
+                pad.left +
+                bandWidth * index +
+                inset +
+                slot * (stacked ? 0 : position),
+              y: Math.min(from, to),
+              width: Math.max(1, slot - 2),
+              height: Math.max(1, Math.abs(to - from)),
+              rx: 2,
+              "data-a-index": index
+            })
+          );
+        });
+      });
+    }
+
+    var crosshair = svgNode("line", {
+      class: "a-chart__crosshair",
+      x1: pad.left,
+      x2: pad.left,
+      y1: pad.top,
+      y2: pad.top + plotHeight,
+      hidden: "hidden"
+    });
+
+    var overlay = svgNode("g", { class: "a-chart__bands" });
+    var bands = data.categories.map(function (point, index) {
+      var band = svgNode("rect", {
+        class: "a-chart__band",
+        x: pad.left + bandWidth * index,
+        y: pad.top,
+        width: bandWidth,
+        height: plotHeight,
+        tabindex: index === 0 ? 0 : -1,
+        role: "img",
+        "aria-label": describe(index)
+      });
+      overlay.appendChild(band);
+      return band;
+    });
+
+    svg.appendChild(grid);
+    svg.appendChild(axis);
+    svg.appendChild(plot);
+    svg.appendChild(crosshair);
+    svg.appendChild(overlay);
+
+    figure.insertBefore(svg, state.details);
+    state.nodes.push(svg);
+
+    if (data.series.length > 1) {
+      var legend = document.createElement("ul");
+      legend.className = "a-legend";
+      data.series.forEach(function (name, position) {
+        var item = document.createElement("li");
+        item.className = "a-series-" + (position + 1);
+        var swatch = document.createElement("span");
+        swatch.className = "a-legend__swatch";
+        item.appendChild(swatch);
+        item.appendChild(document.createTextNode(name));
+        legend.appendChild(item);
+      });
+      figure.insertBefore(legend, state.details);
+      state.nodes.push(legend);
+    }
+
+    var readout = document.createElement("p");
+    readout.className = "a-visually-hidden";
+    readout.setAttribute("aria-live", "polite");
+    figure.appendChild(readout);
+    state.nodes.push(readout);
+
+    var clear = function () {
+      bands.forEach(function (band) {
+        band.removeAttribute("data-a-active");
+      });
+      plot.querySelectorAll("[data-a-index]").forEach(function (mark) {
+        mark.removeAttribute("data-a-active");
+      });
+      crosshair.setAttribute("hidden", "hidden");
+      readout.textContent = "";
+    };
+
+    var activate = function (index, pointer) {
+      if (index < 0 || index >= bands.length) return;
+      clear();
+      bands[index].setAttribute("data-a-active", "true");
+      plot
+        .querySelectorAll('[data-a-index="' + index + '"]')
+        .forEach(function (mark) {
+          mark.setAttribute("data-a-active", "true");
+        });
+      if (isLine) {
+        crosshair.setAttribute("x1", centerX(index));
+        crosshair.setAttribute("x2", centerX(index));
+        crosshair.removeAttribute("hidden");
+      }
+      readout.textContent = describe(index);
+      showTip(
+        {
+          title: data.categories[index].label,
+          rows: data.series.map(function (name, position) {
+            return {
+              name: name,
+              value: data.categories[index].texts[position],
+              series: position + 1
+            };
+          })
+        },
+        bands[index],
+        bands[index].getBoundingClientRect(),
+        pointer,
+        clear
+      );
+    };
+
+    /* -1 outside the plot area, so the axis and margins read as no category. */
+    var indexAt = function (clientX) {
+      var box = svg.getBoundingClientRect();
+      if (!box.width) return -1;
+      var local = ((clientX - box.left) / box.width) * CHART_WIDTH;
+      if (local < pad.left || local > pad.left + plotWidth) return -1;
+      var index = Math.floor((local - pad.left) / bandWidth);
+      return Math.max(0, Math.min(data.categories.length - 1, index));
+    };
+
+    svg.addEventListener("pointermove", function (event) {
+      if (event.pointerType === "touch") return;
+      var index = indexAt(event.clientX);
+      if (index === -1) {
+        if (bands.indexOf(document.activeElement) === -1) hideTip();
+        return;
+      }
+      activate(index, { x: event.clientX, y: event.clientY });
+    });
+
+    svg.addEventListener("pointerdown", function (event) {
+      if (event.pointerType !== "touch") return;
+      activate(indexAt(event.clientX), null);
+    });
+
+    /* Touch leaves as soon as the finger lifts, so a tap keeps its readout. */
+    svg.addEventListener("pointerleave", function (event) {
+      if (event.pointerType === "touch") return;
+      if (bands.indexOf(document.activeElement) === -1) hideTip();
+    });
+
+    bands.forEach(function (band, index) {
+      band.addEventListener("focus", function () {
+        state.focused = {
+          index: index,
+          row: data.categories[index].row,
+          label: data.categories[index].label
+        };
+        activate(index, null);
+      });
+      band.addEventListener("blur", function () {
+        if (tipHost === band) hideTip();
+      });
+    });
+
+    svg.addEventListener("keydown", function (event) {
+      var current = bands.indexOf(document.activeElement);
+      if (current === -1) return;
+      var next = current;
+      if (event.key === "ArrowRight") next = current + 1;
+      else if (event.key === "ArrowLeft") next = current - 1;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = bands.length - 1;
+      else return;
+      event.preventDefault();
+      next = Math.max(0, Math.min(bands.length - 1, next));
+      bands.forEach(function (band, position) {
+        band.setAttribute("tabindex", position === next ? "0" : "-1");
+      });
+      bands[next].focus();
+    });
+
+    if (refocus) {
+      /* The same row, not the same slot: filtering rows above the reader's
+         position must not move them onto a different bar. */
+      var target = data.categories.findIndex(function (category) {
+        return category.row === refocus.row;
+      });
+      /* Rows rebuilt wholesale lose their identity, so fall back to the label
+         and then to the old slot. */
+      if (target === -1) {
+        target = data.categories.findIndex(function (category) {
+          return category.label === refocus.label;
+        });
+      }
+      if (target === -1) target = Math.min(refocus.index, bands.length - 1);
+      bands.forEach(function (band, position) {
+        band.setAttribute("tabindex", position === target ? "0" : "-1");
+      });
+      bands[target].focus();
+    }
+  }
+
+  function renderCharts(target) {
+    if (target === undefined || target === null) {
+      document.querySelectorAll("[data-a-chart]").forEach(renderChart);
+      return;
+    }
+    var scope =
+      typeof target === "string" ? document.querySelector(target) : target;
+    if (!scope) return;
+    if (scope.matches && scope.matches("[data-a-chart]")) renderChart(scope);
+    else scope.querySelectorAll("[data-a-chart]").forEach(renderChart);
+  }
+
+  renderCharts();
+
+  /* The only public surface of the kit: artifacts that swap or filter a
+     chart's rows themselves can force a redraw, though the table observer
+     above already covers ordinary DOM edits. */
+  window.artifactKit = window.artifactKit || {};
+  window.artifactKit.renderCharts = renderCharts;
+
+  /* Print carries the numbers, not the hover: expand every chart's data
+     table before the page is rendered. */
+  var printReopened = [];
+  window.addEventListener("beforeprint", function () {
+    hideTip();
+    document.querySelectorAll(".a-chart__data").forEach(function (details) {
+      if (details.open) return;
+      printReopened.push(details);
+      details.open = true;
+    });
+  });
+
+  window.addEventListener("afterprint", function () {
+    printReopened.forEach(function (details) {
+      details.open = false;
+    });
+    printReopened = [];
+  });
+
+  /* ---------- diagram: pan, zoom, select ----------
+     Pointer drag and wheel pan/zoom the viewport group; arrow keys and
+     +/-/0 do the same from the keyboard so the diagram is operable without
+     a pointing device. Node clicks (or Enter/Space) update the inspector. */
+  document.querySelectorAll("[data-a-diagram]").forEach(function (diagram) {
+    var svg = diagram.querySelector("[data-a-diagram-canvas]");
+    var viewport = diagram.querySelector("[data-a-diagram-viewport]");
+    if (!svg || !viewport) return;
+
+    var view = { x: 0, y: 0, scale: 1 };
+    var drag = null;
+
+    var render = function () {
+      viewport.setAttribute(
+        "transform",
+        "translate(" + view.x + " " + view.y + ") scale(" + view.scale + ")"
+      );
+    };
+
+    var zoomBy = function (factor) {
+      view.scale = Math.min(2.5, Math.max(0.5, view.scale * factor));
+      render();
+    };
+
+    svg.addEventListener("pointerdown", function (event) {
+      if (event.target.closest("[data-a-node]")) return;
+      drag = { x: event.clientX, y: event.clientY };
+      svg.setPointerCapture(event.pointerId);
+    });
+
+    svg.addEventListener("pointermove", function (event) {
+      if (!drag) return;
+      view.x += event.clientX - drag.x;
+      view.y += event.clientY - drag.y;
+      drag = { x: event.clientX, y: event.clientY };
+      render();
+    });
+
+    var endDrag = function () {
+      drag = null;
+    };
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+
+    svg.addEventListener(
+      "wheel",
+      function (event) {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        zoomBy(event.deltaY < 0 ? 1.1 : 0.9);
+      },
+      { passive: false }
+    );
+
+    diagram.addEventListener("keydown", function (event) {
+      var pan = { ArrowUp: [0, 24], ArrowDown: [0, -24], ArrowLeft: [24, 0], ArrowRight: [-24, 0] }[
+        event.key
+      ];
+      if (pan && !event.target.closest("[data-a-node]")) {
+        event.preventDefault();
+        view.x += pan[0];
+        view.y += pan[1];
+        render();
+        return;
+      }
+      if (event.key === "+" || event.key === "=") zoomBy(1.1);
+      else if (event.key === "-") zoomBy(0.9);
+      else if (event.key === "0") {
+        view = { x: 0, y: 0, scale: 1 };
+        render();
+      }
+    });
+
+    diagram.querySelectorAll("[data-a-zoom]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var action = button.getAttribute("data-a-zoom");
+        if (action === "in") zoomBy(1.15);
+        else if (action === "out") zoomBy(0.87);
+        else {
+          view = { x: 0, y: 0, scale: 1 };
+          render();
+        }
+      });
+    });
+
+    var inspector = diagram.querySelector("[data-a-inspector]");
+    var select = function (node) {
+      diagram.querySelectorAll("[data-a-node]").forEach(function (other) {
+        other.setAttribute("aria-current", String(other === node));
+      });
+      if (!inspector) return;
+      var title = inspector.querySelector("[data-a-inspector-title]");
+      var body = inspector.querySelector("[data-a-inspector-body]");
+      if (title) title.textContent = node.getAttribute("data-a-title") || "";
+      if (body) body.textContent = node.getAttribute("data-a-detail") || "";
+    };
+
+    diagram.querySelectorAll("[data-a-node]").forEach(function (node) {
+      node.addEventListener("click", function () {
+        select(node);
+      });
+      node.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        select(node);
+      });
+    });
+
+    render();
+  });
+})();
+    </script>
+  </body>
+</html>
