@@ -90,93 +90,133 @@ let param_escapes (fn : func) : bool list =
             the returned seq, so they may be local exactly when the call's
             own result need only be local (the emit then selects the
             `Seq.*_local` variant). Anything not listed retains all args. *)
-type borrow_spec = All | Only of int list | Lazy
+type ckind = KVec | KList | KSet | KMap | KSeq | KStr | KOther
+
+let ckind_of (t : Typ.ty) : ckind =
+  match Typ.repr t with
+  | Typ.TVec _ -> KVec
+  | Typ.TList _ -> KList
+  | Typ.TSet _ -> KSet
+  | Typ.TMap _ -> KMap
+  | Typ.TSeq _ -> KSeq
+  | Typ.TString -> KStr
+  | _ -> KOther
+
+(* arg positions that accept a local (borrowed) value in the clj-core `ox`
+   build. Borrows = pure borrow (result independent of the arg's mode);
+   Flows = the result inherits the arg's mode (element/collection
+   returners that emit `*_local` twins). kinds restricts the borrow to
+   call sites whose collection argument has that kind; [] means any
+   (element positions). Variadic covers variadic builtins — every arg
+   borrows with the given mode, each arg kind-checked against kinds. *)
+type argmode = Borrows | Flows | Elems of int | ElemsFlows of int
+(* [needs_local_coll]: the position borrows only when the call's
+   collection argument is itself local — the plain-name callee takes a
+   global callback while the `*_local` twin takes a local one *)
+type borrow_ent = { pos : int; mode : argmode; kinds : ckind list; needs_local_coll : bool }
+type borrow_spec =
+  | Fixed of borrow_ent list
+  | Variadic of argmode * ckind list
 
 let builtin_borrows : (string, borrow_spec) Hashtbl.t = Hashtbl.create 61
 let () =
   List.iter
     (fun (n, s) -> Hashtbl.replace builtin_borrows n s)
-    [ (* strict collection readers/consumers — the collection argument *)
-      "get", Only [ 0 ]; "nth", Only [ 0 ]; "count", Only [ 0 ];
-      "empty?", Only [ 0 ]; "peek", Only [ 0 ]; "first", Only [ 0 ];
-      "last", Only [ 0 ]; "second", Only [ 0 ]; "contains?", Only [ 0 ];
-      "kw-get", Only [ 0 ]; "get-in", Only [ 0 ]; "select-keys", Only [ 0 ];
-      (* strict folds — the callback is invoked but not retained; the
-         initial accumulator flows into the result so it is NOT a borrow *)
-      "reduce", Only [ 0; 2 ]; "fold", Only [ 0; 2 ];
-      "every?", Only [ 0; 1 ]; "some", Only [ 0; 1 ];
-      "mapv", Only [ 0 ]; "filterv", Only [ 0 ];
-      (* `into`/`vec`/`set` realize — the source is consumed, the
-         destination is retained *)
-      "vec", Only [ 0 ]; "set", Only [ 0 ];
-      "merge", Only [ 1 ];
-      "dorun", Only [ 0 ];
-      "keys", Only [ 0 ]; "vals", Only [ 0 ];
-      "re-seq", Only [ 0; 1 ]; "re-split", Only [ 0; 1 ];
-      "re-find", Only [ 0 ]; "re-matches", Only [ 0 ];
-      (* pure numeric/predicate readers *)
-      "inc", All; "dec", All; "zero?", All; "pos?", All; "neg?", All;
-      "even?", All; "odd?", All; "deref", All; "some?", All; "none?", All;
-      (* string readers *)
-      "subs", Only [ 0 ]; "split", Only [ 0; 1 ]; "join", Only [ 0; 1 ];
-      "trim", Only [ 0 ]; "triml", Only [ 0 ]; "trimr", Only [ 0 ];
-      "upper-case", Only [ 0 ]; "lower-case", Only [ 0 ]; "blank?", Only [ 0 ];
-      "includes?", Only [ 0; 1 ]; "starts-with?", Only [ 0; 1 ];
-      "ends-with?", Only [ 0; 1 ]; "re-find", Only [ 0 ];
-      "re-matches", Only [ 0 ];
-      (* structural equality reads both sides *)
-      "=", Only [ 0; 1 ]; "not=", Only [ 0; 1 ];
-      (* lazy seq producers — args escape only as far as the result seq *)
-      "map", Lazy; "filter", Lazy; "remove", Lazy; "mapcat", Lazy;
-      "keep", Lazy; "filter-map", Lazy; "map-indexed", Lazy;
-      "take", Lazy; "drop", Lazy; "take-while", Lazy; "drop-while", Lazy;
-      "take-nth", Lazy; "rest", Lazy; "next", Lazy; "cons", Lazy;
-      "concat", Lazy; "interleave", Lazy; "interpose", Lazy;
-      "partition", Lazy; "partition-all", Lazy; "nthrest", Lazy;
-      "reductions", Lazy; "dedupe", Lazy;
-      "lazy-seq", Lazy; "range", Lazy;
-      "drop-last", Lazy; "not-empty", Lazy; "seq", Lazy;
-      (* element-flow: arg is local iff the result is *)
-      "take-last", Lazy; "butlast", Lazy; "sort", Lazy; "sort-by", Lazy;
-      "reverse", Lazy; "doall", Lazy;
-      (* collection constructors: elements are stored in the result — they
-         escape exactly as far as the result does *)
-      "list", Lazy; "vector", Lazy; "hash-map", Lazy; "hash-set", Lazy ]
+    [ "nth", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec ]; needs_local_coll = false };
+                     { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "first", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec ]; needs_local_coll = false };
+                       { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "second", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "last", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec ]; needs_local_coll = false };
+                      { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "peek", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec ]; needs_local_coll = false } ];
+      "count", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec; KSet; KMap; KSeq ]; needs_local_coll = false } ];
+      "empty?", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec; KSet; KMap; KSeq ]; needs_local_coll = false } ];
+      "contains?", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec; KSeq ]; needs_local_coll = false } ];
+      "get", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec ]; needs_local_coll = false };
+                     { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false };
+                     { pos = 0; mode = Flows; kinds = []; needs_local_coll = false } ];
+      "reduce", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false };
+                        { pos = 0; mode = Borrows; kinds = [ KVec; KMap; KSet ]; needs_local_coll = true };
+                        { pos = 2; mode = Elems 0; kinds = [ KVec; KMap; KSet ]; needs_local_coll = false };
+                        { pos = 2; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "fold", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false };
+                      { pos = 0; mode = Borrows; kinds = [ KVec; KMap; KSet ]; needs_local_coll = true };
+                      { pos = 2; mode = Elems 0; kinds = [ KVec; KMap; KSet ]; needs_local_coll = false };
+                      { pos = 2; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "every?", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false };
+                        { pos = 1; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "some", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false };
+                      { pos = 1; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "dorun", Fixed [ { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "doall", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec; KMap; KList ]; needs_local_coll = false };
+                       { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "vec", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec; KList; KMap ]; needs_local_coll = false };
+                     { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "list", Variadic (Flows, []);
+      "vector", Variadic (Flows, []);
+      "mapv", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec ]; needs_local_coll = true };
+                      { pos = 1; mode = Elems 0; kinds = [ KVec ]; needs_local_coll = false };
+                      { pos = 1; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "filterv", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec ]; needs_local_coll = true };
+                         { pos = 1; mode = ElemsFlows 0; kinds = [ KVec ]; needs_local_coll = false };
+                         { pos = 1; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "seq", Fixed [ { pos = 0; mode = Flows; kinds = [ KSeq ]; needs_local_coll = false } ];
+      "not-empty", Fixed [ { pos = 0; mode = Flows; kinds = [ KSeq ]; needs_local_coll = false } ];
+]
+(* does builtin [n] borrow argument [i]? coll_kind is the kind of the
+   call's collection argument; arg_kind is the kind of the argument
+   itself (only matters for Variadic). Elems/ElemsFlows positions are
+   resolved by the caller (they consult the callback argument). *)
+(* emitted locality of an argument expression: binder uses follow the
+   binder's bmode, globals are always global *)
+let arg_is_local (a : expr) : bool =
+  match a.desc with
+  | ELocal b -> b.bmode = Local
+  | EGlobal _ -> false
+  | _ -> a.emode = Local
 
-(* lazy seq producers that have a `Seq.<name>_local` variant in the OxCaml
-   clj-core build (result is `'a t @ local`). Emit picks the variant only
-   when the call's own emode is Local. *)
-let local_seq_fns : (string, string) Hashtbl.t = Hashtbl.create 31
-let () =
-  List.iter
-    (fun (n, v) -> Hashtbl.replace local_seq_fns n v)
-    [ "map", "Clj_core.Seq.map_local"; "filter", "Clj_core.Seq.filter_local";
-      "remove", "Clj_core.Seq.remove_local"; "mapcat", "Clj_core.Seq.mapcat_local";
-      "keep", "Clj_core.Seq.filter_map_local";
-      "filter-map", "Clj_core.Seq.filter_map_local";
-      "map-indexed", "Clj_core.Seq.mapi_local";
-      "take", "Clj_core.Seq.take_local"; "drop", "Clj_core.Seq.drop_local";
-      "take-while", "Clj_core.Seq.take_while_local";
-      "drop-while", "Clj_core.Seq.drop_while_local";
-      "take-nth", "Clj_core.Seq.take_nth_local"; "rest", "Clj_core.Seq.rest_local";
-      "next", "Clj_core.Seq.next_local"; "cons", "Clj_core.Seq.cons_local";
-      "concat", "Clj_core.Seq.concat_local"; "interleave", "Clj_core.Seq.interleave_local";
-      "interpose", "Clj_core.Seq.interpose_local";
-      "partition", "Clj_core.Seq.partition_local";
-      "partition-all", "Clj_core.Seq.partition_all_local";
-      "nthrest", "Clj_core.Seq.nthrest_local"; "reductions", "Clj_core.Seq.reductions_local";
-      "dedupe", "Clj_core.Seq.dedupe_local";
-      "iterate", "Clj_core.Seq.iterate_local";
-      "repeat", "Clj_core.Seq.repeat_local"; "repeatedly", "Clj_core.Seq.repeatedly_local";
-      "range", "Clj_core.Seq.range_local";
-      "drop-last", "Clj_core.Seq.drop_last_local";
-      "lazy-seq", "Clj_core.Seq.lazy_seq_local";
-      "ints", "Clj_core.Seq.ints_local" ]
+(* locality of the call's collection argument *)
+let call_coll_local (args : expr list) : bool =
+  let rec go = function
+    | a :: rest ->
+      (match ckind_of a.ety with
+       | KOther -> go rest
+       | _ -> arg_is_local a)
+    | [] -> false
+  in
+  go args
 
-(* `local_` parameters emitted on defns, keyed "Ocaml_mod.munged_name" ->
-   per-param bool. Filled during emit: callers may pass local values at
-   positions marked true. *)
+let arg_borrows (n : string) (i : int) ~(coll_kind : ckind) ~(coll_local : bool) ~(arg_kind : ckind) : argmode option =
+  match Hashtbl.find_opt builtin_borrows n with
+  | None -> None
+  | Some (Fixed es) ->
+    (match List.find_opt
+             (fun e -> e.pos = i && (e.kinds = [] || List.mem coll_kind e.kinds)
+                       && (not e.needs_local_coll || coll_local))
+             es with
+     | Some e -> Some e.mode
+     | None -> None)
+  | Some (Variadic (m, ks)) -> if ks = [] || List.mem arg_kind ks then Some m else None
+
+(* kind of the collection argument in a builtin call — the first
+   coll-typed argument *)
+let call_coll_kind (args : expr list) : ckind =
+  let rec go = function
+    | a :: rest ->
+      (match ckind_of a.ety with
+       | KOther -> go rest
+       | k -> k)
+    | [] -> KOther
+  in
+  go args
+
 let global_local_params : (string, bool list) Hashtbl.t = Hashtbl.create 31
+
+let scalar_ty (t : Typ.ty) : bool =
+  match Typ.repr t with
+  | Typ.TInt | Typ.TFloat | Typ.TBool | Typ.TChar | Typ.TUnit -> true
+  | _ -> false
 
 let arith_builtins =
   [ "+"; "-"; "*"; "/"; "mod"; "abs"; "min"; "max"; "<"; "<="; ">";
@@ -193,6 +233,32 @@ let arith_builtins =
    variables stay local. Collection literals that escape, boxing, atoms,
    closure capture, and calls to functions without borrow annotations all
    demand global. *)
+(* parameter type at position [i] of callee [ce] *)
+let param_ty (ce : expr) (i : int) : Typ.ty option =
+  match Typ.repr ce.ety with
+  | Typ.TFun (ptys, _) -> List.nth_opt ptys i
+  | _ -> None
+
+(* may a local value of kind [ak] flow into a parameter typed [pty]?
+   Implicit conversions go through clj-core producers: Seq.of_* are
+   global (a seq thunk cannot hold a local input), List targets use the
+   `*_local` twins, and boxing into dyn goes through global readers. *)
+let conv_borrows ~(pty : Typ.ty) ~(ak : ckind) : bool =
+  match Typ.repr pty, ak with
+  | Typ.TSeq _, KSeq -> true
+  | Typ.TSeq _, _ -> false
+  | Typ.TList _, KList -> true
+  | Typ.TList _, (KVec | KMap | KSeq) -> true
+  | Typ.TList _, _ -> false
+  | Typ.TAny, KSeq -> true
+  | Typ.TAny, (KVec | KList | KSet | KMap | KStr) -> false
+  | _ -> true
+
+let conv_ok (ce : expr) (i : int) (a : expr) : bool =
+  match param_ty ce i with
+  | Some pt -> conv_borrows ~pty:pt ~ak:(ckind_of a.ety)
+  | None -> true
+
 let rec local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : string option)
     ~(pindex : int) (body : expr) : bool =
   let bad = ref false in
@@ -202,27 +268,36 @@ let rec local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : strin
     | EGlobal (_, _, lgn) -> self_name = Some lgn
     | _ -> false
   in
-  let arg_ok ce i e_call =
+  let arg_ok ce i arg e_call =
     match ce.desc with
     | EBuiltin n ->
-      List.mem n arith_builtins
-      || (match Hashtbl.find_opt builtin_borrows n with
-          | Some All -> true
-          | Some (Only ix) -> List.mem i ix
-          | Some Lazy -> e_call.emode = Local
-          | None -> false)
+      (List.mem n arith_builtins && scalar_ty arg.ety)
+      || (match e_call.desc with
+          | ECall (_, cargs) ->
+            (match arg_borrows n i ~coll_kind:(call_coll_kind cargs) ~coll_local:(call_coll_local cargs) ~arg_kind:(ckind_of arg.ety) with
+             | Some (Elems k) ->
+               (match List.nth_opt cargs k with Some cb -> cb_elem_ok cb | None -> false)
+             (* Flows positions make the call result local when the arg
+                is — whether that is safe depends on the call's context,
+                which uses_ok cannot see — treat as escaping *)
+             | Some (Flows | ElemsFlows _) -> false
+             | Some Borrows -> true
+             | None -> false)
+          | _ -> false)
     | EGlobal (m, n, _) ->
-      (callee_is_self ce && i = pindex)
-      || (match Hashtbl.find_opt global_local_params (m ^ "." ^ n) with
-          | Some pl -> (match List.nth_opt pl i with Some x -> x | None -> false)
-          | None -> false)
+      conv_ok ce i arg
+      && ((callee_is_self ce && i = pindex)
+          || (match Hashtbl.find_opt global_local_params (m ^ "." ^ n) with
+              | Some pl -> (match List.nth_opt pl i with Some x -> x | None -> false)
+              | None -> false))
     | EFun fn ->
       (* immediately-applied lambda: the argument flows into a param that
          is itself only locally used *)
-      (match List.nth_opt fn.params i with
-       | Some lp ->
-         local_uses_ok lp ~self_b:fn.fself ~self_name:fn.fname ~pindex:i fn.body
-       | None -> false)
+      conv_ok ce i arg
+      && (match List.nth_opt fn.params i with
+          | Some lp ->
+            local_uses_ok lp ~self_b:fn.fself ~self_name:fn.fname ~pindex:i fn.body
+          | None -> false)
     | _ -> false
   in
   let rec go safe_ctx e =
@@ -235,8 +310,18 @@ let rec local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : strin
         if occurs_anywhere p fn.body then bad := true
       | ECall (ce, args) ->
         if occurs_anywhere p ce then bad := true
-        else List.iteri (fun i a -> go (arg_ok ce i e) a) args
-      | EIf (c, t, x) -> go true c; go false t; go false x
+        else List.iteri (fun i a -> go (arg_ok ce i a e) a) args
+      | EIf (c, t, x) ->
+        (* the condition only reads truthiness: empty-checks borrow on
+           collections, prim comparisons are fine on scalars — but
+           `dyn_truthy`/string reads are global *)
+        let cond_ok =
+          match ckind_of p.bty with
+          | KVec | KSeq | KSet | KMap | KList -> true
+          | KOther -> scalar_ty p.bty
+          | KStr -> false
+        in
+        go cond_ok c; go false t; go false x
       | EDo es -> List.iter (go false) es
       | ELet (pairs, b) ->
         List.iter (fun (_, i) -> go false i) pairs;
@@ -274,6 +359,17 @@ let rec local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : strin
   go false body;
   not !bad
 
+(* may the callback argument accept [@ local] elements — is its element
+   parameter itself only locally used? Conservative: only a literal
+   lambda qualifies; named functions take the global path. *)
+and cb_elem_ok (a : expr) : bool =
+  match a.desc with
+  | EFun fn ->
+    (match fn.params with
+     | p :: _ -> local_uses_ok p ~self_b:fn.fself ~self_name:fn.fname ~pindex:0 fn.body
+     | [] -> false)
+  | _ -> false
+
 (* may a let-binder be emitted `let x @ local`: every use across the rest
    of the let (later inits plus the body) must be a locally-safe position *)
 let binder_local_ok (b : binder) (scope : expr list) : bool =
@@ -299,26 +395,61 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
    | EFun fn -> analyze_fn fn
    | ECall (ce, args) ->
      let escs = arg_escapes ce in
+     let conv_bad i =
+       match List.nth_opt args i with
+       | Some a -> not (conv_ok ce i a)
+       | None -> true
+     in
      let arg_esc i =
-       match escs with
-       | Some l -> (match List.nth_opt l i with Some e -> e | None -> true)
-       | None ->
-         (match ce.desc with
-          | EBuiltin n ->
-            (match Hashtbl.find_opt builtin_borrows n with
-             | Some All -> false
-             | Some (Only ix) -> not (List.mem i ix)
-             | Some Lazy -> region_ret
-             | None -> not (List.mem n arith_builtins))
-          | EFun fn ->
-            (* immediately-applied lambda: escapes iff the param does *)
-            (match List.nth_opt (param_escapes fn) i with
-             | Some e -> e
+       match ce.desc with
+       | EBuiltin n ->
+         (match List.nth_opt args i with
+          | Some a ->
+            (match arg_borrows n i ~coll_kind:(call_coll_kind args) ~coll_local:(call_coll_local args) ~arg_kind:(ckind_of a.ety) with
+             | Some Borrows -> false
+             | Some Flows -> region_ret
+             | Some (Elems k) ->
+               (match List.nth_opt args k with
+                | Some cb -> not (cb_elem_ok cb)
+                | None -> true)
+             | Some (ElemsFlows k) ->
+               (match List.nth_opt args k with
+                | Some cb -> (not (cb_elem_ok cb)) || region_ret
+                | None -> true)
+             | None -> not (List.mem n arith_builtins && scalar_ty a.ety))
+          | None -> true)
+       | EGlobal (m, n, _) ->
+         conv_bad i
+         || (match Hashtbl.find_opt global_local_params (m ^ "." ^ n) with
+             | Some pl -> (match List.nth_opt pl i with Some x -> not x | None -> true)
+             | None ->
+               (* fall back to the escape table (cross-module callers see
+                  the .lgi record before the def is re-analyzed) *)
+               (match escs with
+                | Some l -> (match List.nth_opt l i with Some e -> e | None -> true)
+                | None -> true))
+       | EFun fn ->
+         conv_bad i
+         || (match List.nth_opt fn.params i with
+             | Some lp ->
+               not (local_uses_ok lp ~self_b:fn.fself ~self_name:fn.fname ~pindex:i fn.body)
              | None -> true)
-          | _ -> true)
+       | _ -> true
      in
      analyze_expr ~region_ret:true ce;
      List.iteri (fun i a -> analyze_expr ~region_ret:(arg_esc i) a) args;
+     (match ce.desc with
+      | EBuiltin n ->
+        let ck = call_coll_kind args and cl = call_coll_local args in
+        List.iteri
+          (fun i a ->
+            if arg_is_local a
+               && (match arg_borrows n i ~coll_kind:ck ~coll_local:cl ~arg_kind:(ckind_of a.ety) with
+                   | Some Flows | Some (ElemsFlows _) -> true
+                   | _ -> false)
+            then e.emode <- Local)
+          args
+      | _ -> ());
      (* an immediately-applied lambda's params may be annotated local_:
         mark each param whose uses are all borrow-safe *)
      (match ce.desc with

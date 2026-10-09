@@ -74,7 +74,7 @@ done
 
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
-   && grep -q 'local_\|unique_\|stack_' .test-bin/oxcaml.ml; then
+   && grep -q '@ local\|local_\|unique_\|stack_' .test-bin/oxcaml.ml; then
   echo "ok oxcaml-emit"
 else
   echo "FAIL(oxcaml-emit)"

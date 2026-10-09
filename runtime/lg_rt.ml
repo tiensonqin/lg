@@ -360,20 +360,23 @@ let vb_push b x =
 let vb_set b i x = if i >= 0 && i < b.vlen then b.vbuf.(i) <- x
 let vb_update b i f = if i >= 0 && i < b.vlen then b.vbuf.(i) <- f b.vbuf.(i)
 let vb_pop b = if b.vlen > 0 then b.vlen <- b.vlen - 1
-let vb_extend_vec b v = Clj_core.Vec.iter (vb_push b) v
+let vb_extend_vec b v =
+  for i = 0 to Clj_core.Vec.count v - 1 do
+    vb_push b (Clj_core.Vec.nth v i)
+  done
 let vb_extend_list b l = Clj_core.List.iter (vb_push b) l
-let vb_extend_set b s = Clj_core.Set.iter (vb_push b) s
+let vb_extend_set b s = Clj_core.List.iter (vb_push b) (Clj_core.Set.to_list s)
 let vb_freeze b = Clj_core.Vec.of_array (Array.sub b.vbuf 0 b.vlen)
 
 type ('k, 'v) mbuilder = ('k, 'v) Hashtbl.t
 
 let mb_new () = Hashtbl.create 16
 let mb_of_list ps = let h = mb_new () in List.iter (fun (k, v) -> Hashtbl.replace h k v) ps; h
-let mb_of_map m = let h = mb_new () in Clj_core.Map.iter (Hashtbl.replace h) m; h
+let mb_of_map m = let h = mb_new () in Clj_core.List.iter (fun (k, v) -> Hashtbl.replace h k v) (Clj_core.Map.to_list m); h
 let mb_assoc b k v = Hashtbl.replace b k v
 let mb_dissoc b k = Hashtbl.remove b k
 let mb_update b k f = match Hashtbl.find_opt b k with Some v -> Hashtbl.replace b k (f v) | None -> ()
-let mb_extend_map b m = Clj_core.Map.iter (mb_assoc b) m
+let mb_extend_map b m = Clj_core.List.iter (fun (k, v) -> mb_assoc b k v) (Clj_core.Map.to_list m)
 let mb_assoc_pair b kv =
   match Clj_core.Vec.to_list kv with
   | [ k; v ] -> Hashtbl.replace b k v
@@ -384,10 +387,13 @@ type 'a sbuilder = ('a, unit) Hashtbl.t
 
 let sb_new () = Hashtbl.create 16
 let sb_of_list xs = let h = sb_new () in List.iter (fun x -> Hashtbl.replace h x ()) xs; h
-let sb_of_set s = let h = sb_new () in Clj_core.Set.iter (fun x -> Hashtbl.replace h x ()) s; h
+let sb_of_set s = let h = sb_new () in Clj_core.List.iter (fun x -> Hashtbl.replace h x ()) (Clj_core.Set.to_list s); h
 let sb_add b x = Hashtbl.replace b x ()
 let sb_disj b x = Hashtbl.remove b x
-let sb_extend_vec b v = Clj_core.Vec.iter (sb_add b) v
+let sb_extend_vec b v =
+  for i = 0 to Clj_core.Vec.count v - 1 do
+    sb_add b (Clj_core.Vec.nth v i)
+  done
 let sb_extend_list b l = Clj_core.List.iter (sb_add b) l
-let sb_extend_set b s = Clj_core.Set.iter (sb_add b) s
+let sb_extend_set b s = Clj_core.List.iter (sb_add b) (Clj_core.Set.to_list s)
 let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b [])
