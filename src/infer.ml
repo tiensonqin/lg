@@ -111,6 +111,7 @@ let ty_of_form f : ty =
           | Some t -> t
           | None -> let t = fresh_var () in Hashtbl.replace tbl v t; t)
        | v -> TCon (v, []))
+    | List (_, [ t ]) -> go t  (* parenthesized type: (any), (my-record) *)
     | List (_, [ Atom (_, Symbol "vec"); t ]) -> TVec (go t)
     | List (_, [ Atom (_, Symbol "list"); t ]) -> TList (go t)
     | List (_, [ Atom (_, Symbol "set"); t ]) -> TSet (go t)
@@ -305,6 +306,7 @@ let is_special_builtin = function
   | "first" | "next" | "rest" | "seq" | "get" | "nth" | "conj" | "assoc"
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
   | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range"
+  | "take" | "drop"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
   | "str" | "println" | "print" | "pr-str" | "swap!"
   | "select-keys" | "update" | "get-in" | "assoc-in" | "comp" | "juxt"
@@ -855,12 +857,17 @@ and infer_expr ctx f : expr =
     (match split_meta f with
      | _, Some t, _ ->
        (match repr e.ety, repr t with
+        | TAny, TAny -> e
         | TAny, c ->
           e.ety <- t;
           mk l t (EUnbox (e, c))
         | TOption TAny, TOption c ->
           e.ety <- t;
           mk l t (EUnboxOpt (e, c))
+        | _, TAny ->
+          (* ^any on a statically-typed value: widen to dyn via deep box;
+             the inner expr keeps its concrete ety so emit can box it *)
+          mk l t (EBox e)
         | _ -> unify e.loc e.ety t; e)
      | _ -> e)
   | List (l, items) -> infer_call ctx l items
@@ -1196,24 +1203,30 @@ and infer_let ctx l binds body =
 and infer_and ctx l args =
   match args with
   | [] -> mk l TBool (EBool true)
-  | [ a ] ->
-    let e = infer_expr ctx a in
-    unify e.loc e.ety TBool; e
+  | [ a ] -> infer_expr ctx a  (* last position: the value flows out *)
   | a :: rest ->
     let e = infer_expr ctx a in
     unify e.loc e.ety TBool;
-    mk l TBool (EIf (e, infer_and ctx l rest, mk l TBool (EBool false)))
+    let r = infer_and ctx l rest in
+    let eelse =
+      if (match repr r.ety with TAny -> true | _ -> false) then mk l TAny (EBox (mk l TBool (EBool false)))
+      else mk l TBool (EBool false)
+    in
+    mk l r.ety (EIf (e, r, eelse))
 
 and infer_or ctx l args =
   match args with
   | [] -> mk l TBool (EBool false)
-  | [ a ] ->
-    let e = infer_expr ctx a in
-    unify e.loc e.ety TBool; e
+  | [ a ] -> infer_expr ctx a
   | a :: rest ->
     let e = infer_expr ctx a in
     unify e.loc e.ety TBool;
-    mk l TBool (EIf (e, mk l TBool (EBool true), infer_or ctx l rest))
+    let r = infer_or ctx l rest in
+    let ethen =
+      if (match repr r.ety with TAny -> true | _ -> false) then mk l TAny (EBox (mk l TBool (EBool true)))
+      else mk l TBool (EBool true)
+    in
+    mk l r.ety (EIf (e, ethen, r))
 
 and infer_cond ctx l args =
   match args with
@@ -1284,7 +1297,7 @@ and infer_match ctx l scrut clauses =
            (match pat with
             | Atom (_, Symbol "None") ->
               let dead = fresh_binder "_" in
-              dead.bty <- fresh_var ();
+              dead.bty <- (if scrut_any then TAny else fresh_var ());
               unify l se.ety (TOption dead.bty);
               let saved = ctx.env and saved_imp = ctx.implicits in
               let te = infer_expr ctx body_f in
@@ -1340,7 +1353,7 @@ and infer_match ctx l scrut clauses =
             | List (_, Atom (_, Symbol "Some") :: [ p ]) ->
               let pl = atom_loc p in
               let nb = fresh_binder "ov" in
-              nb.bty <- fresh_var ();
+              nb.bty <- (if scrut_any then TAny else fresh_var ());
               unify pl se.ety (TOption nb.bty);
               let saved = ctx.env and saved_imp = ctx.implicits in
               let pairs = bind_pattern ctx pl p (mk pl nb.bty (ELocal nb)) in
@@ -1815,8 +1828,13 @@ and infer_special ctx l name ce arg_es =
     mk l ret (ECall (ce, arg_es))
   | "take", [ n; c ] | "drop", [ n; c ] ->
     unify l n TInt;
-    let _ = with_coll c (fun _ -> ()) (fun _ -> ()) (fun _ -> ()) (fun _ _ -> ()) (fun _ -> ()) in
-    mk l c (ECall (ce, arg_es))
+    (* take/drop keep vec shape but seq-view everything else: set -> elem
+       list, map -> (k, v) pair list, string -> char list *)
+    let r =
+      with_coll c (fun _ -> c) (fun _ -> c) (fun e -> TList e)
+        (fun k v -> TList (TTuple [ k; v ])) (fun _ -> TList TChar)
+    in
+    mk l r (ECall (ce, arg_es))
   | "apply", [ f; xs ] ->
     let ret = fresh_var () in
     (match repr f with

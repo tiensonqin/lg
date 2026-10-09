@@ -181,9 +181,15 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | EUnboxOpt (e', t') ->
     buf_add b ("(match " ^ arg_str e' ^ " with Some d -> Some (" ^ unbox_fn t' ^ " d) | None -> None)")
   | EMatchOpt (src, bd, t, x) ->
-    buf_add b "(match "; emit_expr b src; buf_add b " with Some ";
-    buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-    buf_add b " -> "; emit_expr b t; buf_add b " | None -> "; emit_expr b x; buf_add b ")"
+    if is_any src.ety then begin
+      buf_add b "(match "; emit_expr b src; buf_add b " with Lg_rt.DOpt (Some ";
+      buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
+      buf_add b ") -> "; emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+    end else begin
+      buf_add b "(match "; emit_expr b src; buf_add b " with Some ";
+      buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
+      buf_add b " -> "; emit_expr b t; buf_add b " | None -> "; emit_expr b x; buf_add b ")"
+    end
 
 and emit_args b es = List.iteri (fun i a -> if i > 0 then buf_add b "; "; emit_expr b a) es
 and arg_str e = let b = Buffer.create 16 in emit_expr b e; Buffer.contents b
@@ -275,7 +281,11 @@ and box_deep ety es =
   | TSet el -> "(Lg_rt.DSet (Clj_core.Set.of_list (List.map (fun x -> " ^ box_deep el "x" ^ ") (Clj_core.Set.to_list " ^ es ^ "))))"
   | TMap _ -> "(Lg_rt.DMap " ^ nest_map_of ety es ^ ")"
   | TOption a -> "(Lg_rt.DOpt (match " ^ es ^ " with Some x -> Some (" ^ box_deep a "x" ^ ") | None -> None))"
-  | TTuple _ | TFun _ -> "(Lg_rt.DStr \"<fn>\")"
+  | TTuple ts ->
+    let vs = List.mapi (fun i _ -> "t" ^ string_of_int i) ts in
+    "(let (" ^ String.concat ", " vs ^ ") = " ^ es ^ " in Lg_rt.DVec (Clj_core.Vec.of_list ["
+    ^ String.concat "; " (List.map2 (fun v ty -> box_deep ty v) vs ts) ^ "]))"
+  | TFun _ -> "(Lg_rt.DStr \"<fn>\")"
   | TAny -> es
   | TUnit -> "(Lg_rt.DUnit)"
   | _ -> "(Lg_rt." ^ dyn_ctor ety ^ " " ^ es ^ ")"
@@ -320,6 +330,14 @@ and as_dyn_list e =
     else "(List.map (fun x -> Lg_rt." ^ dyn_ctor el ^ " x) " ^ as_list e ^ ")"
   | _ -> as_list e
 
+(* element conversion across the any boundary: a concrete value is boxed
+   when the target type is `any`, a dyn is unboxed when the target type is
+   concrete *)
+and conv ty src s =
+  if is_any ty && not (is_any src) then box_deep src s
+  else if (not (is_any ty)) && is_any src then "(" ^ unbox_fn ty ^ " " ^ s ^ ")"
+  else s
+
 (* emit an element expr, boxing it into dyn when the collection is hetero *)
 and emit_elem b elem_ty e =
   if is_any elem_ty && not (is_any e.ety) then buf_add b (box_of e) else emit_expr b e
@@ -332,12 +350,15 @@ and coll_kind t =
 (* the collection arg as an OCaml list expr *)
 and as_list e =
   let a = arg_str e in
-  match coll_kind e.ety with
-  | `Vec -> "(Clj_core.Vec.to_list " ^ a ^ ")"
-  | `Set -> "(Clj_core.Set.to_list " ^ a ^ ")"
-  | `Map -> "(List.of_seq (Clj_core.Map.seq " ^ a ^ "))"
-  | `Str -> "(Lg_rt.string_chars " ^ a ^ ")"
-  | `List -> a
+  match repr e.ety with
+  | TAny -> "(Lg_rt.dyn_to_list " ^ a ^ ")"
+  | _ ->
+    (match coll_kind e.ety with
+     | `Vec -> "(Clj_core.Vec.to_list " ^ a ^ ")"
+     | `Set -> "(Clj_core.Set.to_list " ^ a ^ ")"
+     | `Map -> "(List.of_seq (Clj_core.Map.seq " ^ a ^ "))"
+     | `Str -> "(Lg_rt.string_chars " ^ a ^ ")"
+     | `List -> a)
 
 (* ---- FBIP: unique-owner update chains -> mutable builder + one freeze ----
    A spine of conj/assoc/into/pop/dissoc/disj/update calls rooted at a fresh
@@ -542,17 +563,30 @@ and emit_builtin_call b ret name args =
      (* structural equality: clj maps/sets carry a compare fn inside, so
         polymorphic compare crashes on them — go through the clj-core
         `equal` functions instead *)
-     let inner = match repr (t 0) with
-       | TAny -> "(Lg_rt.dyn_eq " ^ a 0 ^ " " ^ a 1 ^ ")"
-       | TVec _ -> "(Clj_core.Vec.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
-       | TSet _ -> "(Clj_core.Set.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
-       | TMap _ -> "(Clj_core.Map.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
-       | _ -> "(" ^ a 0 ^ " = " ^ a 1 ^ ")"
+     let rec deep_any t =
+       match repr t with
+       | TAny -> true
+       | TVec x | TList x | TSet x | TOption x -> deep_any x
+       | TMap (k, v) -> deep_any k || deep_any v
+       | TTuple ts -> List.exists deep_any ts
+       | _ -> false
+     in
+     let inner =
+       if deep_any (t 0) || deep_any (t 1) then
+         "(Lg_rt.dyn_eq " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ ")"
+       else
+         match repr (t 0) with
+         | TVec _ -> "(Clj_core.Vec.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
+         | TSet _ -> "(Clj_core.Set.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
+         | TMap _ -> "(Clj_core.Map.equal " ^ a 0 ^ " " ^ a 1 ^ ")"
+         | _ -> "(" ^ a 0 ^ " = " ^ a 1 ^ ")"
      in
      buf_add b (if name = "=" then inner else "(not " ^ inner ^ ")")
-   | "not" -> buf_add b ("(not " ^ a 0 ^ ")")
-   | "inc" -> buf_add b ("(" ^ a 0 ^ " + 1)")
-   | "dec" -> buf_add b ("(" ^ a 0 ^ " - 1)")
+   | "not" ->
+     buf_add b
+       (if is_any (t 0) then "(not (Lg_rt.dyn_truthy " ^ a 0 ^ "))" else "(not " ^ a 0 ^ ")")
+   | "inc" -> buf_add b ("(" ^ conv TInt (t 0) (a 0) ^ " + 1)")
+   | "dec" -> buf_add b ("(" ^ conv TInt (t 0) (a 0) ^ " - 1)")
    | "mod" -> buf_add b ("(" ^ a 0 ^ " mod " ^ a 1 ^ ")")
    | "abs" -> buf_add b ("(abs " ^ a 0 ^ ")")
    | "identity" -> buf_add b (a 0)
@@ -563,6 +597,7 @@ and emit_builtin_call b ret name args =
         | TInt -> "(float_of_int " ^ a 0 ^ ")"
         | TChar -> "(float_of_int (Char.code " ^ a 0 ^ "))"
         | TString -> "(float_of_string " ^ a 0 ^ ")"
+        | TAny -> "(Lg_rt.as_float " ^ a 0 ^ ")"
         | _ -> a 0)
    | "int" ->
      buf_add b
@@ -570,15 +605,17 @@ and emit_builtin_call b ret name args =
         | TFloat -> "(int_of_float " ^ a 0 ^ ")"
         | TChar -> "(Char.code " ^ a 0 ^ ")"
         | TString -> "(int_of_string " ^ a 0 ^ ")"
+        | TAny -> "(Lg_rt.as_int " ^ a 0 ^ ")"
         | _ -> a 0)
    | "name" ->
      buf_add b
        (match repr (t 0) with
         | TKeyword -> "(Clj_core.Keyword.name " ^ a 0 ^ ")"
         | TSymbol -> "(Clj_core.Symbol.name " ^ a 0 ^ ")"
+        | TAny -> "(Lg_rt.as_name " ^ a 0 ^ ")"
         | _ -> a 0)
-   | "keyword" -> buf_add b ("(Clj_core.Keyword.of_string " ^ a 0 ^ ")")
-   | "symbol" -> buf_add b ("(Clj_core.Symbol.of_string " ^ a 0 ^ ")")
+   | "keyword" -> buf_add b ("(Clj_core.Keyword.of_string " ^ conv TString (t 0) (a 0) ^ ")")
+   | "symbol" -> buf_add b ("(Clj_core.Symbol.of_string " ^ conv TString (t 0) (a 0) ^ ")")
    | "str" | "pr-str" ->
      let parts = List.map (fun e -> printer_call e.ety e) args in
      buf_add b ("(" ^ String.concat " ^ " (if parts = [] then [ "\"\"" ] else parts) ^ ")")
@@ -586,7 +623,21 @@ and emit_builtin_call b ret name args =
      let parts = List.map (fun e -> printer_call e.ety e) args in
      let joined = String.concat " ^ \" \" ^ " (if parts = [] then [ "\"\"" ] else parts) in
      buf_add b ("(" ^ (if name = "println" then "print_endline" else "print_string") ^ " (" ^ joined ^ "))")
-   | "cons" -> buf_add b ("(" ^ a 0 ^ " :: " ^ a 1 ^ ")")
+   | "cons" ->
+     let el = match repr ret with TList e -> e | _ -> TAny in
+     let hd = conv el (t 0) (a 0) in
+     let items =
+       match repr (t 1) with
+       | TAny ->
+         if is_any el then "(Lg_rt.dyn_to_list " ^ a 1 ^ ")"
+         else "(List.map (fun x -> " ^ conv el TAny "x" ^ ") (Lg_rt.dyn_to_list " ^ a 1 ^ "))"
+       | _ ->
+         let lel = match repr (t 1) with TList x | TVec x | TSet x -> x | _ -> TAny in
+         let c = conv el lel "x" in
+         if c = "x" then as_list (List.nth args 1)
+         else "(List.map (fun x -> " ^ c ^ ") " ^ as_list (List.nth args 1) ^ ")"
+     in
+     buf_add b ("(" ^ hd ^ " :: " ^ items ^ ")")
    | "list" -> buf_add b ("[" ^ String.concat "; " (List.map arg_str args) ^ "]")
    | "vector" -> buf_add b ("(Clj_core.Vec.of_list [" ^ String.concat "; " (List.map arg_str args) ^ "])")
    | "hash-map" ->
@@ -630,7 +681,7 @@ and emit_builtin_call b ret name args =
    | "map?" ->
      (match repr (t 0) with
       | TMap _ -> buf_add b "true"
-      | TAny -> buf_add b ("(match " ^ dyn_map_arg (List.nth args 0) ^ " with Clj_core.Map.Nest _ -> true | _ -> false)")
+      | TAny -> buf_add b ("(match " ^ a 0 ^ " with Lg_rt.DMap _ -> true | _ -> false)")
       | _ -> buf_add b "false")
    | "contains?" ->
      (match coll with
@@ -688,10 +739,14 @@ and emit_builtin_call b ret name args =
       | _ -> buf_add b "(failwith \"nth\")")
    | "conj" ->
      let elem_ty = match repr (t 0) with TVec el -> el | TList el -> el | TSet el -> el | _ -> TUnit in
-     let arg i =
-       let e = List.nth args i in
-       if is_any elem_ty && not (is_any e.ety) then box_of e else a i
-     in
+     let arg i = conv elem_ty (t i) (a i) in
+     if is_any (t 0) then
+       (* dyn destination: keep the collection's own tag at runtime *)
+       buf_add b
+         (List.fold_left
+            (fun acc i -> "(Lg_rt.dyn_conj " ^ acc ^ " " ^ conv TAny (t i) (a i) ^ ")")
+            (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
+     else
      (match coll with
       | `Vec ->
         buf_add b (List.fold_left (fun acc i -> "(Clj_core.Vec.conj " ^ acc ^ " " ^ arg i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
@@ -721,9 +776,22 @@ and emit_builtin_call b ret name args =
       | _ -> buf_add b "(failwith \"assoc\")")
    | "dissoc" ->
      buf_add b (List.fold_left (fun acc i -> "(Clj_core.Map.dissoc " ^ acc ^ " " ^ a i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
-   | "keys" -> buf_add b ("(List.of_seq (Clj_core.Map.keys " ^ a 0 ^ "))")
-   | "vals" -> buf_add b ("(List.of_seq (Clj_core.Map.vals " ^ a 0 ^ "))")
-   | "merge" -> buf_add b (List.fold_left (fun acc i -> "(Clj_core.Map.merge " ^ acc ^ " " ^ a i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
+   | "keys" ->
+     buf_add b
+       (if is_any (t 0) then "(List.of_seq (Clj_core.Map.keys (Lg_rt.as_map " ^ a 0 ^ ")))"
+        else "(List.of_seq (Clj_core.Map.keys " ^ a 0 ^ "))")
+   | "vals" ->
+     buf_add b
+       (if is_any (t 0) then "(Lg_rt.dyn_vals (Lg_rt.as_map " ^ a 0 ^ "))"
+        else "(List.of_seq (Clj_core.Map.vals " ^ a 0 ^ "))")
+   | "merge" ->
+     buf_add b
+       (if is_any (t 0) then
+          "(Lg_rt.flat_merge (Lg_rt.as_map "
+          ^ a 0 ^ ") [" ^ String.concat "; " (List.map (fun i -> "(Lg_rt.as_map " ^ a i ^ ")") (List.init (List.length args - 1) (fun i -> i + 1))) ^ "])"
+        else
+          List.fold_left (fun acc i -> "(Clj_core.Map.merge " ^ acc ^ " " ^ a i ^ ")") (a 0)
+            (List.init (List.length args - 1) (fun i -> i + 1)))
    | "kw-get" ->
      let kd = "(Lg_rt.DKw " ^ a 0 ^ ")" in
      (match repr (t 1) with
@@ -738,11 +806,21 @@ and emit_builtin_call b ret name args =
         if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
         else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")"))
    | "vec" -> buf_add b ("(Clj_core.Vec.of_list " ^ as_list (List.nth args 0) ^ ")")
-   | "peek" -> buf_add b ("(Clj_core.Vec.peek " ^ a 0 ^ ")")
-   | "pop" -> buf_add b ("(Clj_core.Vec.pop " ^ a 0 ^ ")")
+   | "peek" -> buf_add b ("(Clj_core.Vec.peek " ^ conv (TVec TAny) (t 0) (a 0) ^ ")")
+   | "pop" -> buf_add b ("(Clj_core.Vec.pop " ^ conv (TVec TAny) (t 0) (a 0) ^ ")")
    | "set" -> buf_add b ("(Clj_core.Set.of_list " ^ as_list (List.nth args 0) ^ ")")
-   | "disj" -> buf_add b (List.fold_left (fun acc i -> "(Clj_core.Set.disj " ^ acc ^ " " ^ a i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
-   | "union" -> buf_add b ("(Clj_core.Set.union " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "disj" ->
+     if is_any (t 0) then
+       buf_add b
+         (List.fold_left
+            (fun acc i -> "(Clj_core.Set.disj " ^ acc ^ " " ^ conv TAny (t i) (a i) ^ ")")
+            ("(Lg_rt.as_set " ^ a 0 ^ ")") (List.init (List.length args - 1) (fun i -> i + 1)))
+     else
+       buf_add b (List.fold_left (fun acc i -> "(Clj_core.Set.disj " ^ acc ^ " " ^ a i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
+   | "union" ->
+     if is_any (t 0) || is_any (t 1) then
+       buf_add b ("(Clj_core.Set.union " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
+     else buf_add b ("(Clj_core.Set.union " ^ a 0 ^ " " ^ a 1 ^ ")")
    | "map" ->
      let f = a 0 in
      (match coll_kind (t 1) with
@@ -771,34 +849,51 @@ and emit_builtin_call b ret name args =
    | "mapv" ->
      (match coll_kind (t 1) with
       | `Vec -> buf_add b ("(Clj_core.Vec.map " ^ a 0 ^ " " ^ a 1 ^ ")")
-      | _ -> buf_add b ("(Clj_core.Vec.of_list (List.map " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")))"))
+      | _ -> buf_add b ("(Clj_core.Vec.of_list (List.map " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ "))"))
    | "filterv" ->
      (match coll_kind (t 1) with
       | `Vec -> buf_add b ("(Clj_core.Vec.filter " ^ a 0 ^ " " ^ a 1 ^ ")")
-      | _ -> buf_add b ("(Clj_core.Vec.of_list (List.filter " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")))"))
+      | _ -> buf_add b ("(Clj_core.Vec.of_list (List.filter " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ "))"))
    | "into" ->
-     let src_items =
-       let el = match repr (t 0) with TVec x -> x | TList x -> x | TSet x -> x | _ -> TUnit in
-       if is_any el then as_dyn_list (List.nth args 1) else as_list (List.nth args 1)
+     let src_items = as_list (List.nth args 1) in
+     let src_el =
+       match repr (t 1) with
+       | TVec x | TList x | TSet x -> x | TMap (k, v) -> TTuple [ k; v ] | TString -> TChar | _ -> TAny
+     in
+     let items_for dst_el =
+       if is_any dst_el && not (is_any src_el) then "(List.map (fun e -> " ^ box_deep src_el "e" ^ ") " ^ src_items ^ ")"
+       else if (not (is_any dst_el)) && is_any src_el then "(List.map " ^ unbox_fn dst_el ^ " " ^ src_items ^ ")"
+       else src_items
      in
      (match coll with
-      | `Vec -> buf_add b ("(List.fold_left Clj_core.Vec.conj " ^ a 0 ^ " " ^ src_items ^ ")")
-      | `Set -> buf_add b ("(List.fold_left Clj_core.Set.conj " ^ a 0 ^ " " ^ src_items ^ ")")
+      | `Vec ->
+        let de = match repr (t 0) with TVec x -> x | _ -> TAny in
+        buf_add b ("(List.fold_left Clj_core.Vec.conj " ^ a 0 ^ " " ^ items_for de ^ ")")
+      | `Set ->
+        let de = match repr (t 0) with TSet x -> x | _ -> TAny in
+        buf_add b ("(List.fold_left Clj_core.Set.conj " ^ a 0 ^ " " ^ items_for de ^ ")")
       | `Map ->
         (* elements arrive as (k, v) tuples (map src), or as [k v]
-           pair-vecs/pair-lists that must be destructured first *)
+           pair-vecs/pair-lists that must be destructured first; each
+           component crosses the any boundary via conv *)
+        let kt, vt = match repr (t 0) with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
         let body =
           (match repr (t 1) with
-           | TMap _ -> "Clj_core.Map.conj m e"
+           | TMap (sk, sv) -> "Clj_core.Map.conj m (" ^ conv kt sk "(fst e)" ^ ", " ^ conv vt sv "(snd e)" ^ ")"
            | TVec x | TList x | TSet x ->
              (match repr x with
-              | TTuple _ -> "Clj_core.Map.conj m e"
-              | TList _ -> "(match e with [k; v] -> Clj_core.Map.conj m (k, v) | _ -> m)"
-              | _ -> "(match Clj_core.Vec.to_list e with [k; v] -> Clj_core.Map.conj m (k, v) | _ -> m)")
+              | TTuple [ tk; sv ] -> "Clj_core.Map.conj m (" ^ conv kt tk "(fst e)" ^ ", " ^ conv vt sv "(snd e)" ^ ")"
+              | TList sv -> "(match e with [k; v] -> Clj_core.Map.conj m (" ^ conv kt sv "k" ^ ", " ^ conv vt sv "v" ^ ") | _ -> m)"
+              | TAny -> "(match Lg_rt.dyn_to_list e with [k; v] -> Clj_core.Map.conj m (" ^ conv kt TAny "k" ^ ", " ^ conv vt TAny "v" ^ ") | _ -> m)"
+              | TVec c -> "(match Clj_core.Vec.to_list e with [k; v] -> Clj_core.Map.conj m (" ^ conv kt c "k" ^ ", " ^ conv vt c "v" ^ ") | _ -> m)"
+              | TSet c -> "(match Clj_core.Set.to_list e with [k; v] -> Clj_core.Map.conj m (" ^ conv kt c "k" ^ ", " ^ conv vt c "v" ^ ") | _ -> m)"
+              | _ -> "Clj_core.Map.conj m e")
            | _ -> "Clj_core.Map.conj m e")
         in
-        buf_add b ("(List.fold_left (fun m e -> " ^ body ^ ") " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
-      | `List -> buf_add b ("(" ^ as_list (List.nth args 1) ^ " @ " ^ a 0 ^ ")")
+        buf_add b ("(List.fold_left (fun m e -> " ^ body ^ ") " ^ a 0 ^ " " ^ src_items ^ ")")
+      | `List ->
+        let de = match repr (t 0) with TList x -> x | _ -> TAny in
+        buf_add b ("(" ^ items_for de ^ " @ " ^ a 0 ^ ")")
       | `Str -> buf_add b "(failwith \"into string\")")
    | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
    | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?" ->
@@ -874,8 +969,7 @@ and emit_builtin_call b ret name args =
    | "deref" -> buf_add b ("(Clj_core.Atom.deref " ^ a 0 ^ ")")
    | "reset!" ->
      let av = match repr (t 0) with TAtom p -> p | _ -> TAny in
-     if is_any av then buf_add b ("(Clj_core.Atom.reset_bang " ^ a 0 ^ " " ^ box_of (List.nth args 1) ^ ")")
-     else buf_add b ("(Clj_core.Atom.reset_bang " ^ a 0 ^ " " ^ a 1 ^ ")")
+     buf_add b ("(Clj_core.Atom.reset_bang " ^ a 0 ^ " " ^ conv av (t 1) (a 1) ^ ")")
    | "no-match" -> buf_add b "(Lg_rt.no_match ())"
    | "dyn-eq" -> buf_add b ("(Lg_rt.dyn_eq " ^ a 0 ^ " " ^ box_of (List.nth args 1) ^ ")")
    | "select-keys" ->
@@ -889,7 +983,13 @@ and emit_builtin_call b ret name args =
       | _ ->
         buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ dyn_map_arg (List.nth args 0)
                    ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))"))
-   | "update" -> buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (" ^ a 2 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1 ^ " with Some uv__ -> uv__ | None -> failwith \"update: missing key\")))")
+   | "update" ->
+     let pf, rf = match repr (t 2) with TFun ([ p ], r) -> (p, r) | _ -> (TAny, TAny) in
+     let vt = match repr (t 0) with TMap (_, v) -> v | _ -> TAny in
+     let uv = conv pf vt "uv__" in
+     let res = conv vt rf ("(" ^ a 2 ^ " " ^ uv ^ ")") in
+     buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
+                ^ " with Some uv__ -> " ^ res ^ " | None -> failwith \"update: missing key\"))")
    | "get-in" | "assoc-in" ->
      let ks_arg = List.nth args 1 in
      (* clj-core's get_in/assoc_in walk 'k keys of the nest map — dyn here —
@@ -930,8 +1030,16 @@ and emit_builtin_call b ret name args =
    | "second" -> buf_add b ("(Lg_rt.second_opt " ^ as_list (List.nth args 0) ^ ")")
    | "last" -> buf_add b ("(Lg_rt.last_opt " ^ as_list (List.nth args 0) ^ ")")
    | "butlast" -> buf_add b ("(Lg_rt.butlast " ^ as_list (List.nth args 0) ^ ")")
-   | "min" -> buf_add b ("(Stdlib.min " ^ a 0 ^ " " ^ a 1 ^ ")")
-   | "max" -> buf_add b ("(Stdlib.max " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "min" ->
+     buf_add b
+       (if is_any (t 0) || is_any (t 1) then
+          conv ret TAny ("(Lg_rt.dyn_min " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ ")")
+        else "(Stdlib.min " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "max" ->
+     buf_add b
+       (if is_any (t 0) || is_any (t 1) then
+          conv ret TAny ("(Lg_rt.dyn_max " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ ")")
+        else "(Stdlib.max " ^ a 0 ^ " " ^ a 1 ^ ")")
    | "every?" -> buf_add b ("(List.for_all " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
    | "some" -> buf_add b ("(List.exists " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
    | "take-while" -> buf_add b ("(Lg_rt.take_while " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
@@ -944,8 +1052,14 @@ and emit_builtin_call b ret name args =
    | "group-by" -> buf_add b ("(Lg_rt.group_by " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
    | "frequencies" -> buf_add b ("(Lg_rt.frequencies " ^ as_list (List.nth args 0) ^ ")")
    | "swap!" -> buf_add b ("(Clj_core.Atom.swap_bang " ^ a 0 ^ " " ^ a 1 ^ ")")
-   | "some?" -> buf_add b ("(" ^ a 0 ^ " <> None)")
-   | "none?" -> buf_add b ("(" ^ a 0 ^ " = None)")
+   | "some?" ->
+     buf_add b
+       (if is_any (t 0) then "(match " ^ a 0 ^ " with Lg_rt.DUnit | Lg_rt.DOpt None -> false | _ -> true)"
+        else "(" ^ a 0 ^ " <> None)")
+   | "none?" ->
+     buf_add b
+       (if is_any (t 0) then "(match " ^ a 0 ^ " with Lg_rt.DUnit | Lg_rt.DOpt None -> true | _ -> false)"
+        else "(" ^ a 0 ^ " = None)")
    | _ -> buf_add b ("(failwith \"unhandled builtin " ^ name ^ "\")"))
 
   end

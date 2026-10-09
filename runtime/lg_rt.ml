@@ -107,6 +107,62 @@ let as_unit = function DUnit -> () | _ -> invalid_arg "dyn: expected unit"
 let as_opt = function DOpt o -> o | _ -> invalid_arg "dyn: expected option"
 let as_list = function DList xs -> xs | _ -> invalid_arg "dyn: expected list"
 let as_vec = function DVec v -> v | _ -> invalid_arg "dyn: expected vec"
+let as_name = function
+  | DKw k -> Clj_core.Keyword.name k
+  | DSym s -> Clj_core.Symbol.name s
+  | DStr s -> s
+  | _ -> invalid_arg "dyn: expected named value"
+
+(* any seqable dyn viewed as a list of dyn elements; map entries come out
+   as [k v] pair-vecs, leaves wrapped back into dyn *)
+let dyn_to_list = function
+  | DVec v -> Clj_core.Vec.to_list v
+  | DList l -> l
+  | DSet s -> Clj_core.Set.to_list s
+  | DMap m ->
+    List.map
+      (fun (k, v) ->
+        DVec
+          (Clj_core.Vec.of_list
+             [ k; (match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d) ]))
+      (List.of_seq (Clj_core.Map.seq m))
+  | DStr s -> List.map (fun c -> DChar c) (string_chars s)
+  | _ -> []
+
+(* values of a dyn-keyed map: nest entries unwrap back into DMap *)
+let dyn_vals m =
+  List.map
+    (fun v -> match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d)
+    (List.of_seq (Clj_core.Map.vals m))
+
+(* conj on a dyn collection: keeps the collection's own tag *)
+let dyn_conj c x =
+  match c with
+  | DVec v -> DVec (Clj_core.Vec.conj v x)
+  | DList l -> DList (x :: l)
+  | DSet s -> DSet (Clj_core.Set.conj s x)
+  | DMap m ->
+    (match x with
+     | DVec pv when Clj_core.Vec.count pv = 2 ->
+       DMap (Clj_core.Map.assoc m (Clj_core.Vec.nth pv 0) (Clj_core.Map.Leaf (Clj_core.Vec.nth pv 1)))
+     | DMap m2 -> DMap (Clj_core.Map.merge m m2)
+     | _ -> invalid_arg "conj: map entry must be a pair")
+  | _ -> invalid_arg "conj: not a collection"
+
+(* ordering on dyn scalars for min/max/sort on `any` sequences *)
+let dyn_cmp a b =
+  match a, b with
+  | DInt x, DInt y -> compare x y
+  | DFloat x, DFloat y -> compare x y
+  | DInt x, DFloat y -> compare (float_of_int x) y
+  | DFloat x, DInt y -> compare x (float_of_int y)
+  | DChar x, DChar y -> compare x y
+  | DStr x, DStr y -> compare x y
+  | _ -> invalid_arg "dyn_cmp: incomparable"
+
+let dyn_min a b = if dyn_cmp a b <= 0 then a else b
+let dyn_max a b = if dyn_cmp a b >= 0 then a else b
+
 let rec dyn_eq (a : dyn) (b : dyn) : bool =
   match a, b with
   | DInt x, DInt y -> x = y
@@ -133,6 +189,16 @@ and nest_eq a b = Clj_core.Map.equal ~eq:leaf_eq a b
 
 let as_map = function DMap m -> m | _ -> invalid_arg "dyn: expected map"
 let as_set = function DSet s -> s | _ -> invalid_arg "dyn: expected set"
+
+(* merge nest maps then flatten the payload back to a (dyn, dyn) map —
+   the canonical emitter representation of lg map<any,any> *)
+let flat_merge base ms =
+  let m = List.fold_left (fun acc x -> Clj_core.Map.merge acc x) base ms in
+  List.fold_left
+    (fun acc (k, n) ->
+      Clj_core.Map.assoc acc k
+        (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap s))
+    (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
 
 
 let no_match () = failwith "match: no clause matched"
