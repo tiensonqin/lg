@@ -1,0 +1,9 @@
+arith: 3 12 2
+vec: [1 4 9]
+seq: (0 2 4 6 8)
+map: 2
+set: 4
+str: ab1:k
+fib10: 55
+env: yes
+exists: true

@@ -149,6 +149,16 @@ unresolved), E2xx reader.
 - **OxCaml emit (`--backend=oxcaml`).** `Local` literals → `stack_`,
   let bindings → `(local_ …)` / `(unique_ …)`, non-escaping params →
   `(local_ p)`. Vanilla `ocaml` stays the default backend.
+- **wasm (`--backend=wasm`).** `ocamlc` bytecode → `wasm_of_ocaml`
+  → `<exe>.js` + `<exe>.assets/*.wasm`, runnable under `node`. Verified:
+  pure language, collections, lazy seqs, `println`, `env`,
+  `file-exists?`. Degraded stubs: `now-ms`, `argv`, `re-*` (no clock /
+  process args / `Str` in the wasm runtime); `slurp`/`spit`/`sh` are
+  untested — io via Node belongs on the `melange` backend.
+- **Melange (`--backend=melange`).** JS via `melange.emit`: produces
+  `<exe>.js` (CommonJS + a `node_modules` symlink) for `node`. io and
+  `re-*` work through `Lg_node`'s lazy Node probes — browser bundles
+  load fine and fail only if a Node-gated builtin is invoked.
 - **`--strict` mode.** Heterogeneous literals require an explicit
   `^any`-family annotation — every `any` in a program is one the author
   wrote down.
@@ -182,7 +192,7 @@ lg lgi    <file.lg> [-I dir]   # regenerate the module's .lgi interface file
 lg build  <file.lg> [-I dir]   # emit + compile with ocamlfind (native, byte fallback)
 ```
 
-Flags: `--backend=ocaml|oxcaml` selects the emit backend; `--strict`
+Flags: `--backend=ocaml|oxcaml|melange|wasm` selects the emit backend; `--strict`
 requires `^any` on heterogeneous literals.
 
 `-I dir` adds an include directory used to resolve `:require`d modules.

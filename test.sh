@@ -31,6 +31,15 @@ for src in test/*.lg test/*.cljc; do
       echo "FAIL(build/run) $name"
       fail=1; continue
     fi
+  elif [ "$name" = "wasm" ]; then
+    if ! command -v wasm_of_ocaml >/dev/null 2>&1; then
+      echo "skip wasm (no wasm_of_ocaml)"
+      continue
+    fi
+    if ! "$LG" build "$src" -I lib --backend=wasm -o "$bin" >/dev/null 2>&1 || ! node "$bin.js" > ".test-bin/$name.out" 2>&1; then
+      echo "FAIL(build/run) $name"
+      fail=1; continue
+    fi
   else
     if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -I lib -o "$bin" >/dev/null 2>&1; then
       echo "FAIL(build) $name"

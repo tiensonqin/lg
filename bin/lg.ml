@@ -22,7 +22,7 @@ let () =
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
-    ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml"; "melange" ], (fun s -> backend := s)),
+    ; ("--backend", Arg.Symbol ([ "ocaml"; "oxcaml"; "melange"; "wasm" ], (fun s -> backend := s)),
        "<ocaml|oxcaml|melange> emit mode annotations for OxCaml, or JS via melange")
     ; ("--strict", Arg.Set Lgc.Infer.strict,
        " heterogeneous literals require an explicit ^any annotation") ]
@@ -216,6 +216,22 @@ let () =
                Unix.symlink ~to_dir:true nmsrc nm;
              Printf.printf "wrote %s (node %s to run)
 " dst dst
+           | Some "build" when !backend = "wasm" ->
+             let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
+             (* ocamlc bytecode -> wasm_of_ocaml -> <exe>.js + <exe>.assets/*.wasm *)
+             let pkgs =
+               if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
+                 "clj-core,rrbvec,unix,str,ctypes.foreign"
+               else "clj-core,rrbvec,unix,str"
+             in
+             let rc =
+               Sys.command
+                 (Printf.sprintf "ocamlfind ocamlc -package %s -linkpkg %s -o %s.byte && wasm_of_ocaml compile %s.byte -o %s.js"
+                    pkgs (Filename.quote out_ml) (Filename.quote exe)
+                    (Filename.quote exe) (Filename.quote exe))
+             in
+             if rc <> 0 then (Printf.eprintf "lg: wasm build failed (need wasm_of_ocaml + clj_core + rrbvec installed)\n%!"; raise (Exit rc));
+             Printf.printf "wrote %s.js (+ %s.assets) — node %s.js to run\n" exe exe exe
            | Some "build" ->
              let exe = match !out with Some o -> o | None -> Filename.remove_extension file in
              if !backend = "oxcaml" then

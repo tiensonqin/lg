@@ -175,8 +175,9 @@ single merged file into the `melange.emit` workspace.
 | `atom`/`deref`/`reset!`/`swap!` | `Clj_core.Atom.*` |
 | `str`/`print`/`println`/`pr-str` | `Lg_rt.str` / `Lg_rt.print` / `Lg_rt.println` / `Lg_rt.pr_str` |
 | string lib: `subs` `split` `join` `trim` `triml` `trimr` `upper-case` `lower-case` `blank?` `includes?` `starts-with?` `ends-with?` `replace` | `String.*` / `Lg_rt` literal-string helpers — portable on every backend |
-| io/system: `slurp` `spit` `read-line` `argv` `env` `file-exists?` `sh` `now-ms` | inline channels/`Sys`/`Unix` — **native only** (melange emits `failwith`) |
-| regex-lite: `re-find` `re-matches` `re-seq` `re-split` `re-replace` | `Str.*` — native only; `re-*` take the pattern first, subject second |
+| io/system: `slurp` `spit` `read-line` `argv` `env` `file-exists?` `sh` `now-ms` | native: inline channels/`Sys`/`Unix`; melange: `Lg_node` lazy Node probes; wasm: `env`/`file-exists?` work, `now-ms`/`argv` degraded |
+| regex-lite: `re-find` `re-matches` `re-seq` `re-split` `re-replace` | `Str.*` on native, `Js.Re`/`Js.String` on melange; `re-*` take the pattern first, subject second |
+| wasm (`--backend=wasm`) | `ocamlc` bytecode → `wasm_of_ocaml compile` → `<exe>.js` + `<exe>.assets/` |
 | heterogeneous literal | `Lg_rt.dyn` boxed value + checked `EUnbox` projections |
 | `alias/f a b` | `Alias.f a b` (cross-module call) |
 | `if`/`let`/`fn`/`do` | OCaml `if`/`let`/`fun`/sequencing, locals `__N`-renamed |
