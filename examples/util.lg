@@ -1,0 +1,7 @@
+(ns util)
+
+(defn fib ^(fn [int] int) [n]
+  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn sum ^(fn [(vec int)] int) [xs]
+  (reduce (fn [acc x] (+ acc x)) 0 xs))

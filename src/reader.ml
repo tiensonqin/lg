@@ -1,0 +1,166 @@
+(* Reader: .lg2 source text -> form list.
+
+   Supported reader syntax:
+     ( ) [ ] { } #{ }  '  ^meta  #_discard  ;line-comment
+   Atomics: int (dec, 0x hex, -), float, "string" with escapes, \c chars,
+            true/false/nil, :keyword, symbol. *)
+
+open Syntax
+
+let is_ws = function ' ' | '\t' | '\n' | '\r' | ',' -> true | _ -> false
+let is_delim = function
+  | ' ' | '\t' | '\n' | '\r' | ',' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | '\'' | '`' | '~' | '^' | '@' -> true
+  | _ -> false
+
+let is_digit c = c >= '0' && c <= '9'
+
+let named_char = function
+  | "newline" -> '\n' | "space" -> ' ' | "tab" -> '\t' | "return" -> '\r'
+  | "backspace" -> '\b' | "formfeed" -> '\012' | s -> s.[0]
+
+type t = { src : string; file : string; mutable pos : int; mutable line : int; mutable col : int }
+
+let make ~file src = { src; file; pos = 0; line = 1; col = 1 }
+
+let eof r = r.pos >= String.length r.src
+let peek r = if eof r then '\000' else r.src.[r.pos]
+let peek2 r = if r.pos + 1 >= String.length r.src then '\000' else r.src.[r.pos + 1]
+
+let loc r = { file = r.file; line = r.line; col = r.col }
+
+let advance r =
+  if r.src.[r.pos] = '\n' then (r.line <- r.line + 1; r.col <- 1) else r.col <- r.col + 1;
+  r.pos <- r.pos + 1
+
+let next r = let c = peek r in advance r; c
+
+let rec skip_ws r =
+  if eof r then ()
+  else
+    let c = peek r in
+    if is_ws c then (advance r; skip_ws r)
+    else if c = ';' then (
+      while (not (eof r)) && peek r <> '\n' do advance r done;
+      skip_ws r)
+    else ()
+
+let read_token r =
+  let start = r.pos in
+  while (not (eof r)) && not (is_delim (peek r)) do advance r done;
+  String.sub r.src start (r.pos - start)
+
+let is_int_token s =
+  let s = if String.length s > 0 && (s.[0] = '-' || s.[0] = '+') then String.sub s 1 (String.length s - 1) else s in
+  String.length s > 0 && String.for_all is_digit s
+
+let is_hex_token s =
+  String.length s > 2 && s.[0] = '0' && (s.[1] = 'x' || s.[1] = 'X')
+  && String.for_all (fun c -> is_digit c || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) (String.sub s 2 (String.length s - 2))
+
+let is_float_token s =
+  let s = if String.length s > 0 && s.[0] = '-' then String.sub s 1 (String.length s - 1) else s in
+  match String.index_opt s '.' with
+  | None -> false
+  | Some i ->
+    let a = String.sub s 0 i and b = String.sub s (i + 1) (String.length s - i - 1) in
+    (String.length a = 0 || String.for_all is_digit a) && String.length b > 0 && String.for_all is_digit b
+
+let read_string r =
+  let l = loc r in
+  ignore (next r);
+  let buf = Buffer.create 16 in
+  let rec loop () =
+    if eof r then read_error l "unterminated string literal";
+    match next r with
+    | '"' -> ()
+    | '\\' ->
+      let e = next r in
+      Buffer.add_char buf
+        (match e with
+         | 'n' -> '\n' | 't' -> '\t' | 'r' -> '\r' | '\\' -> '\\' | '"' -> '"'
+         | 'b' -> '\b' | c -> c);
+      loop ()
+    | c -> Buffer.add_char buf c; loop ()
+  in
+  loop ();
+  Buffer.contents buf
+
+let read_char r =
+  let l = loc r in
+  ignore (next r);
+  let tok = read_token r in
+  if String.length tok = 0 then read_error l "empty character literal"
+  else Atom (l, Char (named_char tok))
+
+let atom_of_token l tok : form =
+  if tok = "nil" then Atom (l, Nil)
+  else if tok = "true" then Atom (l, Bool true)
+  else if tok = "false" then Atom (l, Bool false)
+  else if String.length tok > 0 && tok.[0] = ':' then Atom (l, Keyword (String.sub tok 1 (String.length tok - 1)))
+  else if is_hex_token tok then Atom (l, Int (int_of_string tok))
+  else if is_int_token tok then Atom (l, Int (int_of_string tok))
+  else if is_float_token tok then Atom (l, Float (float_of_string tok))
+  else Atom (l, Symbol tok)
+
+let rec read_form r : form =
+  skip_ws r;
+  if eof r then read_error (loc r) "unexpected end of input";
+  let l = loc r in
+  match peek r with
+  | '(' -> ignore (next r); List (l, read_seq r ')')
+  | '[' -> ignore (next r); Vector (l, Array.of_list (read_seq r ']'))
+  | '{' ->
+    ignore (next r);
+    let items = read_seq r '}' in
+    let rec pairs = function
+      | [] -> []
+      | [ _ ] -> read_error l "map literal requires an even number of forms"
+      | k :: v :: rest -> (k, v) :: pairs rest
+    in
+    Map (l, pairs items)
+  | '#' ->
+    if peek2 r = '{' then (
+      ignore (next r); ignore (next r);
+      Set (l, read_seq r '}'))
+    else if peek2 r = '_' then (
+      ignore (next r); ignore (next r);
+      ignore (read_form r);
+      read_form r)
+    else read_error l "unsupported # reader form"
+  | '\'' -> ignore (next r); Quote (l, read_form r)
+  | '^' ->
+    ignore (next r);
+    let m = read_form r in
+    let f = read_form r in
+    Meta (l, m, f)
+  | '@' ->
+    ignore (next r);
+    let f = read_form r in
+    List (l, [ Atom (l, Symbol "deref"); f ])
+  | '`' -> ignore (next r); List (l, [ Atom (l, Symbol "syntax-quote"); read_form r ])
+  | '~' ->
+    ignore (next r);
+    if peek r = '@' then (ignore (next r); List (l, [ Atom (l, Symbol "unquote-splicing"); read_form r ]))
+    else List (l, [ Atom (l, Symbol "unquote"); read_form r ])
+  | '"' -> Atom (l, Str (read_string r))
+  | '\\' -> read_char r
+  | ')' | ']' | '}' -> read_error l (Printf.sprintf "unmatched delimiter %c" (peek r))
+
+  | _ -> atom_of_token l (read_token r)
+
+and read_seq r close : form list =
+  skip_ws r;
+  if eof r then read_error (loc r) (Printf.sprintf "expected %c, got end of input" close);
+  if peek r = close then (ignore (next r); [])
+  else
+    let f = read_form r in
+    f :: read_seq r close
+
+let read_file ~file src : form list =
+  let r = make ~file src in
+  let rec go acc =
+    skip_ws r;
+    if eof r then List.rev acc
+    else go (read_form r :: acc)
+  in
+  go []

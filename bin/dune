@@ -1,0 +1,4 @@
+(executable
+ (name lg)
+ (modules lg)
+ (libraries lgc))

@@ -1,0 +1,34 @@
+(ns hello
+  (:require [util :as u]))
+
+;; arithmetic + if/let
+(defn add ^(fn [int int] int) [a b]
+  (+ a b))
+
+;; higher order over a persistent vector
+(def squares (map (fn [x] (* x x)) [1 2 3 4 5]))
+
+;; map / keyword access
+(def person {:name "world" :age 30})
+
+;; a hygienic macro: it introduces `tmp` — that name can never capture a
+;; caller's `tmp` because syntax-quote renames it (see `swap!` style macros)
+(defmacro unless [c body]
+  `(if ~c nil ~body))
+
+;; println join via str
+(println "hello" (:name person) (add 20 22))
+(println "squares" squares)
+(println "fib-10" (u/fib 10))
+
+(let [x 1 y 2]
+  (println "let" (+ x y)))
+
+(unless false (println "unless works"))
+(if-let [v (get [7 8 9] 1)]
+  (println "if-let" v)
+  (println "if-let none"))
+
+(def counter (atom 0))
+(swap! counter inc)
+(println "atom" (deref counter))

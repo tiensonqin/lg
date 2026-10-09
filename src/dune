@@ -1,0 +1,9 @@
+(library
+ (name lgc)
+ (modules (:standard \ embed_gen)))
+
+(rule
+ (target embedded_runtime.ml)
+ (deps embed_gen.ml ../runtime/lg_rt.ml)
+ (action
+  (run ocaml embed_gen.ml %{target} ../runtime/lg_rt.ml)))
