@@ -49,7 +49,7 @@ Dispatched in `infer_call` (src/infer.ml). `(a)` unless noted.
 | `do` | a | |
 | `let` | a | sequential (later bindings see earlier); binding forms may destructure (§1.2.1) |
 | `fn` | b | `(fn name [ps] …)` parses a name but never binds it — `(fn f [x] (f x))` fails `unresolved symbol f`. Bind it (self-recursion) or reject the name. |
-| `when` | b | today `(when c body)` requires body: `unit` — `(when true 1)` is a type error (`int vs unit`) because the else is `nil`. Either spec it as effects-only or return `option`. |
+| `when` | a | returns `any` — the body value or `nil` (dyn punning, same as 1-branch `if`). |
 | `and`, `or` | b | strict-`bool` variadic, result `bool` — not Clojure's value-returning `and`/`or`. Spec or redesign. |
 | `cond` | b | pairs plus `:else`; a non-matching fallthrough yields `unit`, so a `cond` returning a value without `:else` is a type error. Spec. |
 | `->`, `->>` | a | special forms (not macros); insert first/last arg |
@@ -82,7 +82,7 @@ to `{:kw pat}` form — spec.
 |---|---|---|
 | file = module; name from path or `(ns name …)` | a | entry basename or explicit `ns`; `foo.bar` → `foo/bar.lg`, `foo_bar.lg`, `foo.bar.lg` search per `-I` root + requiring file's dir |
 | `(ns name (:require [ns] [ns :as a] …))` | a | `:require` is the only clause |
-| bare top-level `(:require …)` | b | design.md §2 says it's accepted; it actually parses as a keyword call and fails. Implement or fix the doc. |
+| bare top-level `(:require …)` | a | routed through `require_spec` + `scan_ns` — loads deps, registers aliases. |
 | `alias/f`, `full.ns/f` references | a | first `/` splits ns from name |
 | dep-first load order, transitive requires | a | |
 | all top-level defs public | a | until `.lgi` lands (v2 §2) — `.lgi` is additive, not breaking |
