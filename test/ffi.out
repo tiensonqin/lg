@@ -1,0 +1,4 @@
+abs: 7, strlen: 5
+cpu>=0: true
+counter: 41
+abs32: 32

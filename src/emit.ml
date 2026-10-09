@@ -188,6 +188,8 @@ and emit_call b ret ce args =
     (* box args into dyn when the callee's formal param is `any` *)
     let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
     buf_add b "("; emit_expr b ce;
+    (* zero-argument application: OCaml takes unit *)
+    if args = [] then buf_add b " ()";
     List.iteri
       (fun i a ->
         buf_add b " ";
@@ -908,6 +910,53 @@ and emit_builtin_value name =
   | "keys" -> "(fun m -> List.of_seq (Clj_core.Map.keys m))" | "vals" -> "(fun m -> List.of_seq (Clj_core.Map.vals m))"
   | _ -> "(fun _ -> failwith \"builtin as value: " ^ name ^ "\")"
 
+(* OCaml-side type spelling for `external` declarations (:ocaml). *)
+let rec ocaml_ty t =
+  match Typ.dimp t with
+  | TInt -> "int" | TFloat -> "float" | TBool -> "bool" | TChar -> "char"
+  | TString -> "string" | TUnit -> "unit" | TKeyword -> "Clj_core.Keyword.t"
+  | TSymbol -> "Clj_core.Symbol.t"
+  | TOption u -> paren_ty (ocaml_ty u) ^ " option"
+  | TVec u -> paren_ty (ocaml_ty u) ^ " Clj_core.Vec.t"
+  | TList u -> paren_ty (ocaml_ty u) ^ " Clj_core.List.t"
+  | TSet u -> paren_ty (ocaml_ty u) ^ " Clj_core.Set.t"
+  | TMap (k, v) -> "(" ^ ocaml_ty k ^ ", " ^ ocaml_ty v ^ ") Clj_core.Map.t"
+  | TAtom u -> paren_ty (ocaml_ty u) ^ " Clj_core.Atom.t"
+  | TCon (n, []) -> munge n
+  | TFun (a, r) ->
+    "(" ^ String.concat " -> " (List.map ocaml_ty a @ [ ocaml_ty r ]) ^ ")"
+  | t -> failwith ("emit: type has no OCaml FFI mapping: " ^ Typ.string_of_lg_ty t)
+
+and paren_ty s = if String.contains s ' ' then "(" ^ s ^ ")" else s
+
+(* ctypes type spelling for :native bindings. *)
+let ctypes_ty t =
+  match Typ.dimp t with
+  | TInt -> "Ctypes.int" | TFloat -> "Ctypes.double" | TBool -> "Ctypes.bool"
+  | TChar -> "Ctypes.char" | TString -> "Ctypes.string"
+  | TUnit -> "Ctypes.void"
+  | TOption TString -> "Ctypes.string_opt"
+  | TOption (TCon _) -> "Ctypes.(ptr_opt void)"
+  | TCon (_, []) -> "Ctypes.(ptr void)"
+  | t -> failwith ("emit: type has no ctypes mapping: " ^ Typ.string_of_lg_ty t)
+
+let emit_ffi b _l name args ret sel lib =
+  match sel with
+  | FOcaml stub ->
+    let dom = match args with [] -> "unit" | _ -> String.concat " -> " (List.map ocaml_ty args) in
+    buf_add b (Printf.sprintf "external %s : %s -> %s = %S
+" (munge name) dom (ocaml_ty ret) stub)
+  | FNative sym ->
+    let sig_s = String.concat " @-> " (List.map ctypes_ty args @ [ "Ctypes.returning " ^ ctypes_ty ret ]) in
+    let call = Printf.sprintf "Foreign.foreign %S (Ctypes.(%s))" sym sig_s in
+    let rhs =
+      match lib with
+      | None -> call
+      | Some p -> Printf.sprintf "let lib = Dl.dlopen ~filename:%S ~flags:Dl.[RTLD_NOW] in Foreign.foreign ~from:lib %S (Ctypes.(%s))" p sym sig_s
+    in
+    buf_add b (Printf.sprintf "let %s = %s
+" (munge name) rhs)
+
 let emit_topdef b (d : topdef) =
   buf_add b "let ";
   (match d.tmode with Local -> buf_add b "(* @local *) " | Owned -> buf_add b "(* @owned *) " | Shared -> ());
@@ -936,15 +985,21 @@ let arity_root n =
 let emit_def_group b ds =
   match ds with
   | [] -> ()
-  | [ d ] -> emit_topdef b d
+  | [ `Def d ] -> emit_topdef b d
+  | [ `Extern (_l, n) ] -> buf_add b ("type " ^ munge n ^ "
+")
+  | [ `Ffi (_l, n, a, r, sel, lib) ] -> emit_ffi b _l n a r sel lib
   | ds ->
     buf_add b "let rec ";
     List.iteri
       (fun i d ->
-        if i > 0 then buf_add b " and ";
-        buf_add b (munge d.tname);
-        buf_add b " = ";
-        emit_expr b d.texpr)
+        match d with
+        | `Def d ->
+          if i > 0 then buf_add b " and ";
+          buf_add b (munge d.tname);
+          buf_add b " = ";
+          emit_expr b d.texpr
+        | _ -> assert false)
       ds;
     buf_add b "\n"
 
@@ -953,18 +1008,20 @@ let emit_module b (m : modl) =
   buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");
   let rec groups acc = function
     | [] -> List.rev acc
-    | d :: rest ->
+    | TDef d :: rest ->
       (match arity_root d.tname with
        | Some root ->
          let rec take acc2 = function
-           | d2 :: tl when arity_root d2.tname = Some root -> take (d2 :: acc2) tl
+           | TDef d2 :: tl when arity_root d2.tname = Some root -> take (d2 :: acc2) tl
            | tl -> (List.rev acc2, tl)
          in
          let same, rest' = take [] rest in
-         groups ((d :: same) :: acc) rest'
-       | None -> groups ([ d ] :: acc) rest)
+         groups ((List.map (fun x -> `Def x) (d :: same)) :: acc) rest'
+       | None -> groups ([ `Def d ] :: acc) rest)
+    | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
+    | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
   in
-  List.iter (emit_def_group b) (groups [] m.defs);
+  List.iter (emit_def_group b) (groups [] m.tops);
   List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects;
   buf_add b "end\n\n"
 

@@ -1,0 +1,2 @@
+(ns ffimod (:require [_ffilib :as f]))
+(println (str "cross: " (f/hdl-read (f/hdl-new 9))))

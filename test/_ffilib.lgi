@@ -1,0 +1,4 @@
+;; ffimod_lib.lgi — interface; defs not listed are private
+(extern-type hdl)
+(ffi hdl-new (fn [int] hdl))
+(ffi hdl-read (fn [hdl] int))

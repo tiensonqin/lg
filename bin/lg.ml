@@ -74,10 +74,16 @@ let () =
              if !backend = "oxcaml" then
                Printf.eprintf "lg: oxcaml backend — building %s requires an OxCaml-capable ocamlfind (flambda2 toolchain); emitting annotated source anyway
 %!" out_ml;
+             let pkgs =
+               if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
+                 "clj-core,rrbvec,ctypes.foreign"
+               else "clj-core,rrbvec"
+             in
+             let extra = try Sys.getenv "LG_EXTRA_LINK" with Not_found -> "" in
              let cmdline =
-               Printf.sprintf "ocamlfind ocamlopt -package clj-core,rrbvec -linkpkg %s -o %s 2>/dev/null || ocamlfind ocamlc -package clj-core,rrbvec -linkpkg %s -o %s"
-                 (Filename.quote out_ml) (Filename.quote exe)
-                 (Filename.quote out_ml) (Filename.quote exe)
+               Printf.sprintf "ocamlfind ocamlopt -package %s -linkpkg %s %s -o %s 2>/dev/null || ocamlfind ocamlc -package %s -linkpkg %s %s -o %s"
+                 pkgs (Filename.quote out_ml) extra (Filename.quote exe)
+                 pkgs (Filename.quote out_ml) extra (Filename.quote exe)
              in
              let code = Sys.command cmdline in
              if code <> 0 then (Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!"; raise (Exit code))

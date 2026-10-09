@@ -160,7 +160,7 @@ let analyze_topdef (d : topdef) : unit =
   ignore (owned_hint ())
 
 let analyze_module (m : modl) : unit =
-  List.iter analyze_topdef m.defs;
+  List.iter (function TDef d -> analyze_topdef d | _ -> ()) m.tops;
   List.iter (analyze_expr ~region_ret:true) m.effects
 
 (* ---- reporting ---- *)
@@ -180,6 +180,6 @@ let count_modes m =
      | EMatchOpt (s, _, t, x) -> walk s; walk t; walk x
      | _ -> ())
   in
-  List.iter (fun d -> walk d.texpr) m.defs;
+  List.iter (function TDef d -> walk d.texpr | _ -> ()) m.tops;
   List.iter walk m.effects;
   (!local, !owned, !shared)

@@ -84,14 +84,25 @@ type topdef = {
   mutable timplicit : ty option;  (* ^{implicit T} on the def name *)
 }
 
+(* FFI selector: OCaml `external` stub or ctypes dynamic symbol. *)
+type ffi_sel = FOcaml of string | FNative of string
+
+(* A top-level module item, in source order. *)
+type top =
+  | TDef of topdef
+  | TExtern of loc * string  (* (extern-type name) — opaque handle type *)
+  | TFfi of loc * string * ty list * ty * ffi_sel * string option
+    (* (ffi name [args] ret {selector [:library path]}) *)
+
 type modl = {
   mname : string;          (* lg2 namespace, e.g. "foo.util" *)
   ocaml_name : string;     (* emitted OCaml module, e.g. "Foo_util" *)
   mpath : string;
   mutable requires : (string * string) list;  (* alias -> lg2 ns *)
-  mutable defs : topdef list;
+  mutable tops : top list;
   mutable effects : expr list;                (* top-level non-def forms, run at init *)
   iface_only : bool;                          (* satisfied by an .lgi with no .lg *)
+  mutable uses_ctypes : bool;                 (* any :native ffi declaration *)
 }
 
 (* chainable update ops for FBIP builder lowering (emit.ml) *)

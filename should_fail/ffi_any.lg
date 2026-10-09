@@ -1,0 +1,2 @@
+;; any cannot cross the FFI boundary — dyn is an internal repr
+(ffi bad [:any] :int {:native "abs"})

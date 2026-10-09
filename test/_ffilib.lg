@@ -1,0 +1,4 @@
+;; ffi inside a required module; consumer uses it qualified
+(extern-type hdl)
+(ffi hdl-new [:int] :hdl {:ocaml "lg_counter_new"})
+(ffi hdl-read [:hdl] :int {:ocaml "lg_counter_read"})

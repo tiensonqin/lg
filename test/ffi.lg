@@ -1,0 +1,20 @@
+;; ffi: :ocaml emits typed `external` decls, :native loads C symbols via ctypes.
+
+;; :native — resolves symbols in the current process image (libc)
+(ffi c-abs [:int] :int {:native "abs"})
+(ffi c-strlen [:string] :int {:native "strlen"})
+(println (str "abs: " (c-abs -7) ", strlen: " (c-strlen "hello")))
+
+;; :ocaml — typed external against an OCaml-runtime symbol (no stub needed)
+(ffi cpu-time [] :float {:ocaml "caml_sys_time"})
+(println (str "cpu>=0: " (>= (cpu-time) 0.0)))
+
+;; extern-type — opaque handle crossing C (stub in test/ffi_stub.c)
+(extern-type counter)
+(ffi make-counter [:int] :counter {:ocaml "lg_counter_new"})
+(ffi read-counter [:counter] :int {:ocaml "lg_counter_read"})
+(println (str "counter: " (read-counter (make-counter 41))))
+
+;; an ffi fn is a first-class typed value — usable like any function
+(def abs32 (fn [^int x] (c-abs x)))
+(println (str "abs32: " (abs32 -32)))

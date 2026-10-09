@@ -84,6 +84,12 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
 - **`--strict` mode.** Heterogeneous literals require an explicit
   `^any`-family annotation — every `any` in a program is one the author
   wrote down.
+- **FFI (`ffi`, `extern-type`).** `(ffi f [:int] :int {:native "abs"})`
+  binds a C symbol through ctypes (`:library` for a shared object);
+  `{:ocaml "stub"}` emits a typed OCaml `external` for runtime stubs;
+  `(extern-type h)` declares an opaque handle type. Bindings are
+  first-class typed values that cross modules and `.lgi` exports.
+  `any` never crosses the boundary. See `docs/ffi.md`.
 
 ## Pipeline
 

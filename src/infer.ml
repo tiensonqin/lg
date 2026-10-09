@@ -29,6 +29,7 @@ type ctx = {
   mutable env : env;
   mutable implicits : (ty * (unit -> expr)) list;  (* implicit dicts, innermost first *)
   mimplicits : (string * ty) list ref;           (* exported implicit defs of this module *)
+  externs : (string, unit) Hashtbl.t;            (* (extern-type n) declared in this module *)
 
 }
 
@@ -312,8 +313,8 @@ let instantiate_builtin_ty name = Hashtbl.find builtin_table name ()
 let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
-  let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; defs = []; effects = []; iface_only = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref [] } in
+  let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; tops = []; effects = []; iface_only = false; uses_ctypes = false } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7 } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -322,8 +323,15 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
 and infer_top ctx f =
   match f with
   | List (l, Atom (_, Symbol "ns") :: rest) -> parse_ns ctx l rest
-  | List (_, Atom (_, Symbol "def") :: _) -> ctx.modl.defs <- ctx.modl.defs @ [ infer_def ctx f ]
-  | List (_, Atom (_, Symbol "defn") :: _) -> ctx.modl.defs <- ctx.modl.defs @ [ infer_defn ctx f ]
+  | List (_, Atom (_, Symbol "def") :: _) -> ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_def ctx f) ]
+  | List (_, Atom (_, Symbol "defn") :: _) -> ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_defn ctx f) ]
+  | List (l, Atom (_, Symbol "extern-type") :: [ Atom (_, Symbol n) ]) ->
+    (* declares an opaque foreign handle type for this module *)
+    if Hashtbl.mem ctx.externs n then type_error l ("duplicate extern-type " ^ n);
+    Hashtbl.replace ctx.externs n ();
+    ctx.modl.tops <- ctx.modl.tops @ [ TExtern (l, n) ]
+  | List (l, Atom (_, Symbol "ffi") :: _) ->
+    ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]
   | List (l, Atom (_, Symbol "defrecord") :: Atom (_, Symbol name) :: Vector (_, fields) :: _) ->
     (* (defrecord Point [x y]) — map-backed record: positional ctor
        `->Point` plus `Point?` predicate, fields keyed by same-name kw *)
@@ -354,7 +362,7 @@ and infer_top ctx f =
       List (l, [ Atom (l, Symbol "defn"); Atom (l, Symbol (name ^ "?"));
                  Vector (l, [| v_ty |]); pred_body ])
     in
-    ctx.modl.defs <- ctx.modl.defs @ [ infer_defn ctx ctor; infer_defn ctx pred ]
+    ctx.modl.tops <- ctx.modl.tops @ [ TDef (infer_defn ctx ctor); TDef (infer_defn ctx pred) ]
   | List (_, Atom (_, Symbol "defmacro") :: _) ->
     (try Macro.register_defmacro ctx.modl.mname f
      with Macro.Macro_error (l, msg) -> type_error l msg)
@@ -403,16 +411,19 @@ and parse_ns ctx l rest =
       clauses
   | _ -> type_error l "malformed ns form"
 
+and add_implicit ctx l name key =
+  ctx.mimplicits := (name, key) :: !(ctx.mimplicits);
+  ctx.implicits <-
+    (key, fun () -> mk l key (EGlobal (ctx.modl.ocaml_name, munge name, name)))
+    :: ctx.implicits
+
 and register_implicit ctx l name imp (top : topdef) =
   match imp with
   | None -> ()
   | Some key_ann ->
     let key = match key_ann with Some t -> t | None -> top.tsch.sty in
     top.timplicit <- Some key;
-    ctx.mimplicits := (name, key) :: !(ctx.mimplicits);
-    ctx.implicits <-
-      (key, fun () -> mk l key (EGlobal (ctx.modl.ocaml_name, munge name, name)))
-      :: ctx.implicits
+    add_implicit ctx l name key
 
 and infer_def ctx f =
   let l = atom_loc f in
@@ -534,10 +545,106 @@ and infer_defn ctx f =
        let alias_e = mk l first.texpr.ety (EGlobal (ctx.modl.ocaml_name, munge first.tname, first.tname)) in
        let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared; timplicit = None } in
        register_global ctx name alias.tsch false;
-       ctx.modl.defs <- ctx.modl.defs @ tops;
+       ctx.modl.tops <- ctx.modl.tops @ (List.map (fun t -> TDef t) tops);
        alias
      | _ -> type_error l "malformed defn body (want [params] body or ([params] body)+)")
   | _ -> type_error l "malformed defn"
+
+
+(* FFI: parse a keyword into a type. Scalars, (option <t>), collections,
+   declared extern-types; :fn<...> callbacks are not yet supported. *)
+and ffi_ty ctx l f : ty =
+  let rec kw k =
+    match String.index_opt k '<' with
+    | None ->
+      (match k with
+       | "int" -> TInt | "float" -> TFloat | "bool" -> TBool | "char" -> TChar
+       | "string" -> TString | "unit" -> TUnit | "keyword" -> TKeyword
+       | "symbol" -> TSymbol | "any" -> TAny | "nil" -> TUnit
+       | n when Hashtbl.mem ctx.externs n -> TCon (n, [])
+       | n -> type_error l ("unknown ffi type :" ^ n))
+    | Some i ->
+      let head = String.sub k 0 i in
+      let inner =
+        if k.[String.length k - 1] <> '>' then type_error l ("malformed ffi type :" ^ k)
+        else String.sub k (i + 1) (String.length k - i - 2)
+      in
+      let args = List.map kw (String.split_on_char ';' inner) in
+      (match head, args with
+       | "option", [ t ] -> TOption t
+       | "vec", [ t ] -> TVec t
+       | "list", [ t ] -> TList t
+       | "set", [ t ] -> TSet t
+       | "atom", [ t ] -> TAtom t
+       | "map", [ k2; v ] -> TMap (k2, v)
+       | "fn", _ -> type_error l "ffi :fn<...> callbacks are not yet supported"
+       | _ -> type_error l ("bad ffi type constructor :" ^ k))
+  in
+  match f with
+  | Atom (_, Keyword k) -> kw k
+  | _ -> type_error l "ffi expects a type keyword (:int, :option<int>, :reader, ...)"
+
+(* static check that [t] can appear in an ffi signature *)
+and ffi_check_closed l t =
+  match repr t with
+  | TVar _ -> type_error l "ffi signatures must be statically closed"
+  | TAny -> type_error l "any cannot cross the FFI boundary (dyn is an internal repr)"
+  | TImplicit _ -> type_error l "implicit params cannot cross the FFI boundary"
+  | TTuple _ -> type_error l "tuple has no FFI mapping"
+  | TList t | TVec t | TSet t | TAtom t | TOption t -> ffi_check_closed l t
+  | TMap (a, b) -> ffi_check_closed l a; ffi_check_closed l b
+  | TFun (a, r) -> List.iter (ffi_check_closed l) a; ffi_check_closed l r
+  | _ -> ()
+
+(* (ffi name [arg-tys] ret-ty {:ocaml "stub" | :native "sym" [:library p]}) *)
+and infer_ffi ctx l f : top =
+  match f with
+  | List (_, _ :: namef :: Vector (_, argfs) :: retf :: optfs) ->
+    let name, imp =
+      match namef with
+      | Atom (_, Symbol n) -> (n, None)
+      | Meta (_, _, Atom (_, Symbol n)) as mf -> (n, implicit_ann mf)
+      | _ -> type_error l "ffi requires a name"
+    in
+    let args = List.map (ffi_ty ctx l) (Array.to_list argfs) in
+    let ret = ffi_ty ctx l retf in
+    List.iter (ffi_check_closed l) args;
+    ffi_check_closed l ret;
+    (match args with [ TUnit ] -> type_error l "explicit :unit argument — use []" | _ -> ());
+    let sel, lib =
+      let sel = ref None and lib = ref None in
+      List.iter
+        (fun o ->
+          match o with
+          | Map (_, kvs) ->
+            List.iter
+              (fun (k, v) ->
+                match k, v with
+                | Atom (_, Keyword "ocaml"), Atom (_, Str s) -> sel := Some (FOcaml s)
+                | Atom (_, Keyword "native"), Atom (_, Str s) -> sel := Some (FNative s)
+                | Atom (_, Keyword "js"), _ ->
+                  type_error l "ffi :js backend needs the melange emit — not yet implemented"
+                | Atom (_, Keyword "library"), Atom (_, Str s) -> lib := Some s
+                | _ -> type_error l "unsupported ffi option (want :ocaml/:native \"sym\", :library \"path\")")
+              kvs
+          | _ -> type_error l "ffi options must be a literal map")
+        optfs;
+      (match !sel with
+       | None -> type_error l "ffi requires a :ocaml or :native selector"
+       | Some s -> (s, !lib))
+    in
+    (match sel with
+     | FOcaml _ ->
+       if List.length args > 5 then type_error l "ffi :ocaml supports at most 5 arguments";
+       if lib <> None then type_error l ":library does not apply to :ocaml ffi"
+     | FNative _ -> ctx.modl.uses_ctypes <- true);
+    let fty = TFun (args, ret) in
+    register_global ctx name (mono fty) false;
+    (match imp with
+     | Some key_ann -> add_implicit ctx l name (match key_ann with Some t -> t | None -> fty)
+     | None -> ());
+    TFfi (l, name, args, ret, sel, lib)
+  | _ -> type_error l "malformed ffi (want (ffi name [tys] ty {:ocaml|:native \"sym\"}))"
 
 and register_global ctx name sch variadic =
   let tbl =

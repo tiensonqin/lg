@@ -9,16 +9,23 @@ LG=./_build/default/bin/lg.exe
 mkdir -p .test-bin
 fail=0
 
+# ffi.lg links a C stub via LG_EXTRA_LINK (like a real OCaml-runtime binding)
+if [ -f test/ffi_stub.c ]; then
+  ocamlfind ocamlc -c test/ffi_stub.c -o .test-bin/ffi_stub.o 2>/dev/null || true
+fi
+
 for src in test/*.lg; do
   name=$(basename "$src" .lg)
   case "$name" in _*) continue;; esac
   out="test/$name.out"
   bin=".test-bin/$name"
+  link_extra=""
+  case "$name" in ffi*) [ -f .test-bin/ffi_stub.o ] && link_extra=".test-bin/ffi_stub.o";; esac
   if ! "$LG" check "$src" >/dev/null 2>&1; then
     echo "FAIL(check) $name"
     fail=1; continue
   fi
-  if ! "$LG" build "$src" -o "$bin" >/dev/null 2>&1; then
+  if ! LG_EXTRA_LINK="$link_extra" "$LG" build "$src" -o "$bin" >/dev/null 2>&1; then
     echo "FAIL(build) $name"
     fail=1; continue
   fi

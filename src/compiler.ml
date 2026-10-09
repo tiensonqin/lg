@@ -72,16 +72,22 @@ let lgi_of_module (m : Ast.modl) : string =
   Buffer.add_string b
     (Printf.sprintf ";; %s.lgi — interface; defs not listed are private\n" m.mname);
   List.iter
-    (fun (d : Ast.topdef) ->
-      let esc =
-        match Hashtbl.find_opt Modes.global_escapes (m.ocaml_name ^ "." ^ d.tname) with
-        | Some l -> " :escapes [" ^ String.concat " " (List.map string_of_bool l) ^ "]"
-        | None -> ""
-      in
-      let kw = match d.timplicit with Some _ -> "implicit" | None -> "def" in
-      Buffer.add_string b
-        (Printf.sprintf "(%s %s %s%s)\n" kw d.tname (Typ.string_of_lg_ty d.tsch.sty) esc))
-    m.defs;
+    (function
+      | Ast.TDef (d : Ast.topdef) ->
+        let esc =
+          match Hashtbl.find_opt Modes.global_escapes (m.ocaml_name ^ "." ^ d.tname) with
+          | Some l -> " :escapes [" ^ String.concat " " (List.map string_of_bool l) ^ "]"
+          | None -> ""
+        in
+        let kw = match d.timplicit with Some _ -> "implicit" | None -> "def" in
+        Buffer.add_string b
+          (Printf.sprintf "(%s %s %s%s)\n" kw d.tname (Typ.string_of_lg_ty d.tsch.sty) esc)
+      | Ast.TExtern (_, n) -> Buffer.add_string b (Printf.sprintf "(extern-type %s)\n" n)
+      | Ast.TFfi (_, n, args, ret, _, _) ->
+        Buffer.add_string b
+          (Printf.sprintf "(ffi %s %s)\n" n
+             (Typ.string_of_lg_ty (Typ.TFun (args, ret)))))
+    m.tops;
   Buffer.contents b
 
 let lgi_path file = Filename.remove_extension file ^ ".lgi"
@@ -101,7 +107,7 @@ let parse_lgi path : (string * Typ.scheme * bool list * bool) list =
     (fun f ->
       match f with
       | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol kw) :: Syntax.Atom (_, Syntax.Symbol n) :: tyf :: rest)
-        when kw = "def" || kw = "implicit" ->
+        when kw = "def" || kw = "implicit" || kw = "ffi" ->
         let t =
           try Infer.ty_of_form tyf
           with Typ.Type_error (l, msg) -> raise (Compile_error (l, "lgi: " ^ msg))
@@ -118,6 +124,7 @@ let parse_lgi path : (string * Typ.scheme * bool list * bool) list =
           go rest
         in
         Some (n, Typ.generalize [] t, esc, kw = "implicit")
+      | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol "extern-type") :: _) -> None
       | _ -> None)
     forms
 
@@ -193,7 +200,7 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
         with Typ.Type_error (l, msg) -> raise (Compile_error (l, msg))
       in
       Modes.analyze_module m;
-      List.iter (fun d -> Modes.record_escapes m.ocaml_name d) m.defs;
+      List.iter (function Ast.TDef d -> Modes.record_escapes m.ocaml_name d | _ -> ()) m.tops;
       (* an .lgi next to the .lg overrides the module's interface:
          narrows schemes, supplies mode signatures, and gates exports *)
       let lf = lgi_path file in
@@ -222,7 +229,8 @@ let compile_path ~(roots : string list) (path : string) : Ast.modl list =
         entries;
       order :=
         { Ast.mname = rn; ocaml_name = Infer.ocaml_mod_of_ns rn; mpath = lf;
-          requires = []; defs = []; effects = []; iface_only = true }
+          requires = []; tops = []; effects = []; iface_only = true;
+          uses_ctypes = false }
         :: !order
     end
   in
