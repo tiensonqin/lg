@@ -1,0 +1,19 @@
+(ns main (:require [dicts :as d :implicits true]))
+
+;; implicit params: trailing, marked ^{:implicit T}
+(defn show [x ^{:implicit (fn [int] string)} s] (str "show: " (s x)))
+(defn listen [^{:implicit int} port] (str "port " port))
+
+;; call sites never pass the dict — resolved from dicts.lg's implicits
+(println (show 42))        ;; picks d/int-show
+(println (listen))         ;; picks d/default-port
+
+;; explicit arg always wins
+(println (show 42 (fn [^int n] (str "manual:" n))))
+
+;; lexical shadowing: a let-bound implicit wins inside its scope
+(let [^{:implicit (fn [int] string)} s (fn [^int x] (str "#" x))]
+  (println (show 7)))
+
+;; qualified explicit use still works
+(println (d/int-show 9))

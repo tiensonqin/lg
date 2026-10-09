@@ -1,0 +1,4 @@
+;; dictionaries exported as implicits — consumers merge them with
+;; (:require [dicts :implicits true])
+(def ^{:implicit (fn [int] string)} int-show (fn [^int x] (str "int#" x)))
+(def ^{:implicit int} default-port 8080)

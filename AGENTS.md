@@ -2,7 +2,8 @@
 
 ## Project constraints
 
-- Code and comments must be written in English.
+- Code, comments, and documentation must be written in English
+  (docstrings, comments, *.md docs, commit messages, PR descriptions).
 - Solve root causes instead of adding workarounds.
 - Prefer simple designs over complex ones.
 

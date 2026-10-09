@@ -199,7 +199,7 @@ and emit_call b ret ce args =
 (* ---- printers for str/println/pr-str ---- *)
 and printer_call t e =
   let es = arg_str e in
-  match Typ.repr t with
+  match repr t with
   | TInt -> "(Lg_rt.str_int " ^ es ^ ")"
   | TFloat -> "(Lg_rt.str_float " ^ es ^ ")"
   | TBool -> "(Lg_rt.str_bool " ^ es ^ ")"
@@ -221,7 +221,7 @@ and printer_call t e =
   | _ -> "\"<val>\""
 and gen_printer t : string =
   let rec go t =
-    match Typ.repr t with
+    match repr t with
     | TInt -> "Lg_rt.str_int" | TFloat -> "Lg_rt.str_float" | TBool -> "Lg_rt.str_bool"
     | TChar -> "Lg_rt.str_char" | TString -> "Lg_rt.str_string" | TKeyword -> "Lg_rt.str_kw"
     | TSymbol -> "Lg_rt.str_sym" | TUnit -> "Lg_rt.str_unit"
@@ -241,7 +241,7 @@ and gen_printer t : string =
 
 (* ---- dyn boxing (TAny <-> Lg_rt.dyn) ---- *)
 and dyn_ctor t =
-  match Typ.repr t with
+  match repr t with
   | TInt -> "DInt" | TFloat -> "DFloat" | TBool -> "DBool" | TChar -> "DChar"
   | TString -> "DStr" | TKeyword -> "DKw" | TSymbol -> "DSym" | TUnit -> "DUnit"
   | TOption _ -> "DOpt" | TList _ -> "DList" | TVec _ -> "DVec"
@@ -249,7 +249,7 @@ and dyn_ctor t =
   | _ -> "DStr"
 
 and unbox_fn t =
-  match Typ.repr t with
+  match repr t with
   | TInt -> "Lg_rt.as_int" | TFloat -> "Lg_rt.as_float" | TBool -> "Lg_rt.as_bool"
   | TChar -> "Lg_rt.as_char" | TString -> "Lg_rt.as_string" | TKeyword -> "Lg_rt.as_kw"
   | TSymbol -> "Lg_rt.as_sym" | TUnit -> "Lg_rt.as_unit" | TOption _ -> "Lg_rt.as_opt"
@@ -259,7 +259,7 @@ and unbox_fn t =
 (* deep box: a homogeneous collection crossed into `any` is re-boxed
    element-wise so the OCaml type is the closed Lg_rt.dyn *)
 and box_deep ety es =
-  match Typ.repr ety with
+  match repr ety with
   | TVec el -> "(Lg_rt.DVec (Clj_core.Vec.map (fun x -> " ^ box_deep el "x" ^ ") " ^ es ^ "))"
   | TList el -> "(Lg_rt.DList (List.map (fun x -> " ^ box_deep el "x" ^ ") " ^ es ^ "))"
   | TSet el -> "(Lg_rt.DSet (Clj_core.Set.of_list (List.map (fun x -> " ^ box_deep el "x" ^ ") (Clj_core.Set.to_list " ^ es ^ "))))"
@@ -275,7 +275,7 @@ and box_of e = box_deep e.ety (arg_str e)
    the shape Map.get_in / assoc_in / update_in / select_keys on dyn maps take,
    and the payload of Lg_rt.DMap *)
 and nest_map_of ety es =
-  match Typ.repr ety with
+  match repr ety with
   | TMap (k, v) ->
     "(List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m " ^ box_deep k "k" ^ " " ^ box_nest v "v"
     ^ ") (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq " ^ es ^ ")))"
@@ -284,7 +284,7 @@ and nest_map_of ety es =
 
 (* a map value in a nest map: sub-maps are Nest, leaves are Leaf dyn *)
 and box_nest ety es =
-  match Typ.repr ety with
+  match repr ety with
   | TMap _ -> "(Clj_core.Map.Nest " ^ nest_map_of ety es ^ ")"
   | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> Clj_core.Map.Nest m | d -> Clj_core.Map.Leaf d)"
   | _ -> "(Clj_core.Map.Leaf " ^ box_deep ety es ^ ")"
@@ -301,9 +301,9 @@ and dyn_map_get mstr kdyn =
 and dyn_map_get_or dstr mstr kdyn =
   "(match Clj_core.Map.get " ^ mstr ^ " " ^ kdyn
   ^ " with Some (Clj_core.Map.Leaf d) -> d | Some (Clj_core.Map.Nest s) -> Lg_rt.DMap s | None -> " ^ dstr ^ ")"
-and is_any t = match Typ.repr t with TAny -> true | _ -> false
+and is_any t = match repr t with TAny -> true | _ -> false
 and as_dyn_list e =
-  match Typ.repr e.ety with
+  match repr e.ety with
   | TList el | TVec el | TSet el | TOption el ->
     if is_any el then as_list e
     else "(List.map (fun x -> Lg_rt." ^ dyn_ctor el ^ " x) " ^ as_list e ^ ")"
@@ -315,7 +315,7 @@ and emit_elem b elem_ty e =
 
 (* coll dispatch by static type *)
 and coll_kind t =
-  match Typ.repr t with
+  match repr t with
   | TVec _ -> `Vec | TList _ -> `List | TSet _ -> `Set | TMap _ -> `Map | TString -> `Str | _ -> `List
 
 (* the collection arg as an OCaml list expr *)
@@ -753,7 +753,7 @@ and emit_builtin_call b ret name args =
       | _ -> buf_add b ("(Clj_core.Vec.of_list (List.filter " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")))"))
    | "into" ->
      let src_items =
-       let el = match Typ.repr (t 0) with TVec x -> x | TList x -> x | TSet x -> x | _ -> TUnit in
+       let el = match repr (t 0) with TVec x -> x | TList x -> x | TSet x -> x | _ -> TUnit in
        if is_any el then as_dyn_list (List.nth args 1) else as_list (List.nth args 1)
      in
      (match coll with
@@ -791,7 +791,7 @@ and emit_builtin_call b ret name args =
    | "no-match" -> buf_add b "(Lg_rt.no_match ())"
    | "dyn-eq" -> buf_add b ("(" ^ a 0 ^ " = " ^ box_of (List.nth args 1) ^ ")")
    | "select-keys" ->
-     (match Typ.repr (t 0) with
+     (match repr (t 0) with
       | TMap (k, _) when is_any k ->
         (* already a nest map: keys are dyn — box the kw list *)
         buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ a 0
