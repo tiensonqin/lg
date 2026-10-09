@@ -120,6 +120,7 @@ let ty_of_form ?(tbl = Hashtbl.create 7) f : ty =
     | List (_, [ Atom (_, Symbol "set"); t ]) -> TSet (go t)
     | List (_, [ Atom (_, Symbol "atom"); t ]) -> TAtom (go t)
     | List (_, [ Atom (_, Symbol "option"); t ]) -> TOption (go t)
+    | List (_, [ Atom (_, Symbol "seq"); t ]) -> TSeq (go t)
     | List (_, [ Atom (_, Symbol "implicit"); t ]) -> TImplicit (go t)
     | List (_, [ Atom (_, Symbol "map"); k; v ]) -> TMap (go k, go v)
     | List (_, Atom (_, Symbol "tuple") :: ts) -> TTuple (List.map go ts)
@@ -227,6 +228,7 @@ let () =
   (* lists *)
   reg "list" (fun () -> let a = v () in f [ a ] (TList a));
   reg "cons" (fun () -> let a = v () in f [ a; TSeq a ] (TSeq a));
+  reg "tuple" (fun () -> f [ v () ] TUnit);  (* variadic; real typing in the special arm *)
   reg "concat" (fun () -> let a = v () in f [ TList a; TList a ] (TList a));
   reg "empty?" (fun () -> f [ v () ] TBool);
   reg "count" (fun () -> f [ v () ] TInt);
@@ -364,7 +366,7 @@ let is_special_builtin = function
   | "first" | "next" | "rest" | "seq" | "get" | "nth" | "conj" | "assoc"
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
   | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range"
-  | "take" | "drop" | "cons"
+  | "take" | "drop" | "cons" | "tuple"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
   | "str" | "println" | "print" | "pr-str" | "swap!"
   | "select-keys" | "update" | "get-in" | "assoc-in" | "comp" | "juxt"
@@ -624,7 +626,18 @@ and infer_defn ctx f =
        let saved = ctx.env and saved_imp = ctx.implicits in
        let self_v = fresh_var () in
        ctx.env <- (name, { vscheme = mono self_v; vkind = KGlobal (ctx.modl.ocaml_name, munge name); vvariadic = false }) :: ctx.env;
-       let fe = infer_fn ctx l (Some name) params body in
+       (* apply a `(fn [t1 ..] r)` annotation to the param binders BEFORE the
+          body is inferred, so `nth`/`conj`/`assoc` on an annotated param see
+          its concrete collection type instead of guessing `seq` *)
+       let hints =
+         match ty_ann with
+         | Some t ->
+           (match repr t with
+            | TFun (pts, _) -> List.map (fun t -> Some t) pts
+            | _ -> [])
+         | None -> []
+       in
+       let fe = infer_fn ~hints ctx l (Some name) params body in
        ctx.env <- saved; ctx.implicits <- saved_imp;
        unify l self_v fe.ety;
        (match Hashtbl.find_opt ctx.declared name with
@@ -898,7 +911,7 @@ and infer_fn ?(hints = []) ctx l name params body : expr =
   ctx.env <- saved; ctx.implicits <- saved_imp;
   let body_e =
     match body_es with
-    | [] -> mk l TUnit ENil
+    | [] -> mk l TAny ENil
     | [ e ] -> e
     | es -> mk l (last es).ety (EDo es)
   in
@@ -923,7 +936,7 @@ and infer_expr ctx f : expr =
      | Char c -> mk l TChar (EChar c)
      | Str s -> mk l TString (EStr s)
      | Keyword k -> mk l TKeyword (EKeyword k)
-     | Nil -> mk l TUnit ENil
+     | Nil -> mk l TAny ENil
      | Symbol "None" -> mk l (TOption (fresh_var ())) (EOpt None)
      | Symbol s -> infer_symbol ctx l s)
   | Vector (l, items) ->
@@ -1048,7 +1061,7 @@ and quote_to_expr _l f : expr =
     | Atom (l, Str s) -> mk l TString (EStr s)
     | Atom (l, Keyword k) -> mk l TKeyword (EKeyword k)
     | Atom (l, Symbol s) -> mk l TSymbol (ESymbol s)
-    | Atom (l, Nil) -> mk l TUnit ENil
+    | Atom (l, Nil) -> mk l TAny ENil
     | Vector (l, items) ->
       let es = List.map go (Array.to_list items) in
       let elem = fresh_var () in
@@ -1399,7 +1412,7 @@ and infer_match ctx l scrut clauses =
        | Char c -> Some (mk al TChar (EChar c))
        | Str s2 -> Some (mk al TString (EStr s2))
        | Keyword k -> Some (mk al TKeyword (EKeyword k))
-       | Nil -> Some (mk al TUnit ENil)
+       | Nil -> Some (mk al TAny ENil)
        | _ -> None)
     | _ -> None
   in
@@ -2004,22 +2017,47 @@ and infer_special ctx l name ce arg_es =
     mk l TBool (ECall (ce, arg_es))
   | "get", [ c; k ] | "get", [ c; k; _ ] ->
     let ret =
-      with_coll c
-        (fun a -> unify l k TInt; a)
-        (fun a -> unify l k TInt; a)
-        (fun a -> unify l k a; a)  (* sets: (get s x) -> x or nil; value type = elem *)
-        (fun kk v -> unify l k kk; v)
-        (fun _ -> type_error l "get not supported")
+      (match repr c with
+       | TVar _ ->
+         (* unknown coll: route by key type — int keys index seqs,
+            anything else treats the coll as a map *)
+         let a = fresh_var () in
+         (match repr k with
+          | TInt -> unify l c (TSeq a); a
+          | kk -> unify l c (TMap (kk, a)); a)
+       | _ ->
+         with_coll c
+           (fun a -> unify l k TInt; a)
+           (fun a -> unify l k TInt; a)
+           (fun a -> unify l k a; a)  (* sets: (get s x) -> x or nil; value type = elem *)
+           (fun kk v -> unify l k kk; v)
+           (fun _ -> type_error l "get not supported"))
     in
     let ret = if List.length ty_args = 3 then (unify l ret (List.nth ty_args 2); ret) else TOption ret in
     mk l ret (ECall (ce, arg_es))
   | "nth", [ c; i ] | "nth", [ c; i; _ ] ->
-    unify l i TInt;
-    let ret =
-      with_coll c (fun a -> a) (fun a -> a) (fun a -> a) (fun _ _ -> type_error l "nth not supported on map") (fun _ -> TChar)
-    in
-    let ret = if List.length ty_args = 3 then (unify l ret (List.nth ty_args 2); ret) else ret in
-    mk l ret (ECall (ce, arg_es))
+    (match repr c with
+     | TTuple ts ->
+       (match (List.nth arg_es 1).desc with
+        | EInt idx when idx >= 0 && idx < List.length ts ->
+          mk l (List.nth ts idx) (ECall (ce, arg_es))
+        | EInt _ -> type_error l "tuple index out of range"
+        | _ -> type_error l "tuple nth needs a literal int index")
+     | _ ->
+       unify l i TInt;
+       let ret =
+         with_coll c (fun a -> a) (fun a -> a) (fun a -> a) (fun _ _ -> type_error l "nth not supported on map") (fun _ -> TChar)
+       in
+       (* a `nil` default is a sentinel — it must not participate in unify *)
+       let ret =
+         if List.length ty_args = 3 then
+           (match (List.nth arg_es 2).desc with
+            | ENil -> ()
+            | _ -> unify l (List.nth ty_args 2) ret);
+         ret
+       in
+       mk l ret (ECall (ce, arg_es)))
+  | "tuple", xs -> mk l (TTuple xs) (ETuple arg_es)
   | "cons", [ x; c ] ->
     let a = fresh_var () in
     unify l x a;
@@ -2032,16 +2070,33 @@ and infer_special ctx l name ce arg_es =
     mk l (TSeq a) (ECall (ce, arg_es))
   | "conj", c :: xs ->
     let ret =
-      with_coll c
-        (fun a -> List.iter (unify l a) xs; TVec a)
-        (fun a -> List.iter (unify l a) xs; TList a)
-        (fun a -> List.iter (unify l a) xs; TSet a)
-        (fun kk v -> List.iter (fun x -> unify l x (TTuple [ kk; v ])) xs; TMap (kk, v))
-        (fun _ -> type_error l "conj not supported")
+      match repr c with
+      | TSeq a -> List.iter (unify l a) xs; TSeq a
+      | TVar _ ->
+        (* unknown coll: keep the var open so a later concrete arg can pick
+           vec/list/set; element types still get a shared unification var *)
+        let e = fresh_var () in
+        List.iter (unify l e) xs; c
+      | _ ->
+        with_coll c
+          (fun a -> List.iter (unify l a) xs; TVec a)
+          (fun a -> List.iter (unify l a) xs; TList a)
+          (fun a -> List.iter (unify l a) xs; TSet a)
+          (fun kk v -> List.iter (fun x -> unify l x (TTuple [ kk; v ])) xs; TMap (kk, v))
+          (fun _ -> type_error l "conj not supported")
     in
     mk l ret (ECall (ce, arg_es))
   | "assoc", c :: rest ->
     let ret =
+      match repr c with
+      | TVar _ ->
+        (* unknown coll: keep the var open (vec/map decided by a later
+           concrete use); check arity only so recursion accumulators work *)
+        (match rest with
+         | _ :: _ :: _ when List.length rest mod 2 = 0 -> ()
+         | _ -> type_error l "assoc requires k/v pairs");
+        c
+      | _ ->
       with_coll c
         (fun a ->
           (match rest with
@@ -2325,17 +2380,10 @@ and infer_special ctx l name ce arg_es =
   | "subs", [ _; _ ] | "subs", [ _; _; _ ] -> mk l TString (ECall (ce, arg_es))
   | "join", [ _ ] | "join", [ _; _ ] -> mk l TString (ECall (ce, arg_es))
   | ("str" | "println" | "print" | "pr-str"), _ ->
-    (* a bare binder (ELocal) whose type is still free gets marked `any`:
-       nothing else will constrain it, and the dyn-at-boundary contract
-       lets call sites box literals for it. Non-binder args (calls, lets)
-       keep their inferred type — unifying a free application-result var
-       with `any` would poison it before a signature can pin it down. *)
-    List.iter
-      (fun e ->
-        (match e.desc with
-         | ELocal b -> (match repr b.bty with TVar _ -> unify l b.bty TAny | _ -> ())
-         | _ -> ()))
-      arg_es;
+    (* args are left un-unified: a binder that nothing else pins keeps its
+       real type, and one that stays free becomes a scheme var — emit's
+       repr maps it to `any`, so the printed signature stays honest and
+       call sites still box via the stored-signature conv. *)
     let ret = if name = "str" || name = "pr-str" then TString else TUnit in
     mk l ret (ECall (ce, arg_es))
   | "swap!", [ a; f ] ->

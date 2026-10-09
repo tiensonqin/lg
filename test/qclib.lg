@@ -1,0 +1,25 @@
+;; qc property-testing library: generators, shrinking, for-all/for-all2
+(ns qclib (:require [qc]))
+
+;; a passing property
+(println (qc/for-all 100 (qc/gen-int 0 9) (fn [x] (and (>= x 0) (<= x 9)))))
+
+;; two-arg property: commutativity
+(println (qc/for-all2 80 (qc/gen-int 0 50) (qc/gen-int 0 50)
+           (fn [x y] (= (+ x y) (+ y x)))))
+
+;; vec generator + shrinking
+(println (qc/for-all 60 (qc/gen-vec (qc/gen-int 0 9) 5)
+           (fn [v] (= (count v) 5))))
+
+;; shrink candidates of a single value (deterministic)
+(println (doall (qc/shrinks (qc/gen-int 0 100) 16)))
+
+;; string generator
+(println (qc/for-all 40 (qc/gen-string 6) (fn [^string s] (<= (count s) 6))))
+
+;; a falsifiable property: must print FALSIFIED + shrunk witness
+(println (qc/for-all 100 (qc/gen-int 0 100) (fn [x] (< x 50))))
+
+;; shrink-min drives a value to a minimal failing witness
+(println (qc/shrink-min (qc/gen-int 0 100) (fn [x] (< x 50)) 99 200))

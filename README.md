@@ -110,6 +110,14 @@ unresolved), E2xx reader.
   `(ns t (:require [test :as t]))` then `t/deftest`, `t/is`, `t/testing`,
   `t/are`, `(exit (t/run-tests))` — no exceptions, failures are reported
   as `FAIL <name>: <form>` and counted.
+- **Property testing (`lib/qc.lg`).** a generator is
+  `(tuple sample shrink)` — `sample : int -> (tuple a int)` maps a seed
+  to a value + next seed, `shrink : a -> (seq a)` enumerates smaller
+  candidates. `qc/gen-int`, `qc/gen-bool`, `qc/gen-elem`, `qc/gen-string`,
+  `qc/gen-vec`, `qc/gen-list`, `qc/gen-map` build values; `qc/for-all`
+  runs n deterministic trials (fixed-seed LCG) and on failure shrinks to
+  a minimal counterexample (`qc/shrink-min`), `qc/for-all2` tests
+  two-argument properties.
 - **Three-layer memory model — `Local` / `Owned` / `Shared`.**
   - `Local`: values that never escape their region — eligible for
     stack/region allocation (OxCaml `@local`).

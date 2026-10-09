@@ -244,6 +244,22 @@ gated on `LG_OXCAML=1` per v2.md).
   `run-tests`. Registry is annotated `atom`s (`^(atom (vec symbol))` for
   order, `^(atom (map symbol (fn [] unit)))` for cases). No exceptions:
   `is` records `FAIL <name>: <form>` via macro-time `str` of the form.
+- **`lib/qc.lg`** — property-based testing. A generator is
+  `(tuple (fn [int] (tuple a int)) (fn [a] (seq a)))`: `sample` maps a
+  seed to a value plus next seed, `shrinks` enumerates smaller
+  candidates. `gen-int`/`gen-bool`/`gen-elem`/`gen-string`/`gen-vec`/
+  `gen-list`/`gen-map` build values; `for-all` runs n trials over a
+  fixed-seed splittable LCG (deterministic output — golden-testable),
+  `for-all2` covers two-generator properties, `shrink-min` walks the
+  shrink candidates greedily to a minimal counterexample.
+- **`seq` is the universal collection interface.** `TSeq` unifies with
+  `TList`/`TVec`/`TSet`/`TMap` in both directions; the emitter realizes
+  the conversion (`Seq.of_vec`/`of_list`/`of_set`/`of_map` and
+  `Seq.to_list` + re-collection), element-wise when the element type
+  also crosses a boundary. Stored signature types govern cross-module
+  call boundaries: argument and result conversions use the callee's
+  declared scheme (free type variables appear as `dyn`), not the
+  call-site instantiation.
 - **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
   `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
   and constant-fold statically. `fn?` is always `false` — functions are

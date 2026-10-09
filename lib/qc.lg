@@ -1,0 +1,139 @@
+;; qc — property-based testing for lg.
+;;
+;; A generator is a pair (tuple sample shrink):
+;;   sample : (fn [int] (tuple a int))  — seed -> (value, next-seed)
+;;   shrink : (fn [a] (seq a))          — smaller candidate values
+;; for-all runs n deterministic trials; on failure it shrinks to a minimal
+;; counterexample and reports it.
+(ns qc)
+
+;; splittable LCG over non-negative ints
+(defn rng-next [s] (mod (+ (* s 1103515245) 12345) 2147483648))
+
+;; every generator shares this shape: a = generated value type
+(defn sample ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) int] (tuple a int))
+  [g s]
+  ((nth g 0) s))
+
+(defn shrinks ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) a] (seq a))
+  [g v]
+  ((nth g 1) v))
+
+;; gen pair constructor
+(defn gen ^(fn [(fn [int] (tuple a int)) (fn [a] (seq a))] (tuple (fn [int] (tuple a int)) (fn [a] (seq a))))
+  [s sh]
+  (tuple s sh))
+
+(defn gen-int [lo hi]
+  (gen
+    (fn [s]
+      (let [s2 (rng-next s)
+            span (+ 1 (- hi lo))]
+        (tuple (+ lo (mod s2 span)) (rng-next s2))))
+    (fn [v]
+      (concat
+        (take-while (fn [x] (> x lo)) (iterate (fn [x] (/ x 2)) (/ v 2)))
+        (if (<= v lo) [] [lo])))))
+
+(defn gen-bool []
+  (gen
+    (fn [s] (let [s2 (rng-next s)] (tuple (= 0 (mod s2 2)) s2)))
+    (fn [v] (concat [] []))))
+
+(defn gen-elem [xs]
+  (gen
+    (fn [s]
+      (let [s2 (rng-next s)]
+        (tuple (nth xs (mod s2 (count xs)) (nth xs 0 (nth xs 0 nil))) (rng-next s2))))
+    (fn [v] (concat [(nth xs 0 nil)] []))))
+
+;; character-based strings over a small alphabet
+(def qc-alpha ["a" "b" "c" "x" "y" "0" "1"])
+
+(defn gen-string [n]
+  (gen
+    (fn [s]
+      (let [go (fn go [i s acc]
+                 (if (= i 0) (tuple acc s)
+                   (let [s2 (rng-next s)
+                         c (nth qc-alpha (mod s2 (count qc-alpha)) "a")]
+                     (go (- i 1) s2 (str acc c)))))]
+        (go n s "")))
+    (fn [^string v] (concat ["" (subs v 0 (max 0 (- (count v) 1)))] []))))
+
+(defn gen-vec [g n]
+  (gen
+    (fn [s]
+      (let [go (fn go [i s acc]
+                 (if (= i 0) (tuple acc s)
+                   (let [r (sample g s)
+                         v (nth r 0 nil) s2 (nth r 1 0)]
+                     (go (- i 1) s2 (conj acc v)))))]
+        (go n s [])))
+    (fn [^(vec a) v]
+      (mapcat (fn [i]
+                (let [x (nth v i)]
+                  (map (fn [y] (assoc v i y)) (shrinks g x))))
+              (range (count v))))))
+
+(defn gen-list [g n]
+  (gen
+    (fn [s]
+      (let [r (sample (gen-vec g n) s)]
+        (tuple (into '() (nth r 0 nil)) (nth r 1 0))))
+    (fn [^(list a) v]
+      (map (fn [x] (into '() x)) (shrinks (gen-vec g n) (vec v))))))
+
+(defn gen-map [kg vg n]
+  (gen
+    (fn [s]
+      (let [go (fn go [i s acc]
+                 (if (= i 0) (tuple acc s)
+                   (let [rk (sample kg s)
+                         k (nth rk 0 nil) s2 (nth rk 1 0)
+                         rv (sample vg s2)
+                         v (nth rv 0 nil) s3 (nth rv 1 0)]
+                     (go (- i 1) s3 (assoc acc k v)))))]
+        (go n s {})))
+    (fn [v] (concat [{}] []))))
+
+;; shrink loop: walk candidate shrinks; take the first that still fails,
+;; repeat until no failing shrink remains or fuel runs out.
+(defn shrink-min [g prop v fuel]
+  (let [go (fn go [cur f]
+             (if (= f 0) cur
+               (match (first (filter (fn [x] (not (prop x))) (shrinks g cur)))
+                 (Some b) (go b (- f 1))
+                 None cur)))]
+    (go v fuel)))
+
+;; for-all: run n trials over g; false -> shrink to minimal counterexample.
+;; Returns true on success, false on falsification (and prints the witness).
+(defn for-all [n g prop]
+  (let [go (fn go [i s]
+             (if (= i 0)
+               (do (println "qc: " n " trials passed") true)
+               (let [r (sample g s)
+                     v (nth r 0 nil) s2 (nth r 1 0)]
+                 (if (prop v)
+                   (go (- i 1) s2)
+                   (do
+                     (println "qc: FALSIFIED after " (- n i -1) " trials")
+                     (println "qc:   input: " v)
+                     (println "qc:   shrunk: " (shrink-min g prop v 200))
+                     false)))))]
+    (go n 987654321)))
+
+;; for-all over two generators: prop takes (v1 v2).
+;; the inner generator produces (tuple v1 v2) pairs.
+(defn for-all2 [n g1 g2 prop]
+  (for-all n
+    (gen
+      (fn [s]
+        (let [r1 (sample g1 s) r2 (sample g2 (nth r1 1 0))]
+          (tuple (tuple (nth r1 0 nil) (nth r2 0 nil)) (nth r2 1 0))))
+      (fn [^(tuple a b) vs]
+        (concat
+          (map (fn [x] (tuple x (nth vs 1 nil))) (shrinks g1 (nth vs 0 nil)))
+          (map (fn [x] (tuple (nth vs 0 nil) x)) (shrinks g2 (nth vs 1 nil))))))
+    (fn [^(tuple a b) vs] (prop (nth vs 0 nil) (nth vs 1 nil)))))

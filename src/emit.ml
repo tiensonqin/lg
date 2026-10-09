@@ -50,6 +50,11 @@ let sym_expr s =
 (* current enclosing module — same-module globals emit unqualified *)
 let cur_mod = ref ""
 
+(* declared signature of every emitted defn, keyed "Mod/munged_name" —
+   emit_call consults it so conv boxes toward the callee's own boundary
+   (free scheme vars -> dyn) instead of the call-site instantiation. *)
+let sig_tbl : (string, ty) Hashtbl.t = Hashtbl.create 97
+
 (* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
 let cur_v : (string, string * int) Hashtbl.t = Hashtbl.create 16
 
@@ -69,7 +74,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | EStr s -> buf_add b (ocaml_str s)
   | EKeyword k -> buf_add b (kw_expr k)
   | ESymbol s -> buf_add b (sym_expr s)
-  | ENil -> buf_add b "()"
+  | ENil -> buf_add b (if is_any e.ety then "(Lg_rt.DUnit)" else "()")
   | ELocal bd -> buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid)
   | EGlobal (m, n, _) ->
     (match Hashtbl.find_opt cur_v (m ^ "/" ^ n) with
@@ -101,8 +106,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     if fn.params = [] && fn.variadic = None then buf_add b "() ";
     buf_add b "-> ";
     (match repr e.ety with
-     | TFun (_, r) when is_any r && not (is_any fn.body.ety) ->
-       buf_add b ("(Lg_rt." ^ dyn_ctor fn.body.ety ^ " ("); emit_expr b fn.body; buf_add b "))"
+     | TFun (_, r) -> buf_add b (conv r fn.body.ety (arg_str fn.body))
      | _ -> emit_expr b fn.body);
     buf_add b ")";
     (match fn.Ast.fself with
@@ -114,7 +118,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     emit_expr b c;
     if is_any c.ety then buf_add b ")" else ();
     buf_add b " then ";
-    emit_expr b t; buf_add b " else "; emit_expr b x; buf_add b ")"
+    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " else "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
   | EDo es ->
     (* every element but the last runs for effect only; the last is the
        do's value and must not be wrapped in ignore *)
@@ -153,7 +157,8 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     emit_expr b body;
     List.iter (fun _ -> buf_add b ")") pairs
   | ETuple es ->
-    buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; emit_expr b a) es; buf_add b ")"
+    let tys = match repr e.ety with TTuple ts -> ts | _ -> List.map (fun _ -> TAny) es in
+    buf_add b "("; List.iteri (fun i a -> if i > 0 then buf_add b ", "; buf_add b (conv (List.nth tys i) a.ety (arg_str a))) es; buf_add b ")"
   | EVecLit es ->
     let el = match repr e.ety with TVec a -> a | _ -> TAny in
     if !oxcaml && e.emode = Ast.Local then buf_add b "(stack_ ";
@@ -186,10 +191,10 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     if !oxcaml && e.emode = Ast.Local then buf_add b ")"
   | EDynVec (se', bd, t, x) ->
     buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DVec " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
-    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
   | EDynMap (se', bd, t, x) ->
     buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DMap " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
-    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
   | EVariant (se', cname, bs, t, x) ->
     let cq = ctor_qual cname in
     buf_add b "(match "; emit_expr b se';
@@ -197,7 +202,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | [] -> buf_add b (" with " ^ cq ^ " -> ")
      | [ b1 ] -> buf_add b (" with " ^ cq ^ " " ^ sanitize b1.bname ^ "__" ^ string_of_int b1.bid ^ " -> ")
      | _ -> buf_add b (" with " ^ cq ^ " (" ^ String.concat ", " (List.map (fun bb -> sanitize bb.bname ^ "__" ^ string_of_int bb.bid) bs) ^ ") -> "));
-    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+    buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
   | EOpt (Some e) -> buf_add b ("(Some " ^ arg_str e ^ ")")
   | EOpt None -> buf_add b "None"
   | EBox e -> buf_add b (box_deep e.ety (arg_str e))
@@ -208,11 +213,11 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
     if is_any src.ety then begin
       buf_add b "(match "; emit_expr b src; buf_add b " with Lg_rt.DOpt (Some ";
       buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-      buf_add b ") -> "; emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+      buf_add b ") -> "; buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
     end else begin
       buf_add b "(match "; emit_expr b src; buf_add b " with Some ";
       buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-      buf_add b " -> "; emit_expr b t; buf_add b " | None -> "; emit_expr b x; buf_add b ")"
+      buf_add b " -> "; buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " | None -> "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
     end
 
 and emit_args b es = List.iteri (fun i a -> if i > 0 then buf_add b "; "; emit_expr b a) es
@@ -224,19 +229,43 @@ and emit_call b ret ce args =
     let q, _ = Hashtbl.find cur_v (m ^ "/" ^ n) in
     buf_add b ("(" ^ ctor_qual q ^ " " ^ (if List.length args = 1 then arg_str (List.hd args) else "(" ^ String.concat ", " (List.map arg_str args) ^ ")") ^ ")")
   | _ ->
-    (* box args into dyn when the callee's formal param is `any` *)
-    let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
-    buf_add b "("; emit_expr b ce;
-    (* zero-argument application: OCaml takes unit *)
-    if args = [] then buf_add b " ()";
-    List.iteri
-      (fun i a ->
-        buf_add b " ";
-        if i < List.length pts && is_any (List.nth pts i) && not (is_any a.ety)
-        then buf_add b (box_of a)
-        else emit_expr b a)
-      args;
-    buf_add b ")";
+    (* box args into dyn when the callee's formal param is `any`. For an
+       EGlobal the conv must follow the callee's *stored* signature — its
+       free scheme vars emit as `dyn` — not the call-site instantiation
+       (which binds those vars to the argument's concrete type and would
+       emit an identity where a box is needed). The same applies to the
+       call's result: its runtime type is the stored return with vars at
+       dyn, so wrap the call in conv from stored-ret to the expected type. *)
+    (match ce.desc with
+     | EGlobal (m, n, _) when Hashtbl.mem sig_tbl (m ^ "/" ^ n) ->
+       let pts, sret =
+         (match repr (Hashtbl.find sig_tbl (m ^ "/" ^ n)) with
+          | TFun (ts, r) -> (ts, r)
+          | _ -> ([], TAny))
+       in
+       let c = Buffer.create 64 in
+       buf_add c "("; emit_expr c ce;
+       if args = [] then buf_add c " ()";
+       List.iteri
+         (fun i a ->
+           buf_add c " ";
+           let p = if i < List.length pts then List.nth pts i else TAny in
+           buf_add c (conv p a.ety (arg_str a)))
+         args;
+       buf_add c ")";
+       buf_add b (conv ret sret (Buffer.contents c))
+     | _ ->
+       let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
+       buf_add b "("; emit_expr b ce;
+       (* zero-argument application: OCaml takes unit *)
+       if args = [] then buf_add b " ()";
+       List.iteri
+         (fun i a ->
+           buf_add b " ";
+           let p = if i < List.length pts then List.nth pts i else TAny in
+           buf_add b (conv p a.ety (arg_str a)))
+         args;
+       buf_add b ")");
   ignore ret
 
 (* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
@@ -316,9 +345,9 @@ and box_deep ety es =
     let vs = List.mapi (fun i _ -> "t" ^ string_of_int i) ts in
     "(let (" ^ String.concat ", " vs ^ ") = " ^ es ^ " in Lg_rt.DVec (Clj_core.Vec.of_list ["
     ^ String.concat "; " (List.map2 (fun v ty -> box_deep ty v) vs ts) ^ "]))"
-  | TFun _ -> "(Lg_rt.DStr \"<fn>\")"
+  | TFun _ -> "(ignore (" ^ es ^ "); Lg_rt.DStr \"<fn>\")"
   | TAny -> es
-  | TUnit -> "(Lg_rt.DUnit)"
+  | TUnit -> "(ignore (" ^ es ^ "); Lg_rt.DUnit)"
   | _ -> "(Lg_rt." ^ dyn_ctor ety ^ " " ^ es ^ ")"
 
 and box_of e = box_deep e.ety (arg_str e)
@@ -365,13 +394,63 @@ and as_dyn_list e =
    when the target type is `any`, a dyn is unboxed when the target type is
    concrete *)
 and conv ty src s =
-  if is_any ty && not (is_any src) then box_deep src s
-  else if (not (is_any ty)) && is_any src then "(" ^ unbox_fn ty ^ " " ^ s ^ ")"
-  else s
+  let p = repr ty and a = repr src in
+  (match p, a with
+   | TFun (pts, pr), TFun (ats, ar) ->
+     (* eta-wrap a function crossing a dyn boundary: contravariant params,
+        covariant result *)
+     let vs = List.mapi (fun i _ -> "cv" ^ string_of_int i ^ "_" ^ string_of_int (fresh_uid ())) pts in
+     let args = List.mapi (fun i v ->
+       let pt = List.nth pts i in
+       let at = try List.nth ats i with _ -> TAny in
+       conv at pt v) vs in
+     "(fun " ^ (if vs = [] then "()" else String.concat " " vs) ^ " -> "
+     ^ conv pr ar ("(" ^ s ^ (if args = [] then " ()" else " " ^ String.concat " " args) ^ ")") ^ ")"
+   | TTuple ps, TTuple as_ when List.length ps = List.length as_ ->
+     let vs = List.mapi (fun i _ -> "cv" ^ string_of_int i ^ "_" ^ string_of_int (fresh_uid ())) ps in
+     "(let (" ^ String.concat ", " vs ^ ") = " ^ s ^ " in ("
+     ^ String.concat ", " (List.map2 (fun v (pt, at) -> conv pt at v) vs (List.combine ps as_)) ^ "))"
+   | TOption pe, TOption ae -> "(match " ^ s ^ " with Some x -> Some (" ^ conv pe ae "x" ^ ") | None -> None)"
+   | TVec pe, TVec ae -> "(Clj_core.Vec.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
+   | TList pe, TList ae -> "(List.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
+   | TSeq pe, TSeq ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") " ^ s ^ ")"
+   | TMap (pk, pv), TMap (ak, av) ->
+     "(Clj_core.Map.of_list (List.map (fun (k, v) -> (" ^ conv pk ak "k" ^ ", " ^ conv pv av "v" ^ ")) (Clj_core.Map.to_list " ^ s ^ ")))"
+   | TSet pe, TSet ae -> "(Clj_core.Set.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Set.to_list " ^ s ^ ")))"
+   (* seq is the universal collection interface: every concrete coll
+      converts to a seq, and a seq realizes into a concrete coll *)
+   | TSeq pe, TList ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_list " ^ s ^ "))"
+   | TSeq pe, TVec ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_vec " ^ s ^ "))"
+   | TSeq pe, TSet ae -> "(Clj_core.Seq.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.of_set " ^ s ^ "))"
+   | TSeq pe, TMap (ak, av) -> "(Clj_core.Seq.map (fun x -> " ^ conv pe (TTuple [ ak; av ]) "x" ^ ") (Clj_core.Seq.of_map " ^ s ^ "))"
+   | TList pe, TSeq ae -> "(List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ "))"
+   | TVec pe, TSeq ae -> "(Clj_core.Vec.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
+   | TSet pe, TSeq ae -> "(Clj_core.Set.of_list (List.map (fun x -> " ^ conv pe ae "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
+   | TMap (pk, pv), TSeq (TTuple [ ak; av ]) ->
+     "(Clj_core.Map.of_list (List.map (fun x -> " ^ conv (TTuple [ pk; pv ]) (TTuple [ ak; av ]) "x" ^ ") (Clj_core.Seq.to_list " ^ s ^ ")))"
+   | TMap (_, _), TSeq _ -> "(Clj_core.Map.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
+   (* unbox a dyn into a structured target: element-wise conversion *)
+   | TTuple ps, TAny ->
+     "(match " ^ s ^ " with Lg_rt.DVec v -> ("
+     ^ String.concat ", " (List.mapi (fun i pt ->
+        conv pt TAny ("(match Clj_core.Vec.nth_opt v " ^ string_of_int i
+        ^ " with Some x -> x | None -> Lg_rt.DUnit)")) ps)
+     ^ ") | _ -> (failwith \"dyn is not a tuple\"))"
+   | TOption pe, TAny -> "(match " ^ s ^ " with Lg_rt.DOpt o -> (match o with Some x -> Some (" ^ conv pe TAny "x" ^ ") | None -> None) | _ -> (failwith \"dyn is not an option\"))"
+   | TVec pe, TAny -> "(Clj_core.Vec.map (fun x -> " ^ conv pe TAny "x" ^ ") (Lg_rt.as_vec " ^ s ^ "))"
+   | TList pe, TAny -> "(List.map (fun x -> " ^ conv pe TAny "x" ^ ") (Lg_rt.as_list " ^ s ^ "))"
+   | TSeq pe, TAny -> "(Clj_core.Seq.map (fun x -> " ^ conv pe TAny "x" ^ ") (Lg_rt.as_seq " ^ s ^ "))"
+   | TSet pe, TAny -> "(Clj_core.Set.of_list (List.map (fun x -> " ^ conv pe TAny "x" ^ ") (Clj_core.Set.to_list (Lg_rt.as_set " ^ s ^ "))))"
+   | TMap (pk, pv), TAny ->
+     "(Clj_core.Map.of_list (List.map (fun (k, v) -> (" ^ conv pk TAny "k" ^ ", " ^ conv pv TAny "v" ^ ")) (Clj_core.Map.to_list (Lg_rt.as_map " ^ s ^ "))))"
+   | _ ->
+     if is_any ty && not (is_any src) then box_deep src s
+     else if (not (is_any ty)) && is_any src then "(" ^ unbox_fn ty ^ " " ^ s ^ ")"
+     else s)
 
-(* emit an element expr, boxing it into dyn when the collection is hetero *)
-and emit_elem b elem_ty e =
-  if is_any elem_ty && not (is_any e.ety) then buf_add b (box_of e) else emit_expr b e
+(* emit an element expr, converting it to the joined element type —
+   dyn boxing plus coll<->seq realization *)
+and emit_elem b elem_ty e = buf_add b (conv elem_ty e.ety (arg_str e))
 
 (* coll dispatch by static type *)
 and coll_kind t =
@@ -871,7 +950,13 @@ and emit_builtin_call b ret name args =
         else buf_add b ("(Clj_core.Seq.nth_opt " ^ a 0 ^ " " ^ a 1 ^ ")")
       | `Str -> buf_add b "(failwith \"get on string\")")
    | "nth" ->
-     (match coll with
+     (match repr (t 0) with
+      | TTuple ts ->
+        let idx = match (List.nth args 1).desc with EInt i -> i | _ -> 0 in
+        let names = List.mapi (fun i _ -> "__t" ^ string_of_int i) ts in
+        buf_add b ("(let (" ^ String.concat "," names ^ ") = " ^ a 0 ^ " in " ^ List.nth names idx ^ ")")
+      | _ ->
+      (match coll with
       | `Vec ->
         if List.length args = 3 then buf_add b ("(match Clj_core.Vec.nth_opt " ^ a 0 ^ " " ^ a 1 ^ " with Some v -> v | None -> " ^ a 2 ^ ")")
         else buf_add b ("(Clj_core.Vec.nth " ^ a 0 ^ " " ^ a 1 ^ ")")
@@ -884,7 +969,7 @@ and emit_builtin_call b ret name args =
       | `Seq ->
         if List.length args = 3 then buf_add b ("(match Clj_core.Seq.nth_opt " ^ a 0 ^ " " ^ a 1 ^ " with Some v -> v | None -> " ^ a 2 ^ ")")
         else buf_add b ("(Clj_core.Seq.nth " ^ a 0 ^ " " ^ a 1 ^ ")")
-      | _ -> buf_add b "(failwith \"nth\")")
+      | _ -> buf_add b "(failwith \"nth\")"))
    | "conj" ->
      let elem_ty = match repr (t 0) with TVec el -> el | TList el -> el | TSet el -> el | _ -> TUnit in
      let arg i = conv elem_ty (t i) (a i) in
@@ -956,8 +1041,12 @@ and emit_builtin_call b ret name args =
         if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
         else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")"))
    | "vec" -> buf_add b ("(Clj_core.Vec.of_list " ^ as_list (List.nth args 0) ^ ")")
-   | "peek" -> buf_add b ("(Clj_core.Vec.peek " ^ conv (TVec TAny) (t 0) (a 0) ^ ")")
-   | "pop" -> buf_add b ("(Clj_core.Vec.pop " ^ conv (TVec TAny) (t 0) (a 0) ^ ")")
+   | "peek" ->
+     let el = match repr ret with TOption e -> e | _ -> TAny in
+     buf_add b ("(Clj_core.Vec.peek " ^ conv (TVec el) (t 0) (a 0) ^ ")")
+   | "pop" ->
+     let el = match repr ret with TVec e -> e | _ -> TAny in
+     buf_add b ("(Clj_core.Vec.pop " ^ conv (TVec el) (t 0) (a 0) ^ ")")
    | "set" -> buf_add b ("(Clj_core.Set.of_list " ^ as_list (List.nth args 0) ^ ")")
    | "disj" ->
      if is_any (t 0) then
@@ -1497,7 +1586,7 @@ let emit_def_group b ds =
     List.iteri
       (fun i d ->
         match d with
-        | `Def d ->
+        | `Def d | `Nonrec d ->
           if i > 0 then buf_add b " and ";
           buf_add b (munge d.tname);
           buf_add b " = ";
@@ -1505,6 +1594,101 @@ let emit_def_group b ds =
         | _ -> assert false)
       ds;
     buf_add b "\n"
+
+let rec refs_in acc e =
+  let acc =
+    match e.desc with
+    | EGlobal (mp, _n, lgn) -> if mp = !cur_mod then lgn :: acc else acc
+    | _ -> acc
+  in
+  match e.desc with
+  | EInt _ | EFloat _ | EBool _ | EChar _ | EStr _ | EKeyword _ | ESymbol _
+  | ENil | ELocal _ | EGlobal _ | EBuiltin _ -> acc
+  | EFun fn -> refs_in acc fn.body
+  | ECall (c, xs) -> List.fold_left refs_in (refs_in acc c) xs
+  | EIf (a, x, y) -> refs_in (refs_in (refs_in acc a) x) y
+  | EDo xs -> List.fold_left refs_in acc xs
+  | ELet (bs, x) -> List.fold_left (fun a (_, ex) -> refs_in a ex) (refs_in acc x) bs
+  | ETuple xs | EVecLit xs | EListLit xs | ESetLit xs -> List.fold_left refs_in acc xs
+  | EMapLit ps -> List.fold_left (fun a (k, v) -> refs_in (refs_in a k) v) acc ps
+  | EMatchOpt (a, _, x, y) | EDynVec (a, _, x, y) | EDynMap (a, _, x, y) ->
+    refs_in (refs_in (refs_in acc a) x) y
+  | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a -> refs_in acc a
+  | EOpt (Some a) -> refs_in acc a
+  | EOpt None -> acc
+  | EVariant (a, _, _, x, y) -> refs_in (refs_in (refs_in acc a) x) y
+
+(* Split a run of fn defs into binding groups: only defs that reach each
+   other transitively (a real recursion cycle, self-loops included) need one
+   `let rec .. and ..`; everything else is emitted as plain `let`, which is
+   what keeps the emitted OCaml polymorphic across the module *)
+let fn_groups (ds : topdef list) : (bool * topdef list) list =
+  let names = List.map (fun d -> d.tname) ds in
+  let tbl = Hashtbl.create 16 in
+  List.iter (fun d -> Hashtbl.replace tbl d.tname (refs_in [] d.texpr)) ds;
+  let memo = Hashtbl.create 16 in
+  let rec reach seen n =
+    match Hashtbl.find_opt memo n with
+    | Some r -> r
+    | None ->
+      let direct = match Hashtbl.find_opt tbl n with Some r -> r | None -> [] in
+      let acc = ref direct in
+      List.iter
+        (fun m ->
+          if List.mem m names && not (List.mem m seen) then
+            acc := reach (m :: seen) m @ !acc)
+        direct;
+      acc := List.sort_uniq compare !acc;
+      Hashtbl.replace memo n !acc;
+      !acc
+  in
+  let assigned = Hashtbl.create 16 in
+  let sccs =
+    List.fold_left
+      (fun acc d ->
+        if Hashtbl.mem assigned d.tname then acc
+        else
+          let dr = reach [] d.tname in
+          let scc =
+            List.filter
+              (fun o ->
+                o.tname = d.tname
+                || (List.mem o.tname dr && List.mem d.tname (reach [] o.tname)))
+              ds
+          in
+          List.iter (fun o -> Hashtbl.replace assigned o.tname ()) scc;
+          let self_loop = List.mem d.tname dr in
+          acc @ [ (List.length scc > 1 || self_loop, scc) ])
+      [] ds
+  in
+  (* stable topological order over the run: a group that references a name
+     owned by a later group is emitted after it — this covers one-way
+     forward refs (a `declare` without mutual recursion) where a cycle is
+     absent but source order would still emit the callee too late *)
+  let owner = Hashtbl.create 16 in
+  List.iteri (fun i (_r, scc) -> List.iter (fun d -> Hashtbl.replace owner d.tname i) scc) sccs;
+  let emitted = Hashtbl.create 16 in
+  let rec take acc rest =
+    match rest with
+    | [] -> acc
+    | _ ->
+      let ready, pending =
+        List.partition
+          (fun (_r, scc) ->
+            List.for_all
+              (fun n -> not (Hashtbl.mem owner n) || Hashtbl.mem emitted n)
+              (List.concat_map (fun d -> Hashtbl.find tbl d.tname) scc))
+          rest
+      in
+      (match ready with
+       | [] -> acc @ rest (* cycle across groups; shouldn't happen *)
+       | r ->
+         List.iter
+           (fun (_x, scc) -> List.iter (fun d -> Hashtbl.replace emitted d.tname ()) scc)
+           r;
+         take (acc @ r) pending)
+  in
+  take [] sccs
 
 let emit_module b (m : modl) =
   cur_mod := m.ocaml_name;
@@ -1519,8 +1703,17 @@ let emit_module b (m : modl) =
         | tl -> (List.rev acc2, tl)
       in
       let same, rest' = take [ d ] rest in
-      groups ((List.map (fun x -> `Def x) same) :: acc) rest'
-    | TDef d :: rest -> groups ([ `Def d ] :: acc) rest
+      (* only true recursion cycles (incl. self-loops) share a `let rec`
+         group; non-cyclic fns emit as plain `let` to keep them polymorphic *)
+      let gs =
+        List.map
+          (fun (rec_, scc) ->
+            if rec_ then List.map (fun x -> `Def x) scc
+            else List.map (fun x -> `Nonrec x) scc)
+          (fn_groups same)
+      in
+      groups (List.rev_append gs acc) rest'
+    | TDef d :: rest -> groups ([ `Nonrec d ] :: acc) rest
     | TVariant (_l, n, ps, cs) :: rest -> groups ([ `Variant (_l, n, ps, cs) ] :: acc) rest
     | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
@@ -1616,6 +1809,15 @@ let emit_program (mods : modl list) : string =
      failwith ("module " ^ m.mname ^ " has only an .lgi interface — provide a .lg to emit/build")
    | None -> ());
   let b = Buffer.create 8192 in
+  List.iter
+    (fun m ->
+      List.iter
+        (function
+          | TDef d ->
+            Hashtbl.replace sig_tbl (m.ocaml_name ^ "/" ^ munge d.tname) d.tsch.sty
+          | _ -> ())
+        m.tops)
+    mods;
   buf_add b "(* generated by lg — do not edit *)\n";
   buf_add b ("module Lg_rt = struct\n" ^ Embedded_runtime.lg_rt_src ^ "\nend\n");
   if !melange then buf_add b lg_node_src;

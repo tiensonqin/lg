@@ -65,6 +65,12 @@ let rec unify loc a b =
     | TInt, TInt | TFloat, TFloat | TBool, TBool | TChar, TChar | TString, TString
     | TKeyword, TKeyword | TSymbol, TSymbol | TUnit, TUnit -> ()
     | TList a, TList b | TVec a, TVec b | TSeq a, TSeq b | TSet a, TSet b | TAtom a, TAtom b | TOption a, TOption b -> unify loc a b
+    (* a seq is the universal collection interface: concrete colls are
+       seq-compatible in both directions; emit realizes the conversion *)
+    | TSeq a, TList b | TSeq a, TVec b | TSeq a, TSet b -> unify loc a b
+    | TList a, TSeq b | TVec a, TSeq b | TSet a, TSeq b -> unify loc a b
+    | TSeq a, TMap (k, v) -> unify loc a (TTuple [ k; v ])
+    | TMap (k, v), TSeq a -> unify loc (TTuple [ k; v ]) a
     | TMap (k1, v1), TMap (k2, v2) -> unify loc k1 k2; unify loc v1 v2
     | TTuple xs, TTuple ys when List.length xs = List.length ys -> List.iter2 (unify loc) xs ys
     | TFun (xs, r1), TFun (ys, r2) when List.length xs = List.length ys ->

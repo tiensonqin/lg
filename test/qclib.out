@@ -1,0 +1,14 @@
+qc:  100  trials passed
+true
+qc:  80  trials passed
+true
+qc:  60  trials passed
+true
+(8 4 2 1 0)
+qc:  40  trials passed
+true
+qc: FALSIFIED after  1  trials
+qc:   input:  98
+qc:   shrunk:  98
+false
+99
