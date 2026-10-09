@@ -103,7 +103,7 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
        let xs = List.init k (fun i -> "__x" ^ string_of_int i) in
        buf_add b ("(fun " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ " -> " ^ ctor_qual q ^ " " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ ")")
      | None -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n))
-  | EBuiltin name -> buf_add b (emit_builtin_value name)
+  | EBuiltin name -> buf_add b (emit_builtin_value name e.ety)
   | EFun fn ->
     (match fn.Ast.fself with
      | Some sb ->
@@ -763,7 +763,9 @@ and emit_builtin_call b ret name args =
        | _ -> false
      in
      let inner =
-       if deep_any (t 0) || deep_any (t 1) then
+       if deep_any (t 0) || deep_any (t 1) || repr (t 0) <> repr (t 1) then
+         (* differing representations still unify through TAny — box both
+            sides and compare as dyn *)
          "(Lg_rt.dyn_eq " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ ")"
        else
          match repr (t 0) with
@@ -1451,7 +1453,33 @@ and emit_apply args =
       ^ " | _ -> failwith \"apply: arity\")"
   | _ -> "(failwith \"apply\")")
 
-and emit_builtin_value name =
+and seq_of_ty t : string =
+  match repr t with
+  | TVec _ -> "Clj_core.Seq.of_vec"
+  | TList _ -> "Clj_core.Seq.of_list"
+  | TSet _ -> "Clj_core.Seq.of_set"
+  | TMap _ -> "Clj_core.Seq.of_map"
+  | TString -> "Clj_core.Seq.of_string"
+  | TSeq _ -> "(fun s -> s)"
+  | _ -> "Lg_rt.dyn_to_seq"
+
+and list_of_ty t : string =
+  match repr t with
+  | TVec _ -> "Clj_core.Vec.to_list"
+  | TList _ -> "(fun l -> l)"
+  | TSet _ -> "Clj_core.Set.to_list"
+  | TMap _ -> "(fun m -> List.of_seq (Clj_core.Map.seq m))"
+  | TSeq _ -> "Clj_core.Seq.to_list"
+  | TString -> "Lg_rt.string_chars"
+  | _ -> "Lg_rt.dyn_to_list"
+
+and emit_builtin_value name ty =
+  let ats =
+    match repr ty with TFun (a, _) -> a | _ -> []
+  in
+  let arg i = try List.nth ats i with _ -> TAny in
+  let sq i = seq_of_ty (arg i) in
+  let ls i = list_of_ty (arg i) in
   match name with
   | "+" -> "( + )" | "+." -> "( +. )" | "-" -> "( - )" | "-." -> "( -. )"
   | "*" -> "( * )" | "*." -> "( *. )" | "/" -> "( / )" | "/." -> "( /. )"
@@ -1459,25 +1487,63 @@ and emit_builtin_value name =
   | ">" -> "( > )" | ">=" -> "( >= )" | "not" -> "not" | "identity" -> "(fun x -> x)"
   | "inc" -> "(fun x -> x + 1)" | "dec" -> "(fun x -> x - 1)" | "abs" -> "abs"
   | "mod" -> "(fun a b -> a mod b)" | "constantly" -> "(fun x _ -> x)"
-  | "cons" -> "Clj_core.Seq.cons"
-  | "first" -> "Clj_core.Seq.first"
-  | "rest" -> "Clj_core.Seq.rest"
-  | "map" -> "List.map" | "filter" -> "List.filter" | "reduce" | "fold" -> "List.fold_left"
-  | "vec" -> "Clj_core.Vec.of_list" | "count" -> "List.length" | "empty?" -> "(function [] -> true | _ -> false)"
-  | "str" -> "(fun _ -> \"\")" | "println" -> "print_endline" | "print" -> "print_string" | "exit" -> "Stdlib.exit"
+  | "cons" -> "(fun x c -> Clj_core.Seq.cons x (" ^ sq 1 ^ " c))"
+  | "first" -> "(fun c -> Clj_core.Seq.first (" ^ sq 0 ^ " c))"
+  | "rest" -> "(fun c -> Clj_core.Seq.rest (" ^ sq 0 ^ " c))"
+  | "map" -> "(fun f c -> Clj_core.Seq.map f (" ^ sq 1 ^ " c))"
+  | "filter" -> "(fun f c -> Clj_core.Seq.filter f (" ^ sq 1 ^ " c))"
+  | "reduce" | "fold" -> "(fun f i c -> Clj_core.Seq.reduce f i (" ^ sq 2 ^ " c))"
+  | "vec" -> "(fun c -> Clj_core.Vec.of_list (" ^ ls 0 ^ " c))"
+  | "count" -> "(fun c -> Clj_core.Seq.count (" ^ sq 0 ^ " c))"
+  | "empty?" -> "(fun c -> Clj_core.Seq.is_empty (" ^ sq 0 ^ " c))"
+  | "str" | "pr-str" -> gen_printer (arg 0)
+  | "println" -> "(fun x -> print_endline (" ^ gen_printer (arg 0) ^ " x))"
+  | "print" -> "(fun x -> print_string (" ^ gen_printer (arg 0) ^ " x))"
+  | "exit" -> "Stdlib.exit"
   | "atom" -> "Clj_core.Atom.atom" | "deref" -> "Clj_core.Atom.deref"
   | "reset!" -> "Clj_core.Atom.reset_bang" | "swap!" -> "Clj_core.Atom.swap_bang"
-  | "comp" -> "(fun f g x -> f (g x))" | "juxt" -> "(fun f g x -> (Clj_core.Vec.of_list [f x; g x]))"
-  | "mapcat" -> "Clj_core.Seq.mapcat" | "reverse" -> "Clj_core.Seq.reverse" | "sort" -> "Clj_core.Seq.sort"
-  | "take" -> "Clj_core.Seq.take" | "drop" -> "Clj_core.Seq.drop"
-  | "take-while" -> "Clj_core.Seq.take_while" | "drop-while" -> "Clj_core.Seq.drop_while"
-  | "interpose" -> "Clj_core.Seq.interpose" | "distinct" -> "Clj_core.Seq.distinct"
-  | "iterate" -> "Clj_core.Seq.iterate" | "repeat" -> "Clj_core.Seq.repeat"
-  | "cycle" -> "Clj_core.Seq.cycle" | "interleave" -> "Clj_core.Seq.interleave"
-  | "take-nth" -> "Clj_core.Seq.take_nth" | "dedupe" -> "Clj_core.Seq.dedupe"
-  | "remove" -> "Clj_core.Seq.remove" | "doall" -> "Clj_core.Seq.to_list"
-  | "dorun" -> "Clj_core.Seq.dorun" | "reductions" -> "Clj_core.Seq.reductions"
-  | "every?" -> "Clj_core.Seq.every_" | "some" -> "Clj_core.Seq.exists" | "min" -> "Stdlib.min" | "max" -> "Stdlib.max"
+  | "comp" -> "(fun f g x -> f (g x))"
+  | "juxt" ->
+    let fr = match repr (arg 0) with TFun (_, r) -> r | _ -> TAny
+    and gr = match repr (arg 1) with TFun (_, r) -> r | _ -> TAny in
+    let rec final_ret t = match repr t with TFun (_, r) -> final_ret r | t -> t in
+    let el = match repr (final_ret ty) with TVec e -> e | _ -> TAny in
+    "(fun f g x -> (Clj_core.Vec.of_list [" ^ conv el fr "(f x)" ^ "; " ^ conv el gr "(g x)" ^ "]))"
+  | "mapcat" -> "(fun f c -> Clj_core.Seq.mapcat f (" ^ sq 1 ^ " c))"
+  | "reverse" -> "(fun c -> Clj_core.Seq.reverse (" ^ sq 0 ^ " c))"
+  | "sort" -> "(fun c -> Clj_core.Seq.sort (" ^ sq 0 ^ " c))"
+  | "sort-by" -> "(fun kf c -> Clj_core.Seq.sort ~cmp:(fun x y -> Stdlib.compare (kf x) (kf y)) (" ^ sq 1 ^ " c))"
+  | "take" -> "(fun n c -> Clj_core.Seq.take n (" ^ sq 1 ^ " c))"
+  | "drop" -> "(fun n c -> Clj_core.Seq.drop n (" ^ sq 1 ^ " c))"
+  | "take-while" -> "(fun p c -> Clj_core.Seq.take_while p (" ^ sq 1 ^ " c))"
+  | "drop-while" -> "(fun p c -> Clj_core.Seq.drop_while p (" ^ sq 1 ^ " c))"
+  | "interpose" -> "(fun sep c -> Clj_core.Seq.interpose sep (" ^ sq 1 ^ " c))"
+  | "distinct" -> "(fun c -> Clj_core.Seq.distinct (" ^ sq 0 ^ " c))"
+  | "iterate" -> "(fun f x -> Clj_core.Seq.iterate f x)"
+  | "repeat" -> "(fun x -> Clj_core.Seq.repeat x)"
+  | "cycle" -> "(fun c -> Clj_core.Seq.cycle (" ^ sq 0 ^ " c))"
+  | "interleave" -> "(fun a b -> Clj_core.Seq.interleave (" ^ sq 0 ^ " a) (" ^ sq 1 ^ " b))"
+  | "take-nth" -> "(fun n c -> Clj_core.Seq.take_nth n (" ^ sq 1 ^ " c))"
+  | "dedupe" -> "(fun c -> Clj_core.Seq.dedupe (" ^ sq 0 ^ " c))"
+  | "remove" -> "(fun f c -> Clj_core.Seq.remove f (" ^ sq 1 ^ " c))"
+  | "doall" -> "(fun s -> Clj_core.Seq.of_list (Clj_core.Seq.to_list s))"
+  | "dorun" -> "(fun c -> Clj_core.Seq.dorun (" ^ sq 0 ^ " c))"
+  | "reductions" -> "(fun f i c -> Clj_core.Seq.reductions f i (" ^ sq 2 ^ " c))"
+  | "every?" -> "(fun p c -> Clj_core.Seq.every_ p (" ^ sq 1 ^ " c))"
+  | "some" -> "(fun p c -> Clj_core.Seq.exists p (" ^ sq 1 ^ " c))"
+  | "min" -> "Stdlib.min" | "max" -> "Stdlib.max"
+  | "map-indexed" -> "(fun f c -> Clj_core.Seq.mapi f (" ^ sq 1 ^ " c))"
+  | "keep" | "filter-map" -> "(fun f c -> Clj_core.Seq.filter_map f (" ^ sq 1 ^ " c))"
+  | "next" -> "(fun c -> Clj_core.Seq.next (" ^ sq 0 ^ " c))"
+  | "second" -> "(fun c -> Clj_core.Seq.second (" ^ sq 0 ^ " c))"
+  | "seq" -> "(fun c -> Clj_core.Seq.seq (" ^ sq 0 ^ " c))"
+  | "nth" -> "(fun c i -> Clj_core.Seq.nth (" ^ sq 0 ^ " c) i)"
+  | "nthrest" -> "(fun c n -> Clj_core.Seq.nthrest (" ^ sq 0 ^ " c) n)"
+  | "group-by" -> "(fun f c -> Lg_rt.group_by f (" ^ ls 1 ^ " c))"
+  | "frequencies" -> "(fun c -> Lg_rt.frequencies (" ^ ls 0 ^ " c))"
+  | "zipmap" -> "(fun ks vs -> Clj_core.Map.of_list (List.combine (" ^ ls 0 ^ " ks) (" ^ ls 1 ^ " vs)))"
+  | "split-at" -> "(fun n c -> (let (x, y) = Clj_core.Seq.split_at n (" ^ sq 1 ^ " c) in Clj_core.Vec.of_list [x; y]))"
+  | "split-with" -> "(fun p c -> (let (x, y) = Clj_core.Seq.split_with p (" ^ sq 1 ^ " c) in Clj_core.Vec.of_list [x; y]))"
   | "slurp" -> "(fun p -> let ic = open_in_bin p in let s = really_input_string ic (in_channel_length ic) in close_in ic; s)"
   | "file-exists?" -> "Sys.file_exists"
   | "trim" -> "String.trim" | "triml" -> "Lg_rt.triml" | "trimr" -> "Lg_rt.trimr"
@@ -1506,6 +1572,13 @@ and emit_builtin_value name =
   | "none?" -> "(fun x -> match x with None -> true | _ -> false)"
   | "fn?" -> "(fun _ -> false)"
   | "keys" -> "(fun m -> List.of_seq (Clj_core.Map.keys m))" | "vals" -> "(fun m -> List.of_seq (Clj_core.Map.vals m))"
+  | "conj" ->
+    (match repr (arg 0) with
+     | TVec _ -> "(fun c x -> Clj_core.Vec.conj c x)"
+     | TList _ -> "(fun c x -> x :: c)"
+     | TSet _ -> "(fun c x -> Clj_core.Set.conj c x)"
+     | TSeq _ -> "(fun c x -> Clj_core.Seq.cons x c)"
+     | _ -> "(fun _ -> failwith \"conj: unsupported collection\")")
   | _ -> "(fun _ -> failwith \"builtin as value: " ^ name ^ "\")"
 
 (* OCaml-side type spelling for `external` declarations (:ocaml). *)
