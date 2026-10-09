@@ -30,10 +30,52 @@ let () =
   Arg.parse speclist
     (fun a ->
       match !cmd with
-      | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build" ] -> cmd := Some a
+      | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build"; "fmt"; "repl"; "lsp" ] -> cmd := Some a
       | None -> cmd := Some "emit"; file := Some a
       | Some _ -> (match !file with None -> file := Some a | Some _ -> raise (Exit 2)))
     usage;
+  (match !cmd with
+   | Some "lsp" -> Lgc.Lsp.run (); exit 0
+   | Some "repl" ->
+     let session_txt = Buffer.create 512 in
+     let compile_run src =
+       let f = Filename.temp_file "lg_repl_eval" ".lg" in
+       let oc = open_out f in output_string oc src; close_out oc;
+       let bin = f ^ ".bin" and errf = f ^ ".err" in
+       let rc =
+         Sys.command
+           (Printf.sprintf "%s build %s -o %s 2>%s" (Filename.quote Sys.argv.(0)) (Filename.quote f)
+              (Filename.quote bin) (Filename.quote errf))
+       in
+       if rc = 0 then ignore (Sys.command (Filename.quote bin))
+       else ignore (Sys.command ("cat " ^ Filename.quote errf))
+     in
+     Printf.printf "lg repl — :quit to exit\n%!";
+     (try
+        while true do
+          Printf.printf "lg=> %!";
+          let line = input_line stdin in
+          if String.trim line = ":quit" then raise (Exit 0);
+          (try
+             let fs = Lgc.Reader.read_file ~file:"<repl>" line in
+             List.iter
+               (fun (f : Lgc.Syntax.form) ->
+                 let is_def =
+                   match f with
+                   | Lgc.Syntax.List (_, Lgc.Syntax.Atom (_, Lgc.Syntax.Symbol hd) :: _) ->
+                     List.mem hd [ "def"; "defn"; "defvariant"; "defmacro"; "defrecord"; "declare"; "ffi"; "extern-type"; "ns" ]
+                   | _ -> false
+                 in
+                 if is_def then (
+                   Buffer.add_string session_txt (Lgc.Fmt.flat f ^ "\n");
+                   compile_run (Buffer.contents session_txt))
+                 else compile_run (Buffer.contents session_txt ^ "(println " ^ Lgc.Fmt.flat f ^ ")\n"))
+               fs
+           with Lgc.Syntax.Read_error (l, m) -> prerr_string (Lgc.Err.render l "E201" m []))
+        done
+      with End_of_file | Exit _ -> ());
+     exit 0
+   | _ -> ());
   match !file with
   | None -> Arg.usage speclist usage
   | Some file ->
@@ -41,6 +83,19 @@ let () =
        if !backend = "oxcaml" then Lgc.Emit.oxcaml := true;
        if !backend = "melange" then Lgc.Emit.melange := true;
        let target = if !backend = "melange" then Lgc.Reader.TJs else Lgc.Reader.TNative in
+       (match !cmd with
+        | Some "fmt" ->
+          let formatted = Lgc.Fmt.format_file ~target file in
+          let ic = open_in file in
+          let cur = really_input_string ic (in_channel_length ic) in
+          close_in ic;
+          if cur = formatted then Printf.printf "%s unchanged
+" file
+          else (let oc = open_out file in output_string oc formatted; close_out oc;
+                Printf.printf "%s formatted
+" file);
+          exit 0
+        | _ -> ());
        let mods = Lgc.Compiler.compile_path ~roots:!roots ~target file in
        (match !cmd with
         | Some "check" ->

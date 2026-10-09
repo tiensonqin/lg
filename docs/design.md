@@ -304,3 +304,16 @@ with Levenshtein "did you mean" suggestions over env+globals+builtins,
 reader errors E201. `infer_match` records pattern coverage per scrutinee
 and warns W401 (variant ctors missing), W402 (option/bool partial) when
 there is no `_` or catch-all binder.
+
+
+## 15. Tooling (M6)
+
+`src/fmt.ml` canonicalizes forms: flat under 90 columns, else vertical
+layout. Comments are dropped by the reader (known gap — fmt is not
+comment-preserving yet). `lg repl` keeps a session buffer of def forms
+and evaluates expressions by appending `(println <expr>)` and rebuilding
+— ~1s per line, real compiled semantics. `src/lsp.ml` is a stdio
+JSON-RPC server with a hand-rolled field extractor (no JSON dep):
+hover walks the typed IR (`tops` + `effects`) for the nearest expr on
+the line and shows `string_of_ty`; definition maps the token at point to
+top-level `tdef` locations.

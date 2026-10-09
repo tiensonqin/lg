@@ -14,6 +14,19 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
 > extension (`.lg`), toolchain binary (`lg`), and emitted runtime module
 > (`Lg_rt`) are all named **lg**.
 
+## Tools
+
+`lg fmt file.lg` rewrites a file to canonical layout (flat under 90 cols,
+else vertical). Note: comments are not preserved yet — the reader drops
+them before formatting.
+
+`lg repl` — accumulative session REPL: `def`/`defn`/… forms persist
+across inputs; expressions print their value. `:quit` exits.
+
+`lg lsp` — stdio JSON-RPC server: `initialize`, `textDocument/didOpen`,
+`didChange`, `hover` (type at position), `definition` (jump to top-level
+def), `shutdown`, `exit`.
+
 ## Errors
 
 Diagnostics are Elm-style: `error[Ecode]` with a `--> file:line:col`
