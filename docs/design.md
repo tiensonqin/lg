@@ -317,3 +317,15 @@ JSON-RPC server with a hand-rolled field extractor (no JSON dep):
 hover walks the typed IR (`tops` + `effects`) for the nearest expr on
 the line and shows `string_of_ty`; definition maps the token at point to
 top-level `tdef` locations.
+
+
+## 16. Packages, init, doc, release (M7)
+
+`lg.edn` parses with the lg reader (edn maps are lg maps). `Pkg.find_manifest`
+walks up from the source file; `:path` deps add the dir as a module
+root, `:git` deps clone to `.lg/deps/<name>` with optional `:sha`
+checkout; `lg deps` resolves and writes `lg.lock`. `lg init` scaffolds a
+project. `lg doc` prints each top's inferred scheme as markdown —
+`.lgi`-gated defs keep their exported signature. `lg version` reports
+the embedded version. `tools/release.sh` + `.github/workflows/release.yml`
+build os/arch tarballs on `v*` tags.

@@ -14,6 +14,26 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
 > extension (`.lg`), toolchain binary (`lg`), and emitted runtime module
 > (`Lg_rt`) are all named **lg**.
 
+## Packages
+
+`lg.edn` at a project root declares deps — found by walking up from the
+source file:
+
+```clojure
+{:name "app" :deps {mylib {:path "../mylib"}
+                    other {:git "https://…" :sha "abc"}}}
+```
+
+A `:path` dep adds that dir as a module root (no `-I` needed). `:git`
+deps clone into `.lg/deps/<name>`; `lg deps` resolves and writes
+`lg.lock` (`name url sha` per line).
+
+`lg init <name>` scaffolds `src/main.lg` + `lg.edn` + `.gitignore`.
+`lg doc file.lg` prints the module's public API as markdown from
+inferred signatures. `lg version` prints the version.
+`tools/release.sh [ver]` builds `dist/lg-<ver>-<os>-<arch>.tar.gz`;
+push a `v*` tag and CI builds ubuntu+macos tarballs.
+
 ## Tools
 
 `lg fmt file.lg` rewrites a file to canonical layout (flat under 90 cols,

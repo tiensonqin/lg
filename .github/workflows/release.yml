@@ -1,0 +1,30 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.5"
+          opam-pin: false
+      - name: Pin deps
+        run: |
+          opam install -y dune ocamlfind
+          opam pin add -y -k git clj-core https://github.com/logseq/clj-core
+          opam pin add -y -k git rrbvec https://github.com/logseq/rrbvec
+          opam install -y clj-core rrbvec
+      - name: Build release tarball
+        run: bash tools/release.sh "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lg-${{ matrix.os }}
+          path: dist/*.tar.gz

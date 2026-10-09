@@ -9,7 +9,7 @@
    -package clj-core,rrbvec -linkpkg`, producing a native binary; it falls
    back to ocamlc for a bytecode binary when ocamlopt is unavailable. *)
 
-let usage = "usage: lg [check|emit|modes|build] <file.lg> [-o out] [-I dir]..."
+let usage = "usage: lg [check|emit|modes|lgi|build|fmt|repl|lsp|deps|doc|init|version] <file.lg> [-o out] [-I dir]..."
 
 exception Exit of int
 
@@ -30,11 +30,39 @@ let () =
   Arg.parse speclist
     (fun a ->
       match !cmd with
-      | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build"; "fmt"; "repl"; "lsp" ] -> cmd := Some a
+      | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build"; "fmt"; "repl"; "lsp"; "deps"; "doc"; "init"; "version"; "--version"; "-version" ] -> cmd := Some a
       | None -> cmd := Some "emit"; file := Some a
       | Some _ -> (match !file with None -> file := Some a | Some _ -> raise (Exit 2)))
     usage;
   (match !cmd with
+   | Some "version" | Some "--version" | Some "-version" -> print_endline "lg 0.1.0"; exit 0
+   | Some "deps" ->
+     (match Lgc.Pkg.find_manifest (Sys.getcwd ()) with
+      | None -> prerr_endline "no lg.edn found"; exit 1
+      | Some (dir, mf) ->
+        let _, deps = Lgc.Pkg.load_manifest mf in
+        let roots = Lgc.Pkg.dep_roots dir deps in
+        Lgc.Pkg.write_lock dir deps;
+        List.iter (Printf.printf "resolved %s
+") roots;
+        Printf.printf "lg.lock written
+"; exit 0)
+   | Some "init" ->
+     (match !file with
+      | None -> prerr_endline "usage: lg init <name>"; exit 1
+      | Some name ->
+        let mkdir p = ignore (Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote p))) in
+        mkdir (Filename.concat name "src");
+        let oc = open_out (Filename.concat name "lg.edn") in
+        Printf.fprintf oc "{:name \"%s\" :deps {}}\n" name; close_out oc;
+        let oc = open_out (Filename.concat name "src/main.lg") in
+        output_string oc "(ns main)\n\n(defn -main []\n  (println \"hello from lg\"))\n\n(-main)\n"; close_out oc;
+        let oc = open_out (Filename.concat name ".gitignore") in
+        output_string oc ".lg/
+*.bin
+"; close_out oc;
+        Printf.printf "created %s (src/main.lg, lg.edn)
+" name; exit 0)
    | Some "lsp" -> Lgc.Lsp.run (); exit 0
    | Some "repl" ->
      let session_txt = Buffer.create 512 in
@@ -96,8 +124,27 @@ let () =
 " file);
           exit 0
         | _ -> ());
-       let mods = Lgc.Compiler.compile_path ~roots:!roots ~target file in
+       let roots = if !backend = "melange" then !roots else Lgc.Pkg.roots_with_manifest !roots file in
+       let mods = Lgc.Compiler.compile_path ~roots ~target file in
        (match !cmd with
+        | Some "doc" ->
+          List.iter
+            (fun (m : Lgc.Ast.modl) ->
+              Printf.printf "# %s
+
+" m.mname;
+              List.iter
+                (function
+                  | Lgc.Ast.TDef d -> Printf.printf "- `%s` : `%s`
+" d.tname (Lgc.Typ.string_of_lg_ty d.tsch.sty)
+                  | Lgc.Ast.TExtern (_, n) -> Printf.printf "- `(extern-type %s)`
+" n
+                  | Lgc.Ast.TVariant (_, n, _, _) -> Printf.printf "- `(defvariant %s)`
+" n
+                  | _ -> ())
+                m.tops)
+            mods;
+          exit 0
         | Some "check" ->
           Printf.printf "ok (%d module%s)\n" (List.length mods)
             (if List.length mods = 1 then "" else "s")
