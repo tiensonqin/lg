@@ -195,6 +195,12 @@ structures — never hand-rolled collections, never vendored copies, never
   call sites by type from the lexical scope, and elaborate to ordinary
   OCaml argument passing (Haskell/Scala-style dictionary passing). That
   is the intended v2 route for protocol-like abstraction.
+- **No `try`/`catch`/`throw`.** Error channels are typed: `option` for
+  maybe-absent values (`Some`/`None`, `if-let`, `when-let`, `match`) —
+  and `Result`-style data when a reason must travel. OCaml exceptions
+  still surface for runtime-checked contract failures (`^T` unboxes,
+  missing-key `update`, `contains?` on a non-coll): those are bugs,
+  not control flow, and they stay uncatchable from lg.
 - **Keep `dyn` confined.** `any` only enters via explicit `^any` and
   mixed-type literals; it never propagates through unification, and
   every use at the boundary is a checked unbox. A future `--strict`
