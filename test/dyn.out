@@ -4,3 +4,5 @@ nil
 3
 o2
 true true true
+truthy a 5 y 1
+falsy false 7 n

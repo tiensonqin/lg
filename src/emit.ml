@@ -139,9 +139,18 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
      | None -> ())
   | ECall (ce, args) -> emit_call b e.ety ce args
   | EIf (c, t, x) ->
-    if is_any c.ety then buf_add b "(if (Lg_rt.dyn_truthy " else buf_add b "(if ";
+    (* cond: bool passes through, `any` goes through dyn truthiness, and
+       any other statically typed value is truthy but must still be
+       evaluated for order *)
+    (match repr c.ety with
+     | TAny -> buf_add b "(if (Lg_rt.dyn_truthy "
+     | TBool -> buf_add b "(if "
+     | _ -> buf_add b "(if (let __ = ");
     emit_expr b c;
-    if is_any c.ety then buf_add b ")" else ();
+    (match repr c.ety with
+     | TAny -> buf_add b ")"
+     | TBool -> ()
+     | _ -> buf_add b " in true)");
     buf_add b " then ";
     buf_add b (conv e.ety t.ety (arg_str t)); buf_add b " else "; buf_add b (conv e.ety x.ety (arg_str x)); buf_add b ")"
   | EDo es ->
@@ -778,7 +787,10 @@ and emit_builtin_call b ret name args =
      buf_add b (if name = "=" then inner else "(not " ^ inner ^ ")")
    | "not" ->
      buf_add b
-       (if is_any (t 0) then "(not (Lg_rt.dyn_truthy " ^ a 0 ^ "))" else "(not " ^ a 0 ^ ")")
+       (match repr (t 0) with
+        | TAny -> "(not (Lg_rt.dyn_truthy " ^ a 0 ^ "))"
+        | TBool -> "(not " ^ a 0 ^ ")"
+        | _ -> "(not (let __ = " ^ a 0 ^ " in true))")
    | "inc" -> buf_add b ("(" ^ conv TInt (t 0) (a 0) ^ " + 1)")
    | "dec" -> buf_add b ("(" ^ conv TInt (t 0) (a 0) ^ " - 1)")
    | "mod" -> buf_add b ("(" ^ a 0 ^ " mod " ^ a 1 ^ ")")

@@ -11,4 +11,7 @@
 ;; match on dyn tags
 (println (str (match vi [x] (str "v" x) {:name n} (str "m" n) x (str "o" x))))
 (println (str (= {:a 1} {:a 1}) " " (= [1 2] [1 2]) " " (= "s" "s")))
+;; truthiness — dyn/typed non-bool operands in if/and/or/when
+(let [x ^any 5] (println (str "truthy " (and x 2 "a") " " (or false x) " " (if x "y" "n") " " (when x 1))))
+(let [y ^any false] (println (str "falsy " (and y 2) " " (or y 7) " " (if y "y" "n"))))
 (exit 0)

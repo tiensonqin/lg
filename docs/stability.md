@@ -50,7 +50,7 @@ Dispatched in `infer_call` (src/infer.ml). `(a)` unless noted.
 | `let` | a | sequential (later bindings see earlier); binding forms may destructure (§1.2.1) |
 | `fn` | b | `(fn name [ps] …)` parses a name but never binds it — `(fn f [x] (f x))` fails `unresolved symbol f`. Bind it (self-recursion) or reject the name. |
 | `when` | a | returns `any` — the body value or `nil` (dyn punning, same as 1-branch `if`). |
-| `and`, `or` | b | strict-`bool` variadic, result `bool` — not Clojure's value-returning `and`/`or`. Spec or redesign. |
+| `and`, `or` | a | value-returning; mid args may be `bool`, `any` (dyn truthiness), or any concrete type (statically truthy); a non-`bool` last arg makes the result `any` (value\|false/true union). |
 | `cond` | b | pairs plus `:else`; a non-matching fallthrough yields `unit`, so a `cond` returning a value without `:else` is a type error. Spec. |
 | `->`, `->>` | a | special forms (not macros); insert first/last arg |
 | `match` | b | lowers to if/let chains; **no exhaustiveness check** — fallthrough is the `no-match` runtime trap. Spec the first-match order, and decide: keep runtime trap, warn on inexhaustive option patterns, or require `_`. |

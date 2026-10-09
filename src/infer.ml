@@ -1241,7 +1241,10 @@ and join_branches l a b =
 
 and infer_if ctx l c t e =
   let ce = infer_expr ctx c in
-  unify ce.loc ce.ety TBool;
+  (* `any` conditions use dyn truthiness (emit wraps in dyn_truthy);
+     any other concrete type is statically truthy; unbound vars get bool *)
+  (match repr ce.ety with TAny -> () | TVar _ -> unify ce.loc ce.ety TBool
+   | _ -> ());
   let te = infer_expr ctx t and ee = infer_expr ctx e in
   let ret, te, ee = join_branches l te ee in
   mk l ret (EIf (ce, te, ee))
@@ -1406,13 +1409,21 @@ and infer_and ctx l args =
   | [ a ] -> infer_expr ctx a  (* last position: the value flows out *)
   | a :: rest ->
     let e = infer_expr ctx a in
-    unify e.loc e.ety TBool;
+    (* mid args: bool unifies; `any` uses dyn truthiness at emit; any
+       other concrete type is statically truthy *)
+    (match repr e.ety with TAny -> () | TVar _ -> unify e.loc e.ety TBool
+     | _ -> ());
     let r = infer_and ctx l rest in
+    (* (and a b … last): when `last` is bool the whole form is bool; when
+       it is `any` or any other concrete type the result is `value|false`
+       — a union lg carries as dyn, so both branches box *)
+    let rt = match repr r.ety with TBool -> TBool | _ -> TAny in
+    let r' = if rt = TAny && repr r.ety <> TAny then mk l TAny (EBox r) else r in
     let eelse =
-      if (match repr r.ety with TAny -> true | _ -> false) then mk l TAny (EBox (mk l TBool (EBool false)))
+      if rt = TAny then mk l TAny (EBox (mk l TBool (EBool false)))
       else mk l TBool (EBool false)
     in
-    mk l r.ety (EIf (e, r, eelse))
+    mk l rt (EIf (e, r', eelse))
 
 and infer_or ctx l args =
   match args with
@@ -1420,13 +1431,18 @@ and infer_or ctx l args =
   | [ a ] -> infer_expr ctx a
   | a :: rest ->
     let e = infer_expr ctx a in
-    unify e.loc e.ety TBool;
+    (match repr e.ety with TAny -> () | TVar _ -> unify e.loc e.ety TBool
+     | _ -> ());
     let r = infer_or ctx l rest in
+    (* (or a b … last): bool last -> bool; anything else -> dyn
+       (value|true union). For `or` the literal is `true` *)
+    let rt = match repr r.ety with TBool -> TBool | _ -> TAny in
+    let r' = if rt = TAny && repr r.ety <> TAny then mk l TAny (EBox r) else r in
     let ethen =
-      if (match repr r.ety with TAny -> true | _ -> false) then mk l TAny (EBox (mk l TBool (EBool true)))
+      if rt = TAny then mk l TAny (EBox (mk l TBool (EBool true)))
       else mk l TBool (EBool true)
     in
-    mk l r.ety (EIf (e, ethen, r))
+    mk l rt (EIf (e, ethen, r'))
 
 and infer_cond ctx l args =
   match args with
