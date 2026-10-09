@@ -32,6 +32,7 @@ type ctx = {
   externs : (string, unit) Hashtbl.t;            (* (extern-type n) declared in this module *)
   declared : (string, ty) Hashtbl.t;             (* (declare n) forward decls for mutual recursion *)
   variants : (string, vctor) Hashtbl.t;          (* defvariant ctor name -> info *)
+  vtypes : (string, string list) Hashtbl.t;      (* defvariant type name -> ctor names *)
 
 }
 and vctor = { vc_ocaml : string; vc_scheme : scheme; vc_nfields : int }
@@ -156,7 +157,7 @@ let rec implicit_ann f : ty option option =
                kvs
            with
            | Some (Atom (_, Bool true)) | None -> Some None
-           | Some tf -> Some (try Some (ty_of_form tf) with Type_error _ -> None))
+           | Some tf -> Some (try Some (ty_of_form tf) with Type_error _ | Err.E _ -> None))
         | _ -> None))
   | _ -> None
 
@@ -178,14 +179,14 @@ let rec split_meta = function
       | None ->
         (match m with
          | Atom (_, Keyword k) when List.mem k primitive_type_names ->
-           (try Some (ty_of_form (Atom (no_loc, Symbol k))) with Type_error _ -> None)
-         | Atom (_, Symbol _) -> (try Some (ty_of_form m) with Type_error _ -> None)
-         | List _ -> (try Some (ty_of_form m) with Type_error _ -> None)
+           (try Some (ty_of_form (Atom (no_loc, Symbol k))) with Type_error _ | Err.E _ -> None)
+         | Atom (_, Symbol _) -> (try Some (ty_of_form m) with Type_error _ | Err.E _ -> None)
+         | List _ -> (try Some (ty_of_form m) with Type_error _ | Err.E _ -> None)
          | Map (_, kvs) ->
            (match
               List.find_map (fun (k, v) -> match k with Atom (_, Keyword "sig") -> Some v | _ -> None) kvs
             with
-            | Some sigf -> (try Some (ty_of_form sigf) with Type_error _ -> None)
+            | Some sigf -> (try Some (ty_of_form sigf) with Type_error _ | Err.E _ -> None)
             | None -> None)
          | _ -> None)
     in
@@ -388,7 +389,7 @@ let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; tops = []; effects = []; iface_only = false; uses_ctypes = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants = Hashtbl.create 16 } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants = Hashtbl.create 16; vtypes = Hashtbl.create 8 } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -459,6 +460,7 @@ and infer_top ctx f =
         register_global ctx c sch false;
         Hashtbl.replace ctx.variants c { vc_ocaml = ocaml_c; vc_scheme = sch; vc_nfields = List.length ftys })
       parsed;
+    Hashtbl.replace ctx.vtypes vname (List.map fst parsed);
     ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed) ]
   | List (l, Atom (_, Symbol "ffi") :: _) ->
     ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]
@@ -929,7 +931,7 @@ and infer_expr ctx f : expr =
     let elem = fresh_var () in
     let het =
       try List.iter (fun e -> unify e.loc elem e.ety) es; false
-      with Type_error _ -> true
+      with Type_error _ | Err.E _ -> true
     in
     if het && !strict && not !strict_ok then
       type_error l "strict: heterogeneous literal requires ^any";
@@ -939,11 +941,11 @@ and infer_expr ctx f : expr =
     let kt = fresh_var () and vt = fresh_var () in
     let het_k =
       try List.iter (fun (k, _) -> unify k.loc kt k.ety) kes; false
-      with Type_error _ -> true
+      with Type_error _ | Err.E _ -> true
     in
     let het_v =
       try List.iter (fun (_, v) -> unify v.loc vt v.ety) kes; false
-      with Type_error _ -> true
+      with Type_error _ | Err.E _ -> true
     in
     if (het_k || het_v) && !strict && not !strict_ok then
       type_error l "strict: heterogeneous literal requires ^any";
@@ -953,7 +955,7 @@ and infer_expr ctx f : expr =
     let elem = fresh_var () in
     let het =
       try List.iter (fun e -> unify e.loc elem e.ety) es; false
-      with Type_error _ -> true
+      with Type_error _ | Err.E _ -> true
     in
     if het && !strict && not !strict_ok then
       type_error l "strict: heterogeneous literal requires ^any";
@@ -1017,11 +1019,24 @@ and infer_symbol ctx l s : expr =
         | Some tbl when Hashtbl.mem tbl s ->
           (match Hashtbl.find_opt tbl s with
            | Some { gsch = sch; _ } -> mk l (instantiate sch) (EGlobal (ctx.modl.ocaml_name, munge s, s))
-           | None -> type_error l ("unresolved symbol " ^ s))
+           | None -> unbound_err ctx l s)
         | _ ->
           (match Hashtbl.find_opt builtin_table s with
            | Some _ -> mk l (instantiate_builtin_ty s) (EBuiltin s)
-           | None -> type_error l ("unresolved symbol " ^ s))))
+           | None -> unbound_err ctx l s)))
+
+and unbound_err ctx l s =
+  let cand =
+    List.fold_left (fun acc (k,_) -> k :: acc) [] ctx.env
+    @ (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
+       | Some tbl -> Hashtbl.fold (fun k _ acc -> k :: acc) tbl []
+       | None -> [])
+    @ Hashtbl.fold (fun k _ acc -> k :: acc) builtin_table []
+  in
+  (match Err.did_you_mean s cand with
+   | Some m -> Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s)
+                 ["did you mean `" ^ m ^ "`?"]
+   | None -> Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s) [])
 
 and quote_to_expr _l f : expr =
   let rec go f : expr =
@@ -1039,7 +1054,7 @@ and quote_to_expr _l f : expr =
       let elem = fresh_var () in
       let het =
         try List.iter (fun e -> unify e.loc elem e.ety) es; false
-        with Type_error _ -> true
+        with Type_error _ | Err.E _ -> true
       in
       mk l (TVec (if het then TAny else elem)) (EVecLit es)
     | List (l, items) ->
@@ -1047,7 +1062,7 @@ and quote_to_expr _l f : expr =
       let elem = fresh_var () in
       let het =
         try List.iter (fun e -> unify e.loc elem e.ety) es; false
-        with Type_error _ -> true
+        with Type_error _ | Err.E _ -> true
       in
       mk l (TList (if het then TAny else elem)) (EListLit es)
     | Map (l, kvs) ->
@@ -1055,11 +1070,11 @@ and quote_to_expr _l f : expr =
       let kt = fresh_var () and vt = fresh_var () in
       let het_k =
         try List.iter (fun (k, _) -> unify k.loc kt k.ety) kes; false
-        with Type_error _ -> true
+        with Type_error _ | Err.E _ -> true
       in
       let het_v =
         try List.iter (fun (_, v) -> unify v.loc vt v.ety) kes; false
-        with Type_error _ -> true
+        with Type_error _ | Err.E _ -> true
       in
       mk l (TMap ((if het_k then TAny else kt), (if het_v then TAny else vt))) (EMapLit kes)
     | Set (l, items) ->
@@ -1067,7 +1082,7 @@ and quote_to_expr _l f : expr =
       let elem = fresh_var () in
       let het =
         try List.iter (fun e -> unify e.loc elem e.ety) es; false
-        with Type_error _ -> true
+        with Type_error _ | Err.E _ -> true
       in
       mk l (TSet (if het then TAny else elem)) (ESetLit es)
     | Meta (_, _, inner) | Quote (_, inner) -> go inner
@@ -1394,9 +1409,24 @@ and infer_match ctx l scrut clauses =
     let ce = mk l (TFun ([ se.ety; se.ety ], TBool)) (EBuiltin (if scrut_any then "dyn-eq" else "=")) in
     mk l TBool (ECall (ce, [ se; le ]))
   in
+  let seen = Hashtbl.create 8 in
+  let note pat =
+    match pat with
+    | Atom (_, Symbol "_") -> Hashtbl.replace seen "_" ()
+    | Atom (_, Symbol "None") -> Hashtbl.replace seen "None" ()
+    | Atom (_, Symbol "Some") -> Hashtbl.replace seen "Some" ()
+    | Atom (_, Symbol c) when Hashtbl.mem ctx.variants c -> Hashtbl.replace seen c ()
+    | Atom (_, Symbol _) -> Hashtbl.replace seen "*" ()
+    | Atom (_, Bool bv) -> Hashtbl.replace seen (string_of_bool bv) ()
+    | Atom _ -> Hashtbl.replace seen "lit" ()
+    | List (_, Atom (_, Symbol "Some") :: _) -> Hashtbl.replace seen "Some" ()
+    | List (_, Atom (_, Symbol c) :: _) when Hashtbl.mem ctx.variants c -> Hashtbl.replace seen c ()
+    | _ -> Hashtbl.replace seen "lit" ()
+  in
   let rec analyze = function
     | [] -> []
     | pat :: body_f :: rest ->
+      note pat;
       let clause =
         (match lit_expr pat with
          | Some le ->
@@ -1517,6 +1547,20 @@ and infer_match ctx l scrut clauses =
     | _ -> type_error l "match requires pattern/body pairs"
   in
   let items = analyze clauses in
+  if not (Hashtbl.mem seen "_" || Hashtbl.mem seen "*") then
+    (match repr se.ety with
+     | TCon (vn, _) when Hashtbl.mem ctx.vtypes vn ->
+       let missing = List.filter (fun c -> not (Hashtbl.mem seen c)) (Hashtbl.find ctx.vtypes vn) in
+       if missing <> [] then
+         Err.warn l "W401"
+           (Printf.sprintf "non-exhaustive match on `%s`: missing %s" vn (String.concat ", " missing))
+     | TOption _ ->
+       if not (Hashtbl.mem seen "None" && Hashtbl.mem seen "Some") then
+         Err.warn l "W402" "non-exhaustive match on option: cover both Some and None (or add a catch-all)"
+     | TBool ->
+       if not (Hashtbl.mem seen "true" && Hashtbl.mem seen "false") then
+         Err.warn l "W402" "non-exhaustive match on bool: cover both true and false"
+     | _ -> ());
   let ret_any =
     List.exists (fun (te, _) -> match repr te.ety with TAny -> true | _ -> false) items
   in
@@ -1580,7 +1624,7 @@ and implicit_resolve ctx l (needed : ty) : expr =
     | [] -> type_error l ("no implicit instance of type " ^ string_of_ty needed ^ " in scope")
     | (ety, thunk) :: rest ->
       let cand = shallow_clone ety in
-      (match (try unify l cand needed; true with Type_error _ -> false) with
+      (match (try unify l cand needed; true with Type_error _ | Err.E _ -> false) with
        | true -> thunk ()
        | false -> go rest)
   in
@@ -2192,7 +2236,7 @@ and infer_special ctx l name ce arg_es =
     unify l g (TFun ([ a ], c));
     let el =
       try unify l b c; b
-      with Type_error _ -> TAny
+      with Type_error _ | Err.E _ -> TAny
     in
     mk l (TFun ([ a ], TVec el)) (ECall (ce, arg_es))
   | "partial", f :: fixed ->

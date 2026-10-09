@@ -14,6 +14,15 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
 > extension (`.lg`), toolchain binary (`lg`), and emitted runtime module
 > (`Lg_rt`) are all named **lg**.
 
+## Errors
+
+Diagnostics are Elm-style: `error[Ecode]` with a `--> file:line:col`
+pointer, the offending source line, a caret span, and `=` hints —
+`did you mean \`mapv\`?` on unresolved symbols. `match` on a variant,
+option, or bool without covering every case (or a `_`/binder catch-all)
+emits `warning[W401/W402]`. Codes: E1xx types (E101 mismatch, E102
+unresolved), E2xx reader.
+
 ## Features
 
 - **Clojure syntax and data structures.** Code is data: lists, vectors,

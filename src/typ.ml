@@ -72,8 +72,8 @@ let rec unify loc a b =
     | TCon (n1, xs), TCon (n2, ys) when n1 = n2 && List.length xs = List.length ys ->
       List.iter2 (unify loc) xs ys
     | _ ->
-      type_error loc
-        (Printf.sprintf "type mismatch: %s vs %s" (string_of_ty a) (string_of_ty b))
+      Err.err loc "E101"
+        (Printf.sprintf "type mismatch: %s vs %s" (string_of_ty a) (string_of_ty b)) []
 
 and string_of_ty t =
   match repr t with

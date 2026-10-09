@@ -137,6 +137,7 @@ let () =
      | Failure msg -> Printf.eprintf "lg: %s
 %!" msg; exit 1
      | Lgc.Compiler.Compile_error (l, msg) ->
-       Printf.eprintf "%s:%d:%d: %s\n" l.Lgc.Syntax.file l.Lgc.Syntax.line l.Lgc.Syntax.col msg;
+       prerr_string (Lgc.Err.render l "E100" msg []);
        exit 1
+     | Lgc.Err.E _ as e -> Lgc.Err.report e; exit 1
      | Exit c -> exit c)

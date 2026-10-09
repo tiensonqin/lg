@@ -292,3 +292,15 @@ gains ctor patterns `(ctor p...)` compiled to real OCaml matches via the
 signature so `defn` bodies can call later-defined globals; emit groups
 consecutive `tis_fn` tops into `let rec .. and ..`, so declared calls
 resolve inside the rec group.
+
+
+## 14. Diagnostics (M5)
+
+`src/err.ml` renders Elm-style blocks: `error[Ecode]` + `--> loc` +
+source line + caret span + `=` hints. Every legacy `Type_error` /
+`Compile_error` path renders through it as E100, so old errors get
+snippets for free. `Typ.unify` reports E101, unresolved symbols E102
+with Levenshtein "did you mean" suggestions over env+globals+builtins,
+reader errors E201. `infer_match` records pattern coverage per scrutinee
+and warns W401 (variant ctors missing), W402 (option/bool partial) when
+there is no `_` or catch-all binder.

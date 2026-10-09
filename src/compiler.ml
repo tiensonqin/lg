@@ -110,7 +110,7 @@ let write_lgi (m : Ast.modl) : unit =
 let parse_lgi path : (string * Typ.scheme * bool list * bool) list =
   let forms =
     try Reader.read_file ~file:path (read_file_text path)
-    with Read_error (l, msg) -> raise (Compile_error (l, msg))
+    with Read_error (l, msg) -> Err.err l "E201" msg []
   in
   List.filter_map
     (fun f ->
@@ -182,7 +182,7 @@ let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : strin
       in
       let forms =
         try Reader.read_file ~file ~target src
-        with Read_error (l, msg) -> raise (Compile_error (l, msg))
+        with Read_error (l, msg) -> Err.err l "E201" msg []
       in
       let ns0, reqs = scan_ns forms in
       let dir = Filename.dirname file in
