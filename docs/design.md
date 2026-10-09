@@ -332,6 +332,26 @@ two locality fixes (`Seq.iter` partial-application, `List.mem` mli mode).
 - **Seqable builtins take any collection.** `zipmap`, `sort`, `concat`,
   `apply`, `into`, `mapv`-family unify on the *element* type via
   `with_coll`, and emit listifies with `as_list`.
+- **Nested-map + lookup parity with Clojure** (checked in
+  `test/parity.lg`):
+  - `get-in` returns `(opt any)` — 2-ary `None` on missing path or
+    leaf intermediate; 3-ary returns the default instead. Empty path
+    returns the map itself.
+  - `assoc-in` creates nested maps for missing intermediates and
+    overwrites leaf intermediates (Clojure-identical); the input map is
+    untouched (persistent). An empty path is a compile-time-rejected
+    edge: `Map.assoc_in` raises `invalid_arg` (Clojure assoc's a nil
+    key, which a keyword-path cannot express).
+  - `update-in` applies `f` to the current value; on a missing final
+    key the 4-ary default is used. 3-ary on a missing key fails loudly
+    (`failwith`) — deliberate divergence from Clojure's `f nil`, since
+    lg has no nil value to feed the callback.
+  - `dissoc` on a missing key returns the map unchanged; multiple keys
+    dissoc left-to-right.
+  - `nth` 2-ary raises on out-of-bounds; 3-ary returns the default.
+    The default must unify with the element type (static typing —
+    Clojure's heterogeneous defaults are not expressible).
+  - `update`/`get`/`nth`/`dissoc` mirror the same rules on flat maps.
 
 ## Invariants (do not break)
 

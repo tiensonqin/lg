@@ -1,0 +1,13 @@
+get-in-hit 1
+get-in-miss -1 -1
+get-in-leaf -1
+get-in-empty {:a {:b 1}}
+assoc-in-deep 7
+assoc-in-persist 9 1
+assoc-in-leaf 2
+update-in 11
+update-in-miss 41
+dissoc-miss 1 1
+nth-def -1 2
+nth-list -1 1
+get-oob nil 2 nil

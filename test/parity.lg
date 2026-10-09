@@ -1,0 +1,20 @@
+;; nested-map + nth boundary semantics vs Clojure
+;; get-in missing path -> nil(opt); assoc-in creates intermediates and
+;; overwrites leaf intermediates; dissoc on missing key -> unchanged;
+;; nth 3-ary default on OOB; update-in missing key uses 4-arg default.
+(def m {:a {:b 1}})
+(println (str "get-in-hit " (get-in m [:a :b] -1)))
+(println (str "get-in-miss " (get-in m [:a :c] -1) " " (get-in m [:x :y] -1)))
+(println (str "get-in-leaf " (get-in {:a 1} [:a :b] -1)))
+(println (str "get-in-empty " (get-in m [])))
+(let [m2 (assoc-in {} [:a :b :c] 7)]
+  (println (str "assoc-in-deep " (get-in m2 [:a :b :c] -1))))
+(let [m3 (assoc-in m [:a :b] 9)]
+  (println (str "assoc-in-persist " (get-in m3 [:a :b] -1) " " (get-in m [:a :b] -1))))
+(println (str "assoc-in-leaf " (get-in (assoc-in {:a 1} [:a :b] 2) [:a :b] -1)))
+(println (str "update-in " (get-in (update-in m [:a :b] (fn [x] (+ x 10))) [:a :b] -1)))
+(println (str "update-in-miss " (get-in (update-in m [:a :z] (fn [x] (+ x 1)) 40) [:a :z] -1)))
+(println (str "dissoc-miss " (count (dissoc m :zz)) " " (count (dissoc {:a 1 :b 2 :c 3} :a :zz :b))))
+(println (str "nth-def " (nth [1 2 3] 5 -1) " " (nth [1 2 3] 1 -1)))
+(println (str "nth-list " (nth '(1 2) 9 -1) " " (nth '(1 2) 0 -1)))
+(println (str "get-oob " (get [1 2] 9) " " (get [1 2] 1) " " (get #{1 2} 3)))
