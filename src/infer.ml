@@ -399,7 +399,10 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
 
 and infer_top ctx f =
   (* macro expansions arrive with hygiene-marked heads (def__hN); unmark the
-     head symbol so `def`/`do`/... dispatch sees the original form *)
+     head symbol so `def`/`do`/... dispatch sees the original form. The
+     marked name is kept for macro lookup so an expanded call still
+     resolves in its macro's own module *)
+  let orig_head = match f with List (_, Atom (_, Symbol s) :: _) -> s | _ -> "" in
   let f =
     match f with
     | List (l, Atom (_, Symbol s) :: rest) ->
@@ -504,6 +507,10 @@ and infer_top ctx f =
     (* top-level do: each element is a top-level form (macro expansion target) *)
     List.iter (infer_top ctx) body
   | List (l, Atom (_, Symbol h) :: args) ->
+    let h =
+      if orig_head <> "" && Macro.unmark orig_head <> orig_head && Macro.unmark orig_head = h
+      then orig_head else h
+    in
     (match macro_lookup ctx h with
      | Some fn ->
        let expanded =
@@ -1008,8 +1015,21 @@ and infer_symbol ctx l s : expr =
     b.bused <- b.bused + 1;
     mk l b.bty (ELocal b)
   | _ ->
-    let s = Macro.unmark s in
-    match String.index_opt s '/' with
+    let orig = Macro.unmark s in
+    (match Macro.mark_origin s, String.index_opt orig '/' with
+     | Some mns, None when mns <> ctx.modl.mname ->
+       (* marked unqualified ref: prefer the macro's own module *)
+       (match Hashtbl.find_opt ctx.globals mns with
+        | Some tbl ->
+          (match Hashtbl.find_opt tbl orig with
+           | Some { gsch = sch; gexp = true; _ } ->
+             mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns mns, munge orig, orig))
+           | _ -> resolve_unmarked ctx l orig)
+        | None -> resolve_unmarked ctx l orig)
+     | _ -> resolve_unmarked ctx l orig)
+
+and resolve_unmarked ctx l s =
+  match String.index_opt s '/' with
   | Some i when i > 0 ->
     let ns = String.sub s 0 i and n = String.sub s (i + 1) (String.length s - i - 1) in
     let target = match List.assoc_opt ns ctx.modl.requires with Some full -> full | None -> ns in
@@ -1115,7 +1135,11 @@ and desugar_thread l is_first f args =
 
 and infer_call ctx l items : expr =
   (* hygiene: unmark a marked head symbol so special forms inside a
-     syntax-quoted template still dispatch as special forms *)
+     syntax-quoted template still dispatch as special forms. The original
+     marked name is kept: if the head is not a special form it is restored
+     for application dispatch so macro/global lookup sees the origin
+     module recorded in the mark *)
+  let orig_head = match items with Atom (_, Symbol s) :: _ -> s | _ -> "" in
   let items =
     match items with
     | Atom (lh, Symbol s) :: rest ->
@@ -1161,7 +1185,14 @@ and infer_call ctx l items : expr =
     let kw = mk l TKeyword (EKeyword k) in
     infer_special ctx l "kw-get" (mk l (fresh_var ()) (EBuiltin "kw-get"))
       (kw :: List.map (infer_expr ctx) args)
-  | callee :: args -> infer_app ctx l callee args
+  | callee :: args ->
+    let callee =
+      match orig_head, callee with
+      | oh, Atom (lh, Symbol s) when oh <> "" && Macro.unmark oh <> oh && Macro.unmark oh = s ->
+        Atom (lh, Symbol oh)
+      | _ -> callee
+    in
+    infer_app ctx l callee args
 
 and join_branches l a b =
   match repr a.ety, repr b.ety with
@@ -1604,9 +1635,15 @@ and macro_lookup ctx s =
     let target = match List.assoc_opt ns ctx.modl.requires with Some f -> f | None -> ns in
     Macro.find_macro target n
   | None ->
-    (match Macro.find_macro ctx.modl.mname s' with
-     | Some _ as r -> r
-     | None -> Hashtbl.find_opt Macro.macro_by_name s')
+    (* bare macro names resolve only within a module boundary: a marked
+       (template-introduced) name looks in its macro's module first, an
+       unmarked one only in the current module — no shared fallback *)
+    (match Macro.mark_origin s with
+     | Some mns ->
+       (match Macro.find_macro mns s' with
+        | Some _ as r -> r
+        | None -> Macro.find_macro ctx.modl.mname s')
+     | None -> Macro.find_macro ctx.modl.mname s')
 
 (* clone a type with fresh unification vars — used to match an implicit
    entry against a needed dictionary type without mutating the entry *)

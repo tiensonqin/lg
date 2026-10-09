@@ -1,0 +1,10 @@
+;; macro hygiene boundary: unqualified template refs inside a macro
+;; resolve in the macro's own module, never at the call site.
+(ns hyg (:require [_hyglib :as h]))
+;; caller shadows both the fn and the macro name; neither must leak in
+(defn wrap [x] (str "caller:" x))
+(defmacro w [e] `(println "caller-w"))
+(h/w "in")
+(h/ww "in2")
+(w "own")          ;; caller's own w macro still works
+(println (wrap "direct"))

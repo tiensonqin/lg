@@ -89,8 +89,21 @@ atom ops (`atom`, `deref`/`@`, `reset!`, `swap!`), and `throw`/`try`.
   with a unique **`__hN` suffix** per expansion site before typechecking
   and emission. `gensym` is exposed for cases that need a fresh name in
   macro output (e.g., avoiding free-variable capture).
+- **Reference boundary.** Each mark also records the macro's *defining
+  module*. An unqualified symbol inside a `syntax-quote` template —
+  whether it names a global function or another macro — resolves in the
+  macro's own module first, and only falls back to the caller's module.
+  Call-site names can therefore never hijack a macro's internal
+  references: `(h/w x)` always calls `hlib`'s `wrap` even when the
+  caller defines its own `wrap` or its own `w` macro. Conversely, a
+  bare (unmarked, user-written) name only ever resolves in the module
+  that wrote it — macro calls are module-scoped, there is no shared
+  "last macro wins" fallback. To emit a call to a macro from generated
+  code, write it under `syntax-quote` so it carries the origin mark.
 - Macros are expanded before inference; expansion is per-module and
-  happens after reading, on raw forms.
+  happens after reading, on raw forms. Expansion threads the expanding
+  macro's module through a dynamically-bound value (like Clojure's
+  `*ns*`), so nested macro calls keep their own boundary.
 
 ## 5. Memory model and mode inference (v0)
 

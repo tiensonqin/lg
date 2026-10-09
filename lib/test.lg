@@ -56,7 +56,7 @@
         mk (fn mk [xs]
              (if (empty? xs)
                  (list)
-                 (cons (list 'is (list 'let (apply vector (z argv (take n xs))) expr))
+                 (cons `(is (let ~(apply vector (z argv (take n xs))) ~expr))
                        (mk (drop n xs)))))]
     (cons 'do (mk args))))
 

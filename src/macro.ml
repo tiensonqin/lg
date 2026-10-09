@@ -21,6 +21,9 @@ and mfn = {
   mrest : string option;
   mbody : form list;
   menv : (string, mval) Hashtbl.t;
+  (* module the macro was defined in — the hygiene boundary: unqualified
+     symbols in its templates resolve against this module first *)
+  mns : string;
 }
 
 exception Macro_error of loc * string
@@ -36,6 +39,10 @@ let register_macro ns name fn =
   Hashtbl.replace macros (ns ^ "/" ^ name) fn;
   Hashtbl.replace macro_by_name name fn
 
+(* dynamically-bound module of the macro currently expanding (like
+   Clojure's dynamic ns var): set by `apply` around each macro body eval *)
+let cur_mns = ref ""
+
 (* resolve a callee symbol to a macro: "ns/name" uses the qualified table;
    a bare name falls back to the last macro registered under that name *)
 let macro_of_sym s =
@@ -43,14 +50,23 @@ let macro_of_sym s =
   | Some i ->
     let ns = String.sub s 0 i and name = String.sub s (i + 1) (String.length s - i - 1) in
     (match find_macro ns name with Some fn -> Some fn | None -> Hashtbl.find_opt macro_by_name s)
-  | None -> Hashtbl.find_opt macro_by_name s
+  | None ->
+    (* bare callee inside a macro body: the expanding macro's own module
+       first (hygiene boundary), then the shared by-name table *)
+    (match find_macro !cur_mns s with
+     | Some _ as r -> r
+     | None -> Hashtbl.find_opt macro_by_name s)
 
-(* hygiene marks: renamed template symbol -> original name *)
-let marks : (string, string) Hashtbl.t = Hashtbl.create 256
+(* hygiene marks: renamed template symbol -> (original name, origin
+   module). The origin module is the macro's own namespace — where
+     unqualified template references resolve before the call site's. *)
+let marks : (string, string * string) Hashtbl.t = Hashtbl.create 256
 let mark_ctr = ref 0
 let gensym_ctr = ref 0
 
-let unmark s = match Hashtbl.find_opt marks s with Some o -> o | None -> s
+let unmark s = match Hashtbl.find_opt marks s with Some (o, _) -> o | None -> s
+
+let mark_origin s = match Hashtbl.find_opt marks s with Some (_, ns) -> Some ns | None -> None
 
 let form_error l fmt = Printf.ksprintf (fun s -> raise (Macro_error (l, s))) fmt
 
@@ -294,9 +310,10 @@ let rec squote (env : (string, mval) Hashtbl.t) (mark : int) (f : form) : form =
   | Meta (l, m, x) -> Meta (l, squote env mark m, squote env mark x)
   | Quote (l, x) -> Quote (l, squote env mark x)
   | Atom (l, Symbol s) ->
-    (* rename template symbols; record original for the analyzer *)
+    (* rename template symbols; record original name + the macro's
+       module so unqualified refs resolve in the defining namespace *)
     let renamed = s ^ tag in
-    Hashtbl.replace marks renamed s;
+    Hashtbl.replace marks renamed (s, !cur_mns);
     Atom (l, Symbol renamed)
   | Atom _ -> f
 
@@ -384,13 +401,22 @@ and eval_fn l env name rest =
       in
       split [] (Array.to_list params)
     in
-    MFn { mname = name; mparams = ps; mrest = rst; mbody = body; menv = env }
+    MFn { mname = name; mparams = ps; mrest = rst; mbody = body; menv = env; mns = "" }
   | Atom (_, Symbol n) :: rest -> eval_fn l env n rest
   | _ -> form_error l "fn: expected parameter vector"
 
 and apply l v args : mval =
   match v with
   | MFn fn ->
+    let old_mns = !cur_mns in
+    if fn.mns <> "" then cur_mns := fn.mns;
+    (try apply_mfn l fn args
+     with e -> cur_mns := old_mns; raise e)
+    |> fun r -> cur_mns := old_mns; r
+  | MBuiltin name -> eval_builtin_apply l name args
+  | _ -> form_error l "macro apply: not a function"
+
+and apply_mfn l fn args : mval =
     let env = Hashtbl.copy fn.menv in
     let rec bind_params ps xs =
       match ps, xs with
@@ -408,8 +434,6 @@ and apply l v args : mval =
       | x :: rest -> ignore (eval env x); last rest
     in
     last fn.mbody
-  | MBuiltin name -> eval_builtin_apply l name args
-  | _ -> form_error l "macro apply: not a function"
 
 let _ = apply_fn := apply
 
@@ -424,7 +448,7 @@ let register_defmacro (ns : string) (f : form) : unit =
   match f with
   | List (l, _ :: Atom (_, Symbol name) :: rest) ->
     (match eval_fn l (Hashtbl.create 8) name rest with
-     | MFn fn -> register_macro ns name fn
+     | MFn fn -> register_macro ns name { fn with mns = ns }
      | _ -> form_error l "defmacro: bad form")
   | _ -> ()
 

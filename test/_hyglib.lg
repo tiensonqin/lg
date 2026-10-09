@@ -1,0 +1,6 @@
+(ns _hyglib)
+;; private helper only visible in this module's globals
+(defn wrap [x] (str "[" x "]"))
+(defmacro w [e] `(println (wrap ~e)))
+;; a macro that calls another same-module macro bare
+(defmacro ww [e] `(do (w ~e) (w ~e)))
