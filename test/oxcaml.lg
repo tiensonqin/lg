@@ -1,6 +1,6 @@
-;; --backend=oxcaml: local_ on primitive top-level params; stack_ /
-;; unique_ / binding local_ lower to (* … *) comments until clj-core
-;; declares @ local params
+;; --backend=oxcaml: local_ on borrowed top-level params; stack_ on
+;; direct literal allocations; see test/oxlocal.lg for the collection
+;; borrow paths (needs the clj-core/rrbvec `ox` pins)
 (defn bump [x] (+ x 1))
 (defn sum-to [n acc] (if (<= n 0) acc (sum-to (- n 1) (+ acc n))))
 (println (bump 41))

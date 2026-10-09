@@ -1088,8 +1088,8 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         if List.length args = 3 then buf_add b ("(if " ^ a 1 ^ " < String.length " ^ a 0 ^ " then " ^ a 0 ^ ".[" ^ a 1 ^ "] else " ^ a 2 ^ ")")
         else buf_add b ("(" ^ a 0 ^ ".[" ^ a 1 ^ "])")
       | `Seq ->
-        if List.length args = 3 then buf_add b ("(match Clj_core.Seq.nth_opt " ^ a 0 ^ " " ^ a 1 ^ " with Some v -> v | None -> " ^ a 2 ^ ")")
-        else buf_add b ("(Clj_core.Seq.nth " ^ a 0 ^ " " ^ a 1 ^ ")")
+        if List.length args = 3 then buf_add b ("(match " ^ sconsi 0 "Clj_core.Seq.nth_opt" "Clj_core.Seq.nth_opt_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " with Some v -> v | None -> " ^ a 2 ^ ")")
+        else buf_add b ("(" ^ sconsi 0 "Clj_core.Seq.nth" "Clj_core.Seq.nth_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ ")")
       | _ -> buf_add b "(failwith \"nth\")"))
    | "conj" ->
      let elem_ty = match repr (t 0) with TVec el -> el | TList el -> el | TSet el -> el | _ -> TUnit in

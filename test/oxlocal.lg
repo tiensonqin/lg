@@ -1,0 +1,10 @@
+;; --backend=oxcaml: local_ bindings + borrowed collection ops.
+;; Requires clj-core/rrbvec `ox` pins (@ local params + Seq.*_local).
+(defn total [v] (reduce + 0 v))
+(let [v [1 2 3 4 5]] (println (total v)))
+(println (count (map (fn [x] (* x x)) (filter (fn [x] (> x 1)) [1 2 3]))))
+(println (count (map (fn [x] (- x)) [1 2])))
+(println (count (rest [1 2 3])))
+(println (nth [7 8 9] 1))
+(let [m {:a 1 :b 2}] (println (count m)))
+(dorun (map println [1 2]))

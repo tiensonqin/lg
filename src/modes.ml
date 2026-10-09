@@ -317,6 +317,12 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
              | None -> true)
           | _ -> true)
      in
+     (match ce.desc with
+      | EBuiltin n when List.mem n [ "count"; "map"; "dorun" ] ->
+        Printf.eprintf "DBGcall %s escs=%s arg_esc0=%b rr=%b\n" n
+          (match escs with None -> "none" | Some _ -> "some")
+          (arg_esc 0) region_ret
+      | _ -> ());
      analyze_expr ~region_ret:true ce;
      List.iteri (fun i a -> analyze_expr ~region_ret:(arg_esc i) a) args;
      (* an immediately-applied lambda's params may be annotated local_:
@@ -446,7 +452,24 @@ let analyze_topdef (d : topdef) : unit =
   ignore (owned_hint ())
 
 let analyze_module (m : modl) : unit =
-  List.iter (function TDef d -> analyze_topdef d | _ -> ()) m.tops;
+  List.iter
+    (function
+     | TDef d ->
+       analyze_topdef d;
+       (* record this def's escape/local params before later tops are
+          analyzed so their uses of it are classified correctly *)
+       (match d.texpr.desc with
+        | EFun fn ->
+          Hashtbl.replace global_escapes
+            (m.ocaml_name ^ "." ^ Infer.munge d.tname)
+            (param_escapes fn);
+          Hashtbl.replace global_local_params
+            (m.ocaml_name ^ "." ^ Infer.munge d.tname)
+            (List.map (fun p -> p.bmode = Local) fn.params)
+        | _ -> ())
+     | TEffect e -> analyze_expr ~region_ret:true e
+     | _ -> ())
+    m.tops;
   List.iter (analyze_expr ~region_ret:true) m.effects
 
 (* ---- reporting ---- *)
@@ -469,6 +492,8 @@ let count_modes m =
      | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
      | _ -> ())
   in
-  List.iter (function TDef d -> walk d.texpr | _ -> ()) m.tops;
+  List.iter
+    (function TDef d -> walk d.texpr | TEffect e -> walk e | _ -> ())
+    m.tops;
   List.iter walk m.effects;
   (!local, !owned, !shared)
