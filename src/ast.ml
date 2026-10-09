@@ -62,6 +62,8 @@ and edesc =
   | EBox of expr                            (* concrete expr widened to `any`: deep-box at emit *)
   | EDynVec of expr * binder * expr * expr (* match on `any`: DVec b -> t | _ -> e *)
   | EDynMap of expr * binder * expr * expr (* match on `any`: DMap b -> t | _ -> e *)
+  | EVariant of expr * string * binder list * expr * expr
+    (* match se with Mod.Ctor (b..) -> t | _ -> e *)
 
 let binder_id = ref 0
 let fresh_binder name = incr binder_id; { bname = name; bid = !binder_id; bty = TUnit; bmode = Shared; bused = 0; blit = false }
@@ -103,6 +105,9 @@ type top =
   | TExtern of loc * string  (* (extern-type name) — opaque handle type *)
   | TFfi of loc * string * ty list * ty * ffi_sel * string option
     (* (ffi name [args] ret {selector [:library path]}) *)
+  | TVariant of loc * string * ty list * (string * (string * ty) list) list
+    (* (defvariant (name params...) (ctor [f ty]...) ...) — ty params are
+       shared TVar instances across all ctor field types *)
 
 type modl = {
   mname : string;          (* lg2 namespace, e.g. "foo.util" *)

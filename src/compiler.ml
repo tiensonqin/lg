@@ -83,6 +83,15 @@ let lgi_of_module (m : Ast.modl) : string =
         Buffer.add_string b
           (Printf.sprintf "(%s %s %s%s)\n" kw d.tname (Typ.string_of_lg_ty d.tsch.sty) esc)
       | Ast.TExtern (_, n) -> Buffer.add_string b (Printf.sprintf "(extern-type %s)\n" n)
+      | Ast.TVariant (_, n, _ps, cs) ->
+        Buffer.add_string b
+          (Printf.sprintf "(defvariant %s%s)\n" n
+             (String.concat ""
+                (List.map
+                   (fun (c2, flds) ->
+                     if flds = [] then " " ^ c2
+                     else " (" ^ c2 ^ String.concat "" (List.map (fun (fnm, t) -> " [" ^ fnm ^ " " ^ Typ.string_of_lg_ty t ^ "]") flds) ^ ")")
+                   cs)))
       | Ast.TFfi (_, n, args, ret, _, _) ->
         Buffer.add_string b
           (Printf.sprintf "(ffi %s %s)\n" n

@@ -28,7 +28,12 @@ js_of_ocaml / wasm_of_ocaml for JS and Wasm targets.
   derived from the path. An `(ns ...)` form is optional. Cross-file
   dependencies are declared with `(:require [ns :as alias])` and resolved
   transitively via `-I` include dirs.
-- **Multi-arity `defn`, destructuring, `match`/`case`, named-fn
+- **Multi-arity `defn`, destructuring, `match` (incl. variant ctor patterns)
+* `(declare n)` — forward declaration for mutual recursion; consecutive
+  `defn`s emit as one `let rec .. and ..` group
+* `(defvariant shape (circle [r float]) (square [w float] [h float]) point)`
+  — OCaml variant types; parameterized via `(defvariant (tree a) ...)`.
+  Ctors are fns `(circle 1.0)`, matchable as `(circle r)` patterns/`case`, named-fn
   recursion, `defrecord`.**
   `(defn f ([x] …) ([x y] …))` dispatches on arity (each arity is its own
   checked definition). `let`/`fn`/parameters destructure vectors

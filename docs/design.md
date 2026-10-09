@@ -280,3 +280,15 @@ transform lazily; realization happens at `vec`/`set`/`into`/`doall`/
 `cons` accepts any collection and returns `seq`. `(seq c)` returns
 `option` — `nil` on empty, matching Clojure. Element types cross the
 `any` boundary with `Clj_core.Seq.map` box/unbox adapters at emit time.
+
+
+## 13. Variants and declare (M4)
+
+`defvariant` declares an OCaml variant type: fields are `[name type]`
+vectors, type parameters share `ty_of_form` bindings across ctors, and
+ctors register as global functions (or constants for 0 fields). `match`
+gains ctor patterns `(ctor p...)` compiled to real OCaml matches via the
+`EVariant` IR node. `(declare n)` registers a monomorphic forward
+signature so `defn` bodies can call later-defined globals; emit groups
+consecutive `tis_fn` tops into `let rec .. and ..`, so declared calls
+resolve inside the rec group.

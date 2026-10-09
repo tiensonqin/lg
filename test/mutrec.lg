@@ -1,0 +1,12 @@
+;; mutual recursion via declare + variants
+(declare is-odd)
+(defn is-even [n] (if (= 0 n) true (is-odd (- n 1))))
+(defn is-odd [n] (if (= 0 n) false (is-even (- n 1))))
+(println (is-even 10))
+(println (is-odd 7))
+(println (is-even 3))
+;; forward def visible later
+(declare helper)
+(defn use [x] (helper x))
+(defn helper [x] (+ x 1))
+(println (use 41))

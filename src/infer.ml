@@ -30,8 +30,11 @@ type ctx = {
   mutable implicits : (ty * (unit -> expr)) list;  (* implicit dicts, innermost first *)
   mimplicits : (string * ty) list ref;           (* exported implicit defs of this module *)
   externs : (string, unit) Hashtbl.t;            (* (extern-type n) declared in this module *)
+  declared : (string, ty) Hashtbl.t;             (* (declare n) forward decls for mutual recursion *)
+  variants : (string, vctor) Hashtbl.t;          (* defvariant ctor name -> info *)
 
 }
+and vctor = { vc_ocaml : string; vc_scheme : scheme; vc_nfields : int }
 
 (* ns -> (name * dict type) entries exported via (:implicits true) *)
 let module_implicits : (string, (string * ty) list) Hashtbl.t = Hashtbl.create 16
@@ -93,8 +96,7 @@ let ocaml_mod_of_ns ns =
 let primitive_type_names =
   [ "int"; "float"; "bool"; "char"; "string"; "keyword"; "symbol"; "unit"; "nil"; "any" ]
 
-let ty_of_form f : ty =
-  let tbl = Hashtbl.create 7 in
+let ty_of_form ?(tbl = Hashtbl.create 7) f : ty =
   let rec go = function
     | Atom (_, Symbol s) ->
       (match s with
@@ -128,6 +130,7 @@ let ty_of_form f : ty =
         | _ -> raise (Type_error (atom_loc f, "malformed (fn [...] ret) type"))
       in
       TFun (List.map go (Array.to_list args), ret)
+    | List (_, Atom (_, Symbol n) :: ts) -> TCon (n, List.map go ts)
     | bad -> raise (Type_error (atom_loc bad, "unsupported type expression"))
   in
   go f
@@ -385,7 +388,7 @@ let last xs = List.nth xs (List.length xs - 1)
 
 let rec infer_program (forms : form list) (mname : string) (path : string) (globals : globals) : modl =
   let m = { mname; ocaml_name = ocaml_mod_of_ns mname; mpath = path; requires = []; tops = []; effects = []; iface_only = false; uses_ctypes = false } in
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7 } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants = Hashtbl.create 16 } in
   List.iter (infer_top ctx) forms;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
@@ -410,6 +413,53 @@ and infer_top ctx f =
     if Hashtbl.mem ctx.externs n then type_error l ("duplicate extern-type " ^ n);
     Hashtbl.replace ctx.externs n ();
     ctx.modl.tops <- ctx.modl.tops @ [ TExtern (l, n) ]
+  | List (l, Atom (_, Symbol "declare") :: [ declf ]) ->
+    let n, ty =
+      match declf with
+      | Atom (_, Symbol n) -> (n, fresh_var ())
+      | Meta (_, _, Atom (_, Symbol n)) as mf ->
+        let _, ta, _ = split_meta mf in
+        (n, match ta with Some t -> t | None -> fresh_var ())
+      | _ -> type_error l "declare expects a symbol"
+    in
+    Hashtbl.replace ctx.declared n ty;
+    register_global ctx n (mono ty) false
+  | List (l, Atom (_, Symbol "defvariant") :: namef :: ctors) ->
+    let vname, params =
+      match namef with
+      | Atom (_, Symbol n) -> (n, [])
+      | List (_, Atom (_, Symbol n) :: ps) ->
+        (n, List.map
+          (fun p -> match p with Atom (_, Symbol pp) -> pp | _ -> type_error l "variant params must be symbols")
+          ps)
+      | _ -> type_error l "defvariant expects a name or (name params...)"
+    in
+    let tbl = Hashtbl.create 7 in
+    let tvars = List.map (fun p -> let t = fresh_var () in Hashtbl.replace tbl p t; t) params in
+    let ret = TCon (vname, tvars) in
+    let field_of = function
+      | Vector (_, [| Atom (_, Symbol fnm); tf |]) -> (fnm, ty_of_form ~tbl tf)
+      | _ -> type_error l "variant fields must be [name type] vectors"
+    in
+    let parsed =
+      List.map
+        (fun c ->
+          match c with
+          | Atom (_, Symbol c) -> (c, [])
+          | List (_, Atom (_, Symbol c) :: flds) -> (c, List.map field_of flds)
+          | _ -> type_error l "malformed variant ctor (want name or (name [f ty]...))")
+        ctors
+    in
+    List.iter
+      (fun (c, flds) ->
+        let ftys = List.map snd flds in
+        let cty = (match ftys with [] -> ret | _ -> TFun (ftys, ret)) in
+        let ocaml_c = ctx.modl.ocaml_name ^ "." ^ String.capitalize_ascii (munge c) in
+        let sch = generalize [] cty in
+        register_global ctx c sch false;
+        Hashtbl.replace ctx.variants c { vc_ocaml = ocaml_c; vc_scheme = sch; vc_nfields = List.length ftys })
+      parsed;
+    ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed) ]
   | List (l, Atom (_, Symbol "ffi") :: _) ->
     ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]
   | List (l, Atom (_, Symbol "defrecord") :: Atom (_, Symbol name) :: Vector (_, fields) :: _) ->
@@ -575,6 +625,8 @@ and infer_defn ctx f =
        let fe = infer_fn ctx l (Some name) params body in
        ctx.env <- saved; ctx.implicits <- saved_imp;
        unify l self_v fe.ety;
+       (match Hashtbl.find_opt ctx.declared name with
+        | Some dv -> unify l dv fe.ety | None -> ());
        (match ty_ann with Some t -> unify l fe.ety t | None -> ());
        (match imp with Some (Some t) -> unify l fe.ety t | _ -> ());
        (* carry (implicit …) marks from the signature onto the stored
@@ -1365,12 +1417,44 @@ and infer_match ctx l scrut clauses =
             | Atom (_, Symbol "_") ->
               let te = infer_expr ctx body_f in
               (te, fun te' _ -> te')
+            | Atom (_, Symbol c)
+                when (match Hashtbl.find_opt ctx.variants c with
+                      | Some v -> v.vc_nfields = 0 | None -> false) ->
+              let vc = Hashtbl.find ctx.variants c in
+              let it = instantiate vc.vc_scheme in
+              unify (atom_loc pat) se.ety it;
+              let saved = ctx.env and saved_imp = ctx.implicits in
+              let te = infer_expr ctx body_f in
+              ctx.env <- saved; ctx.implicits <- saved_imp;
+              (te, fun te' next -> mk l ret (EVariant (se, vc.vc_ocaml, [], te', next)))
             | Atom (_, Symbol _) ->
               let saved = ctx.env and saved_imp = ctx.implicits in
               let pairs = bind_pattern ctx (atom_loc pat) pat se in
               let te = infer_expr ctx body_f in
               ctx.env <- saved; ctx.implicits <- saved_imp;
               (te, fun te' _ -> mk l ret (ELet (pairs, te')))
+            | List (_, Atom (_, Symbol c) :: pats) when Hashtbl.mem ctx.variants c ->
+              let vc = Hashtbl.find ctx.variants c in
+              let it = instantiate vc.vc_scheme in
+              let ftys, rty = (match repr it with TFun (ts, r) -> (ts, r) | _ -> assert false) in
+              unify (atom_loc pat) se.ety rty;
+              if List.length pats <> List.length ftys then
+                type_error l (c ^ ": pattern arity mismatch");
+              let saved = ctx.env and saved_imp = ctx.implicits in
+              let bs =
+                List.map2
+                  (fun p ft ->
+                    match p with
+                    | Atom (_, Symbol "_") -> let bb = fresh_binder "_" in bb.bty <- ft; bb
+                    | Atom (_, Symbol sn) ->
+                      let bb = fresh_binder sn in bb.bty <- ft;
+                      ctx.env <- (sn, { vscheme = mono bb.bty; vkind = KLocal bb; vvariadic = false }) :: ctx.env; bb
+                    | _ -> type_error l "variant pattern fields must be symbols or _")
+                  pats ftys
+              in
+              let te = infer_expr ctx body_f in
+              ctx.env <- saved; ctx.implicits <- saved_imp;
+              (te, fun te' next -> mk l ret (EVariant (se, vc.vc_ocaml, bs, te', next)))
             | Map (ml, _) ->
               if scrut_any then (
                 let dm = fresh_binder "mm" in

@@ -50,6 +50,16 @@ let sym_expr s =
 (* current enclosing module — same-module globals emit unqualified *)
 let cur_mod = ref ""
 
+(* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
+let cur_v : (string, string * int) Hashtbl.t = Hashtbl.create 16
+
+(* qualify a "Mod.Ctor" name: bare inside its own module *)
+let ctor_qual q =
+  let pfx = !cur_mod ^ "." in
+  if String.length q > String.length pfx && String.sub q 0 (String.length pfx) = pfx
+  then String.sub q (String.length pfx) (String.length q - String.length pfx)
+  else q
+
 let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   match e.desc with
   | EInt i -> buf_add b (if i < 0 then "(" ^ string_of_int i ^ ")" else string_of_int i)
@@ -61,7 +71,13 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | ESymbol s -> buf_add b (sym_expr s)
   | ENil -> buf_add b "()"
   | ELocal bd -> buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid)
-  | EGlobal (m, n, _) -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n)
+  | EGlobal (m, n, _) ->
+    (match Hashtbl.find_opt cur_v (m ^ "/" ^ n) with
+     | Some (q, 0) -> buf_add b (ctor_qual q)
+     | Some (q, k) ->
+       let xs = List.init k (fun i -> "__x" ^ string_of_int i) in
+       buf_add b ("(fun " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ " -> " ^ ctor_qual q ^ " " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ ")")
+     | None -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n))
   | EBuiltin name -> buf_add b (emit_builtin_value name)
   | EFun fn ->
     (match fn.Ast.fself with
@@ -174,6 +190,14 @@ let rec emit_expr (b : Buffer.t) (e : expr) : unit =
   | EDynMap (se', bd, t, x) ->
     buf_add b "(match "; emit_expr b se'; buf_add b (" with Lg_rt.DMap " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " -> ");
     emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
+  | EVariant (se', cname, bs, t, x) ->
+    let cq = ctor_qual cname in
+    buf_add b "(match "; emit_expr b se';
+    (match bs with
+     | [] -> buf_add b (" with " ^ cq ^ " -> ")
+     | [ b1 ] -> buf_add b (" with " ^ cq ^ " " ^ sanitize b1.bname ^ "__" ^ string_of_int b1.bid ^ " -> ")
+     | _ -> buf_add b (" with " ^ cq ^ " (" ^ String.concat ", " (List.map (fun bb -> sanitize bb.bname ^ "__" ^ string_of_int bb.bid) bs) ^ ") -> "));
+    emit_expr b t; buf_add b " | _ -> "; emit_expr b x; buf_add b ")"
   | EOpt (Some e) -> buf_add b ("(Some " ^ arg_str e ^ ")")
   | EOpt None -> buf_add b "None"
   | EBox e -> buf_add b (box_deep e.ety (arg_str e))
@@ -196,6 +220,9 @@ and arg_str e = let b = Buffer.create 16 in emit_expr b e; Buffer.contents b
 and emit_call b ret ce args =
   match ce.desc with
   | EBuiltin name -> emit_builtin_call b ret name args
+  | EGlobal (m, n, _) when Hashtbl.mem cur_v (m ^ "/" ^ n) ->
+    let q, _ = Hashtbl.find cur_v (m ^ "/" ^ n) in
+    buf_add b ("(" ^ ctor_qual q ^ " " ^ (if List.length args = 1 then arg_str (List.hd args) else "(" ^ String.concat ", " (List.map arg_str args) ^ ")") ^ ")")
   | _ ->
     (* box args into dyn when the callee's formal param is `any` *)
     let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
@@ -212,6 +239,7 @@ and emit_call b ret ce args =
     buf_add b ")";
   ignore ret
 
+(* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
 (* ---- printers for str/println/pr-str ---- *)
 and printer_call t e =
   let es = arg_str e in
@@ -1346,6 +1374,8 @@ let rec ocaml_ty t =
   | TMap (k, v) -> "(" ^ ocaml_ty k ^ ", " ^ ocaml_ty v ^ ") Clj_core.Map.t"
   | TAtom u -> paren_ty (ocaml_ty u) ^ " Clj_core.Atom.t"
   | TCon (n, []) -> munge n
+  | TCon (n, ts) -> "(" ^ String.concat ", " (List.map ocaml_ty ts) ^ ") " ^ munge n
+  | TVar v -> "'a" ^ string_of_int v.id
   | TFun (a, r) ->
     "(" ^ String.concat " -> " (List.map ocaml_ty a @ [ ocaml_ty r ]) ^ ")"
   | t -> failwith ("emit: type has no OCaml FFI mapping: " ^ Typ.string_of_lg_ty t)
@@ -1436,8 +1466,34 @@ let emit_def_group b ds =
   | [ `Extern (_l, n) ] -> buf_add b ("type " ^ munge n ^ "
 ")
   | [ `Ffi (_l, n, a, r, sel, lib) ] -> emit_ffi b _l n a r sel lib
+  | [ `Variant (_l, n, ps, cs) ] ->
+    let pfx =
+      match ps with
+      | [] -> ""
+      | [ v ] -> ocaml_ty v ^ " "
+      | vs -> "(" ^ String.concat ", " (List.map ocaml_ty vs) ^ ") "
+    in
+    buf_add b ("type " ^ pfx ^ munge n ^ " = ");
+    buf_add b
+      (String.concat " | "
+         (List.map
+            (fun (c, flds) ->
+              let cn = String.capitalize_ascii (munge c) in
+              (match flds with
+               | [] -> cn
+               | _ -> cn ^ " of " ^ String.concat " * " (List.map (fun (_, t) -> ocaml_ty t) flds)))
+            cs));
+    buf_add b "
+";
+    List.iter
+      (fun (c, flds) ->
+        Hashtbl.replace cur_v
+          (!cur_mod ^ "/" ^ munge c)
+          (!cur_mod ^ "." ^ String.capitalize_ascii (munge c), List.length flds))
+      cs
   | ds ->
-    buf_add b "let rec ";
+    let all_fn = List.for_all (function `Def d -> d.tis_fn | _ -> false) ds in
+    buf_add b (if all_fn then "let rec " else "let ");
     List.iteri
       (fun i d ->
         match d with
@@ -1455,16 +1511,17 @@ let emit_module b (m : modl) =
   buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");
   let rec groups acc = function
     | [] -> List.rev acc
-    | TDef d :: rest ->
-      (match arity_root d.tname with
-       | Some root ->
-         let rec take acc2 = function
-           | TDef d2 :: tl when arity_root d2.tname = Some root -> take (d2 :: acc2) tl
-           | tl -> (List.rev acc2, tl)
-         in
-         let same, rest' = take [] rest in
-         groups ((List.map (fun x -> `Def x) (d :: same)) :: acc) rest'
-       | None -> groups ([ `Def d ] :: acc) rest)
+    | TDef d :: rest when d.tis_fn ->
+      (* consecutive fn defs form one `let rec .. and ..` group — this is
+         what makes `(declare g)` mutual recursion emit correctly *)
+      let rec take acc2 = function
+        | TDef d2 :: tl when d2.tis_fn -> take (d2 :: acc2) tl
+        | tl -> (List.rev acc2, tl)
+      in
+      let same, rest' = take [ d ] rest in
+      groups ((List.map (fun x -> `Def x) same) :: acc) rest'
+    | TDef d :: rest -> groups ([ `Def d ] :: acc) rest
+    | TVariant (_l, n, ps, cs) :: rest -> groups ([ `Variant (_l, n, ps, cs) ] :: acc) rest
     | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
   in

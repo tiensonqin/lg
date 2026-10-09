@@ -1,0 +1,28 @@
+;; algebraic variant types: defvariant + constructor fns + match
+(defvariant shape
+  (circle [r float])
+  (square [w float] [h float])
+  point)
+(def s1 (square 2.0 3.0))
+(def s2 (circle 1.5))
+(defn area [s]
+  (match s
+    (circle r) (* 3.14 r r)
+    (square w h) (* w h)
+    point 0.0))
+(println (area s1))
+(println (area s2))
+(println (area point))
+;; ctor as a value
+(println (mapv (fn [s] (area s)) [s1 s2 point]))
+;; parameterized variant
+(defvariant (tree a)
+  leaf
+  (node [l (tree a)] [v a] [r (tree a)]))
+(def t1 (node (node leaf 1 leaf) 2 leaf))
+(defn tsum [t]
+  (match t
+    leaf 0
+    (node l v r) (+ (+ (tsum l) v) (tsum r))))
+(println (tsum t1))
+(println (tsum leaf))
