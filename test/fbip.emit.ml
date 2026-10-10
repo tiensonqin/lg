@@ -402,33 +402,89 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Fbip = struct
-let v = ((let vb__1 = (Lg_rt.vb_of_arr [|1|]) in Lg_rt.vb_push vb__1 2; Lg_rt.vb_push vb__1 3; Lg_rt.vb_push vb__1 4; Lg_rt.vb_freeze vb__1) : int Clj_core.Vec.t)
+let v = (
+# 2 "/Users/devin/repos/lg2/test/fbip.lg"
+(let vb__1 = (Lg_rt.vb_of_arr [|1|]) in Lg_rt.vb_push vb__1 2; Lg_rt.vb_push vb__1 3; Lg_rt.vb_push vb__1 4; Lg_rt.vb_freeze vb__1) : int Clj_core.Vec.t)
+
+# 3 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) v)))))
-let m = ((let mb__2 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 1)]) in Lg_rt.mb_assoc mb__2 (Clj_core.Keyword.keyword "b") 2; Lg_rt.mb_assoc mb__2 (Clj_core.Keyword.keyword "c") 3; Lg_rt.mb_freeze mb__2) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+let m = (
+# 4 "/Users/devin/repos/lg2/test/fbip.lg"
+(let mb__2 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 1)]) in Lg_rt.mb_assoc mb__2 (Clj_core.Keyword.keyword "b") 2; Lg_rt.mb_assoc mb__2 (Clj_core.Keyword.keyword "c") 3; Lg_rt.mb_freeze mb__2) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+
+# 5 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get m (Clj_core.Keyword.keyword "b")))))))
+
+# 6 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((let w__1 = (Clj_core.Vec.of_list [10; 20]) in (print_endline ((Lg_rt.str_vec (Lg_rt.str_int) (Clj_core.Vec.conj (List.fold_left Clj_core.Vec.conj w__1 (Clj_core.Vec.to_list (Clj_core.Vec.of_list [30; 40]))) 50)))))))
-let m2 = ((let mb__3 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "x"), 1); ((Clj_core.Keyword.keyword "y"), 2)]) in Lg_rt.mb_assoc mb__3 (Clj_core.Keyword.keyword "z") 3; Lg_rt.mb_dissoc mb__3 (Clj_core.Keyword.keyword "x"); Lg_rt.mb_freeze mb__3) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+let m2 = (
+# 7 "/Users/devin/repos/lg2/test/fbip.lg"
+(let mb__3 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "x"), 1); ((Clj_core.Keyword.keyword "y"), 2)]) in Lg_rt.mb_assoc mb__3 (Clj_core.Keyword.keyword "z") 3; Lg_rt.mb_dissoc mb__3 (Clj_core.Keyword.keyword "x"); Lg_rt.mb_freeze mb__3) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+
+# 8 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get m2 (Clj_core.Keyword.keyword "z")))))))
+
+# 9 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get m2 (Clj_core.Keyword.keyword "x")))))))
+
+# 11 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((let s__2 = (Clj_core.Vec.of_list [1; 2]) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_vec (Lg_rt.str_int) (Clj_core.Vec.conj s__2 9)) ^ (Lg_rt.str_string " / ") ^ (Lg_rt.str_vec (Lg_rt.str_int) s__2))))))))
-let st = ((let sb__4 = (Lg_rt.sb_of_list [1]) in Lg_rt.sb_add sb__4 2; Lg_rt.sb_add sb__4 3; Lg_rt.sb_freeze sb__4) : int Clj_core.Set.t)
+let st = (
+# 12 "/Users/devin/repos/lg2/test/fbip.lg"
+(let sb__4 = (Lg_rt.sb_of_list [1]) in Lg_rt.sb_add sb__4 2; Lg_rt.sb_add sb__4 3; Lg_rt.sb_freeze sb__4) : int Clj_core.Set.t)
+
+# 13 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_bool (Clj_core.Set.contains_ st 2))))))
-let v2 = ((let vb__5 = (Lg_rt.vb_of_arr [|1; 2|]) in Lg_rt.vb_push vb__5 3; Lg_rt.vb_pop vb__5; Lg_rt.vb_freeze vb__5) : int Clj_core.Vec.t)
+let v2 = (
+# 15 "/Users/devin/repos/lg2/test/fbip.lg"
+(let vb__5 = (Lg_rt.vb_of_arr [|1; 2|]) in Lg_rt.vb_push vb__5 3; Lg_rt.vb_pop vb__5; Lg_rt.vb_freeze vb__5) : int Clj_core.Vec.t)
+
+# 16 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) v2)))))
-let m3 = ((let mb__6 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 0)]) in Lg_rt.mb_assoc mb__6 (Clj_core.Keyword.keyword "a") 5; Lg_rt.mb_update mb__6 (Clj_core.Keyword.keyword "a") (fun x__3 -> (x__3 + 1)); Lg_rt.mb_freeze mb__6) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+let m3 = (
+# 17 "/Users/devin/repos/lg2/test/fbip.lg"
+(let mb__6 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 0)]) in Lg_rt.mb_assoc mb__6 (Clj_core.Keyword.keyword "a") 5; Lg_rt.mb_update mb__6 (Clj_core.Keyword.keyword "a") (fun x__3 -> (x__3 + 1)); Lg_rt.mb_freeze mb__6) : (Clj_core.Keyword.t, int) Clj_core.Map.t)
+
+# 18 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get m3 (Clj_core.Keyword.keyword "a")))))))
-let src = ((Clj_core.Vec.of_list [1; 2; 3]) : int Clj_core.Vec.t)
-let grown = (((let rec go__6 = (fun i__4 acc__5 -> (if (i__4 < 5) then (go__6 (i__4 + 1) (begin Lg_rt.vb_push acc__5 i__4; acc__5 end)) else (Lg_rt.vb_freeze acc__5))) in (fun i__4 acc__5 -> go__6 i__4 (Lg_rt.vb_of_vec acc__5))) 0 src) : int Clj_core.Vec.t)
+let src = (
+# 22 "/Users/devin/repos/lg2/test/fbip.lg"
+(Clj_core.Vec.of_list [1; 2; 3]) : int Clj_core.Vec.t)
+let grown = (
+# 23 "/Users/devin/repos/lg2/test/fbip.lg"
+((let rec go__6 = (fun i__4 acc__5 -> (if (i__4 < 5) then (go__6 (i__4 + 1) (begin Lg_rt.vb_push acc__5 i__4; acc__5 end)) else (Lg_rt.vb_freeze acc__5))) in (fun i__4 acc__5 -> go__6 i__4 (Lg_rt.vb_of_vec acc__5))) 0 src) : int Clj_core.Vec.t)
+
+# 24 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) grown)))))
+
+# 25 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) src)))))
+
+# 26 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_vec (Lg_rt.str_int) grown) ^ (Lg_rt.str_string "/") ^ (Lg_rt.str_vec (Lg_rt.str_int) grown)))))))
-let macc = (((let rec go__9 = (fun i__7 acc__8 -> (if (i__7 < 3) then (go__9 (i__7 + 1) (begin Lg_rt.mb_assoc acc__8 i__7 (i__7 * 10); acc__8 end)) else (Lg_rt.mb_freeze acc__8))) in (fun i__7 acc__8 -> go__9 i__7 (Lg_rt.mb_of_map acc__8))) 0 (Clj_core.Map.of_list [(0, 1)])) : (int, int) Clj_core.Map.t)
+let macc = (
+# 28 "/Users/devin/repos/lg2/test/fbip.lg"
+((let rec go__9 = (fun i__7 acc__8 -> (if (i__7 < 3) then (go__9 (i__7 + 1) (begin Lg_rt.mb_assoc acc__8 i__7 (i__7 * 10); acc__8 end)) else (Lg_rt.mb_freeze acc__8))) in (fun i__7 acc__8 -> go__9 i__7 (Lg_rt.mb_of_map acc__8))) 0 (Clj_core.Map.of_list [(0, 1)])) : (int, int) Clj_core.Map.t)
+
+# 29 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get macc 2))))))
-let sacc = (((let rec go__12 = (fun i__10 acc__11 -> (if (i__10 < 3) then (go__12 (i__10 + 1) (begin Lg_rt.sb_add acc__11 i__10; acc__11 end)) else (Lg_rt.sb_freeze acc__11))) in (fun i__10 acc__11 -> go__12 i__10 (Lg_rt.sb_of_set acc__11))) 0 (Clj_core.Set.of_list [9])) : int Clj_core.Set.t)
+let sacc = (
+# 30 "/Users/devin/repos/lg2/test/fbip.lg"
+((let rec go__12 = (fun i__10 acc__11 -> (if (i__10 < 3) then (go__12 (i__10 + 1) (begin Lg_rt.sb_add acc__11 i__10; acc__11 end)) else (Lg_rt.sb_freeze acc__11))) in (fun i__10 acc__11 -> go__12 i__10 (Lg_rt.sb_of_set acc__11))) 0 (Clj_core.Set.of_list [9])) : int Clj_core.Set.t)
+
+# 31 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_bool (Clj_core.Set.contains_ sacc 2))))))
-let bp = (((let rec go__15 = (fun i__13 acc__14 -> (if (i__13 < 3) then (go__15 (i__13 + 1) (begin Lg_rt.vb_push acc__14 i__13; Lg_rt.vb_push acc__14 9; acc__14 end)) else (Lg_rt.vb_freeze acc__14))) in (fun i__13 acc__14 -> go__15 i__13 (Lg_rt.vb_of_vec acc__14))) 0 (Clj_core.Vec.of_list [0])) : int Clj_core.Vec.t)
+let bp = (
+# 33 "/Users/devin/repos/lg2/test/fbip.lg"
+((let rec go__15 = (fun i__13 acc__14 -> (if (i__13 < 3) then (go__15 (i__13 + 1) (begin Lg_rt.vb_push acc__14 i__13; Lg_rt.vb_push acc__14 9; acc__14 end)) else (Lg_rt.vb_freeze acc__14))) in (fun i__13 acc__14 -> go__15 i__13 (Lg_rt.vb_of_vec acc__14))) 0 (Clj_core.Vec.of_list [0])) : int Clj_core.Vec.t)
+
+# 34 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) bp)))))
-let esc = ((let rec go__18 = (fun i__16 acc__17 -> (fun cv0_9 -> ((if (i__16 < 3) then (fun cv0_7 -> ((go__18 (i__16 + 1) (Clj_core.Vec.conj acc__17 i__16)) cv0_7)) else (fun cv0_8 -> ((fun ___19 -> acc__17) cv0_8))) cv0_9))) in go__18) 0 (Clj_core.Vec.of_list [1]))
+let esc = 
+# 36 "/Users/devin/repos/lg2/test/fbip.lg"
+((let rec go__18 = (fun i__16 acc__17 -> (fun cv0_9 -> ((if (i__16 < 3) then (fun cv0_7 -> ((go__18 (i__16 + 1) (Clj_core.Vec.conj acc__17 i__16)) cv0_7)) else (fun cv0_8 -> ((fun ___19 -> acc__17) cv0_8))) cv0_9))) in go__18) 0 (Clj_core.Vec.of_list [1]))
+
+# 37 "/Users/devin/repos/lg2/test/fbip.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_vec (Lg_rt.str_int) (esc (Lg_rt.DInt 0)))))))
 end
 

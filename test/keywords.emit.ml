@@ -402,12 +402,26 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Keywords = struct
+
+# 4 "/Users/devin/repos/lg2/test/keywords.lg"
 type val_ = Type_ of int | Match_ of string
-let val_ = ((Type_ 7) : val_)
-let in_ = (let rec in___2 = (fun v__1 -> (match v__1 with Type_ x__3 -> x__3 | _ -> 0)) in in___2)
+let val_ = (
+# 5 "/Users/devin/repos/lg2/test/keywords.lg"
+(Type_ 7) : val_)
+let in_ = 
+# 6 "/Users/devin/repos/lg2/test/keywords.lg"
+(let rec in___2 = (fun v__1 -> (match v__1 with Type_ x__3 -> x__3 | _ -> 0)) in in___2)
+
+# 7 "/Users/devin/repos/lg2/test/keywords.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (in_ val_))))))
+
+# 8 "/Users/devin/repos/lg2/test/keywords.lg"
 let () = (ignore ((let let___4 = 42 in (print_endline ((Lg_rt.str_int let___4))))))
-let mod_ = (let rec mod___6 = (fun match___5 -> (match___5 + 1)) in mod___6)
+let mod_ = 
+# 9 "/Users/devin/repos/lg2/test/keywords.lg"
+(let rec mod___6 = (fun match___5 -> (match___5 + 1)) in mod___6)
+
+# 10 "/Users/devin/repos/lg2/test/keywords.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (mod_ 1))))))
 end
 

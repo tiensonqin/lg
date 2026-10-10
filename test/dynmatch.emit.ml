@@ -402,10 +402,56 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Dynmatch = struct
-let go = (let rec go__2 = (fun n__1 -> (if ((n__1 <= 0) = true) then () else (if ((n__1 <= 0) = false) then (if (n__1 = 1) then (print_endline ((Lg_rt.str_string "one"))) else (go__2 (n__1 - 1))) else (Lg_rt.no_match ())))) in go__2)
+let go = 
+# 11 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(let rec go__2 = (fun n__1 -> 
+# 12 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(if (
+# 12 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(n__1 <= 0) = 
+# 13 "/Users/devin/repos/lg2/test/dynmatch.lg"
+true) then 
+# 13 "/Users/devin/repos/lg2/test/dynmatch.lg"
+() else 
+# 12 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(if (
+# 12 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(n__1 <= 0) = 
+# 14 "/Users/devin/repos/lg2/test/dynmatch.lg"
+false) then 
+# 14 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(if (
+# 14 "/Users/devin/repos/lg2/test/dynmatch.lg"
+n__1 = 
+# 15 "/Users/devin/repos/lg2/test/dynmatch.lg"
+1) then 
+# 15 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(print_endline ((Lg_rt.str_string "one"))) else 
+# 16 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(go__2 (n__1 - 1))) else 
+# 12 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(Lg_rt.no_match ())))) in go__2)
+
+# 18 "/Users/devin/repos/lg2/test/dynmatch.lg"
 let () = (ignore ((go 3)))
+
+# 19 "/Users/devin/repos/lg2/test/dynmatch.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string "done")))))
-let go2 = (let rec go2__4 = (fun n__3 -> (if (n__3 = 0) then "zero" else (go2__4 (n__3 - 1)))) in go2__4)
+let go2 = 
+# 22 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(let rec go2__4 = (fun n__3 -> 
+# 23 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(if (
+# 23 "/Users/devin/repos/lg2/test/dynmatch.lg"
+n__3 = 
+# 24 "/Users/devin/repos/lg2/test/dynmatch.lg"
+0) then 
+# 24 "/Users/devin/repos/lg2/test/dynmatch.lg"
+"zero" else 
+# 25 "/Users/devin/repos/lg2/test/dynmatch.lg"
+(go2__4 (n__3 - 1)))) in go2__4)
+
+# 26 "/Users/devin/repos/lg2/test/dynmatch.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string (go2 2))))))
 end
 

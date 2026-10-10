@@ -182,6 +182,20 @@ compilation unit would reject the weak type variables a module struct
 tolerates (`(atom (Map.of_list []))`). The melange backend still emits a
 single merged file into the `melange.emit` workspace.
 
+**Source map (`#` line directives).** Emitted OCaml interleaves
+`# <line> "<file>"` directives at every expression whose source line
+advances (one per .lg line, deduped, including inside nested forms —
+a directive is legal anywhere it starts a line). ocamlc/ocamlopt then
+attribute type errors and warnings to the .lg line that produced the
+code — e.g. a slipped-past-infer type error inside
+`(println (str "ident " 7))` reports `File "test/core.lg", line 80`,
+not a line number in a 400-line emitted file. This is the debugging
+half of compilable-by-construction: on the rare emit-level leak the
+compiler's own diagnostics still speak lg locations. Granularity is
+per source line because every emitted top-level form is a single
+line; finer positioning needs multi-line emission (not worth it —
+the containing form's line is already the useful answer).
+
 ## 7. Emit → `Clj_core.*` mapping
 
 | lg form | emitted OCaml |

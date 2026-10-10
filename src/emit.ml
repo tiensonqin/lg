@@ -109,7 +109,23 @@ let fbip_self = ref (-1)   (* fself bid of the fbip fn currently emitted *)
 let fbip_pidx = ref (-1)   (* its builder param's position *)
 let fbip_pb : Ast.binder option ref = ref None
 
+(* OCaml `# line "file"` directives give the emitted .ml a source map
+   back to .lg locations: ocamlc/ocamlopt attribute type errors and
+   warnings to the lg line that produced the code. A directive must
+   appear at the start of a line — `line_dir` emits one (with its own
+   newline) whenever the source line advances, so expressions inside
+   parentheses are mapped too. `last_dir_line` dedupes same-line
+   repeats; it is reset per module. *)
+let last_dir_line = ref (-1)
+
+let line_dir b (l : Syntax.loc) =
+  if l.Syntax.line > 0 && l.Syntax.line <> !last_dir_line then begin
+    last_dir_line := l.Syntax.line;
+    buf_add b (Printf.sprintf "\n# %d \"%s\"\n" l.Syntax.line (String.escaped l.Syntax.file))
+  end
+
 let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
+  line_dir b e.loc;
   match e.desc with
   | EInt i -> buf_add b (if i < 0 then "(" ^ string_of_int i ^ ")" else string_of_int i)
   | EFloat x -> buf_add b (if x < 0. then "(" ^ ocaml_float x ^ ")" else ocaml_float x)
@@ -2104,6 +2120,7 @@ let closed_asc d =
      with _ -> None)
 
 let emit_topdef b (d : topdef) =
+  line_dir b d.tloc;
   buf_add b "let ";
   (match d.tmode with Local -> buf_add b "(* @local *) " | Owned -> buf_add b "(* @owned *) " | Shared -> ());
   let rec_flag = match d.texpr.desc with EFun _ -> "rec " | _ -> "" in
@@ -2134,16 +2151,18 @@ let emit_def_group b ds =
   match ds with
   | [] -> ()
   | [ `Def d ] -> emit_topdef b d
-  | [ `Extern (_l, n) ] -> buf_add b ("type " ^ munge n ^ "
+  | [ `Extern (_l, n) ] -> line_dir b _l; buf_add b ("type " ^ munge n ^ "
 ")
-  | [ `Ffi (_l, n, a, r, sel, lib) ] -> emit_ffi b _l n a r sel lib
+  | [ `Ffi (_l, n, a, r, sel, lib) ] -> line_dir b _l; emit_ffi b _l n a r sel lib
   | [ `Eff e ] ->
     (* interleaved effect — runs in source position, between defs *)
+    line_dir b e.loc;
     buf_add b "let () = (ignore (";
     emit_expr b e;
     buf_add b "))
 "
   | [ `Variant (_l, n, ps, cs) ] ->
+    line_dir b _l;
     let pfx =
       match ps with
       | [] -> ""
@@ -2287,6 +2306,7 @@ let fn_groups (ds : topdef list) : (bool * topdef list) list =
 
 let emit_module_body b (m : modl) =
   cur_mod := m.ocaml_name;
+  last_dir_line := -1;
   let rec groups acc = function
     | [] -> List.rev acc
     | TDef d :: rest when d.tis_fn ->
@@ -2318,7 +2338,7 @@ let emit_module_body b (m : modl) =
     (function TDef d -> Hashtbl.replace topdef_names d.tname () | _ -> ())
     m.tops;
   List.iter (emit_def_group b) (groups [] m.tops);
-  List.iter (fun e -> buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects
+  List.iter (fun e -> line_dir b e.loc; buf_add b "let () = (ignore ("; emit_expr b e; buf_add b "))\n") m.effects
 
 let emit_module b (m : modl) =
   buf_add b ("module " ^ m.ocaml_name ^ " = struct\n");

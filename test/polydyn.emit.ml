@@ -402,47 +402,133 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Polydyn = struct
-let m0 = ((let rec go__3 = (fun i__1 acc__2 -> (if (i__1 < 2) then (go__3 (i__1 + 1) (Clj_core.Map.assoc acc__2 (Lg_rt.DInt i__1) (Lg_rt.DInt 9))) else acc__2)) in go__3) 0 (Clj_core.Map.of_list []))
+let m0 = 
+# 4 "/Users/devin/repos/lg2/test/polydyn.lg"
+((let rec go__3 = (fun i__1 acc__2 -> (if (i__1 < 2) then (go__3 (i__1 + 1) (Clj_core.Map.assoc acc__2 (Lg_rt.DInt i__1) (Lg_rt.DInt 9))) else acc__2)) in go__3) 0 (Clj_core.Map.of_list []))
+
+# 5 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get m0 (Lg_rt.DInt 1)))))))
+
+# 6 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_dyn (Clj_core.Map.get_or (Lg_rt.DStr "none") m0 (Lg_rt.DInt 5)))))))
-let put = (let rec put__7 = (fun m__4 k__5 v__6 -> (Lg_rt.dyn_assoc m__4 k__5 v__6)) in put__7)
-let a = (Clj_core.Map.of_list (List.map (fun (k, v) -> (k, v)) (Clj_core.Map.to_list (Lg_rt.as_map (put (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m k v) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list []))))) (Lg_rt.DKw (Clj_core.Keyword.keyword "x")) (Lg_rt.DInt 1))))))
-let b = (Clj_core.Map.of_list (List.map (fun (k, v) -> (k, v)) (Clj_core.Map.to_list (Lg_rt.as_map (put (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m k v) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list []))))) (Lg_rt.DStr "s") (Lg_rt.DBool true))))))
+let put = 
+# 9 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec put__7 = (fun m__4 k__5 v__6 -> (Lg_rt.dyn_assoc m__4 k__5 v__6)) in put__7)
+let a = 
+# 10 "/Users/devin/repos/lg2/test/polydyn.lg"
+(Clj_core.Map.of_list (List.map (fun (k, v) -> (k, v)) (Clj_core.Map.to_list (Lg_rt.as_map (put (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m k v) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list []))))) (Lg_rt.DKw (Clj_core.Keyword.keyword "x")) (Lg_rt.DInt 1))))))
+let b = 
+# 11 "/Users/devin/repos/lg2/test/polydyn.lg"
+(Clj_core.Map.of_list (List.map (fun (k, v) -> (k, v)) (Clj_core.Map.to_list (Lg_rt.as_map (put (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m k v) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list []))))) (Lg_rt.DStr "s") (Lg_rt.DBool true))))))
+
+# 12 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get a (Lg_rt.DKw (Clj_core.Keyword.keyword "x")))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get b (Lg_rt.DStr "s")))))))))
-let getx = (let rec getx__9 = (fun m__8 -> (Clj_core.Map.get_or 0 m__8 (Clj_core.Keyword.keyword "x"))) in getx__9)
+let getx = 
+# 15 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec getx__9 = (fun m__8 -> (Clj_core.Map.get_or 0 m__8 (Clj_core.Keyword.keyword "x"))) in getx__9)
+
+# 16 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (getx (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "x"), 7)])))))))
+
+# 17 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (getx (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "y"), 7)])))))))
+
+# 20 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get a (Lg_rt.DKw (Clj_core.Keyword.keyword "x")))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get a (Lg_rt.DKw (Clj_core.Keyword.keyword "missing"))))))))))
-let inn = (let rec inn__11 = (fun m__10 -> (match Clj_core.Map.get_in (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__10))) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap (Lg_rt.flat_of_nest s))) | None -> None)) in inn__11)
+let inn = 
+# 23 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec inn__11 = (fun m__10 -> (match Clj_core.Map.get_in (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__10))) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap (Lg_rt.flat_of_nest s))) | None -> None)) in inn__11)
+
+# 24 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_dyn) (inn (Clj_core.Map.of_list (List.map (fun (k, v) -> (k, (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq v)))))) (Clj_core.Map.to_list (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), 1)]))]))))))))))
+
+# 25 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_dyn (match Clj_core.Map.get_in (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Clj_core.Map.Nest (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Clj_core.Map.Nest (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Clj_core.Map.Leaf (Lg_rt.DInt v))) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq v))))) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq v))))) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "c"), 2)]))]))])))) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b"); (Clj_core.Keyword.keyword "c")]))) with Some n -> (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> Lg_rt.DMap (Lg_rt.flat_of_nest s)) | None -> (Lg_rt.DInt 0)))))))
-let deepput = (let rec deepput__13 = (fun m__12 -> (Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__12))) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) (Clj_core.Map.Leaf (Lg_rt.DInt 9))))) in deepput__13)
+let deepput = 
+# 26 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec deepput__13 = (fun m__12 -> (Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__12))) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) (Clj_core.Map.Leaf (Lg_rt.DInt 9))))) in deepput__13)
+
+# 27 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get (deepput (Clj_core.Map.of_list [])) (Clj_core.Keyword.keyword "a")))))))))
-let bump = (let rec bump__15 = (fun m__14 -> (let um__ = (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__14))) and uks__ = (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a")]))) in Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in um__ uks__ (Clj_core.Map.Leaf (match Clj_core.Map.get_in um__ uks__ with Some (Clj_core.Map.Leaf d) -> (match d with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__)))) | Some (Clj_core.Map.Nest s) -> (match Lg_rt.DMap (Lg_rt.flat_of_nest s) with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__)))) | None -> (match failwith "update-in: missing key" with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__))))))))) in bump__15)
+let bump = 
+# 28 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec bump__15 = (fun m__14 -> (let um__ = (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (match v with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq m__14))) and uks__ = (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a")]))) in Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in um__ uks__ (Clj_core.Map.Leaf (match Clj_core.Map.get_in um__ uks__ with Some (Clj_core.Map.Leaf d) -> (match d with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__)))) | Some (Clj_core.Map.Nest s) -> (match Lg_rt.DMap (Lg_rt.flat_of_nest s) with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__)))) | None -> (match failwith "update-in: missing key" with uv__ -> (Lg_rt.DInt ((fun x__16 -> (x__16 + 1)) (Lg_rt.as_int uv__))))))))) in bump__15)
+
+# 29 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get (bump (Clj_core.Map.of_list (List.map (fun (k, v) -> (k, (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) (Clj_core.Keyword.keyword "a")))))))
+
+# 32 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (Clj_core.Map.select_keys (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1); ((Clj_core.Keyword.keyword "b"), 2); ((Clj_core.Keyword.keyword "c"), 3)]) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "c")]))))))))))
+
+# 33 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get (Clj_core.Map.merge (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]) (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), 2); ((Clj_core.Keyword.keyword "a"), 5)])) (Clj_core.Keyword.keyword "a")))))))
+
+# 34 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Map.get (let mb__1 = (Lg_rt.mb_of_list []) in Lg_rt.mb_assoc mb__1 (fst ((Clj_core.Keyword.keyword "k"), 1)) (snd ((Clj_core.Keyword.keyword "k"), 1)); Lg_rt.mb_freeze mb__1) (Clj_core.Keyword.keyword "k")))))))
+
+# 37 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (Clj_core.Vec.count (List.fold_left Clj_core.Vec.conj (Clj_core.Vec.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1); ((Clj_core.Keyword.keyword "b"), 2)]))))))))))
+
+# 38 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))))))
-let () = (ignore ((let d1__17 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (let d2__18 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_bool (Lg_rt.dyn_eq d1__17 d2__18))))))))))
+
+# 39 "/Users/devin/repos/lg2/test/polydyn.lg"
+let () = (ignore ((let d1__17 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (let d2__18 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in 
+# 40 "/Users/devin/repos/lg2/test/polydyn.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_bool (Lg_rt.dyn_eq d1__17 d2__18))))))))))
+
+# 41 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (let rc__2 = (List.of_seq (Clj_core.Map.vals (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1); ((Clj_core.Keyword.keyword "b"), 2); ((Clj_core.Keyword.keyword "c"), 3)]))) in List.fold_left ( + ) 0 rc__2))))))
+
+# 45 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let m__19 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_dyn) (Lg_rt.str_dyn) (Clj_core.Map.assoc (Lg_rt.as_map m__19) (Lg_rt.DKw (Clj_core.Keyword.keyword "a")) (match Clj_core.Map.get (Lg_rt.as_map m__19) (Lg_rt.DKw (Clj_core.Keyword.keyword "a")) with Some uv__ -> (Lg_rt.DInt ((fun x__20 -> (x__20 + 1)) (Lg_rt.as_int uv__))) | None -> failwith "update: missing key"))))))))))
+
+# 46 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let m__21 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_dyn) (Lg_rt.str_dyn) (Lg_rt.flat_merge (Clj_core.Map.of_list (List.map (fun (k, v) -> (k, v)) (Clj_core.Map.to_list (Lg_rt.as_map m__21)))) [(Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.DKw k), (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), 2)]))))])))))))))
+
+# 47 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let m__22 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1); ((Clj_core.Keyword.keyword "b"), 2)]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_dyn) (Lg_rt.str_dyn) (Lg_rt.flat_of_nest (Clj_core.Map.select_keys (match m__22 with Lg_rt.DMap m -> Lg_rt.nest_of_flat m | _ -> Clj_core.Map.of_list []) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a")])))))))))))))
-let asv = (let rec asv__26 = (fun c__23 i__24 x__25 -> (Lg_rt.dyn_assoc c__23 i__24 x__25)) in asv__26)
+let asv = 
+# 48 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec asv__26 = (fun c__23 i__24 x__25 -> (Lg_rt.dyn_assoc c__23 i__24 x__25)) in asv__26)
+
+# 49 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.as_kw k), (Lg_rt.as_int v))) (Clj_core.Map.to_list (Lg_rt.as_map (asv (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 1)]))))) (Lg_rt.DKw (Clj_core.Keyword.keyword "q")) (Lg_rt.DInt 9)))))))))))))
+
+# 50 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_int (Clj_core.Vec.nth (Clj_core.Vec.map (fun x -> (Lg_rt.as_int x)) (Lg_rt.as_vec (asv (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) (Clj_core.Vec.of_list [1; 2]))) (Lg_rt.DInt 0) (Lg_rt.DInt 7)))) 0))))))))
+
+# 51 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let m__27 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_dyn) (Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in (match m__27 with Lg_rt.DMap m -> Lg_rt.nest_of_flat m | _ -> Clj_core.Map.of_list []) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) (Clj_core.Map.Leaf (Lg_rt.DInt 3))))))))))))
+
+# 52 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let m__28 = (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq v))))) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), 1)]))]))))) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (match Clj_core.Map.get_in (match m__28 with Lg_rt.DMap m -> Lg_rt.nest_of_flat m | _ -> Clj_core.Map.of_list []) (List.map (fun k -> Lg_rt.DKw k) (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Clj_core.Keyword.keyword "a"); (Clj_core.Keyword.keyword "b")]))) with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap (Lg_rt.flat_of_nest s))) | None -> None)))))))))
+
+# 55 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (let mb__3 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 1)]) in (match (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Lg_rt.DKw (Clj_core.Keyword.keyword "b")); (Lg_rt.DInt 2)])) with [k; v] -> Lg_rt.mb_assoc mb__3 (Lg_rt.as_kw k) (Lg_rt.as_int v) | _ -> failwith "conj: map entry must be [k v]"); Lg_rt.mb_freeze mb__3))))))))
+
+# 56 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (let mb__4 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 1)]) in Lg_rt.mb_assoc mb__4 (fst ((Clj_core.Keyword.keyword "b"), 2)) (snd ((Clj_core.Keyword.keyword "b"), 2)); Lg_rt.mb_assoc mb__4 (fst ((Clj_core.Keyword.keyword "c"), 3)) (snd ((Clj_core.Keyword.keyword "c"), 3)); Lg_rt.mb_freeze mb__4))))))))
+
+# 57 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_kw) (Lg_rt.str_int) (let mb__5 = (Lg_rt.mb_of_list [((Clj_core.Keyword.keyword "a"), 1)]) in Lg_rt.mb_extend_map mb__5 (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "b"), 2); ((Clj_core.Keyword.keyword "c"), 3)]); Lg_rt.mb_freeze mb__5))))))))
+
+# 58 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((let p__29 = (let (t0, t1) = ((Clj_core.Keyword.keyword "z"), 9) in Lg_rt.DVec (Clj_core.Vec.of_list [(Lg_rt.DKw t0); (Lg_rt.DInt t1)])) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_map (Lg_rt.str_dyn) (Lg_rt.str_dyn) (let mb__6 = (Lg_rt.mb_of_list []) in (match Lg_rt.dyn_to_list p__29 with [k; v] -> Lg_rt.mb_assoc mb__6 k v | _ -> failwith "conj: map entry must be [k v]"); Lg_rt.mb_freeze mb__6)))))))))
-let getk = (let rec getk__32 = (fun m__30 k__31 -> (Clj_core.Map.get m__30 k__31)) in getk__32)
+let getk = 
+# 63 "/Users/devin/repos/lg2/test/polydyn.lg"
+(let rec getk__32 = (fun m__30 k__31 -> (Clj_core.Map.get m__30 k__31)) in getk__32)
+
+# 64 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (getk (Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.DKw k), (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)])))) (Lg_rt.DKw (Clj_core.Keyword.keyword "a")))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) (getk (Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.DInt k), (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [(1, 10)])))) (Lg_rt.DInt 1)))))))))
-let getkv = (fun m__33 k__34 -> (Clj_core.Map.get m__33 k__34))
-let getka = getk
+let getkv = 
+# 66 "/Users/devin/repos/lg2/test/polydyn.lg"
+(fun m__33 k__34 -> (Clj_core.Map.get m__33 k__34))
+let getka = 
+# 67 "/Users/devin/repos/lg2/test/polydyn.lg"
+getk
+
+# 68 "/Users/devin/repos/lg2/test/polydyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (getkv (Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.DKw k), (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 3)])))) (Lg_rt.DKw (Clj_core.Keyword.keyword "q")))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) (getka (Clj_core.Map.of_list (List.map (fun (k, v) -> ((Lg_rt.DInt k), (Lg_rt.DInt v))) (Clj_core.Map.to_list (Clj_core.Map.of_list [(2, 20)])))) (Lg_rt.DInt 2)))))))))
 end
 

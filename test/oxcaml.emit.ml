@@ -402,12 +402,26 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Oxcaml = struct
-let bump = (let rec bump__2 = (fun x__1 -> (x__1 + 1)) in bump__2)
-let sum_to = (let rec sum_to__5 = (fun n__3 acc__4 -> (if (n__3 <= 0) then acc__4 else (sum_to__5 (n__3 - 1) (acc__4 + n__3)))) in sum_to__5)
+let bump = 
+# 4 "/Users/devin/repos/lg2/test/oxcaml.lg"
+(let rec bump__2 = (fun x__1 -> (x__1 + 1)) in bump__2)
+let sum_to = 
+# 5 "/Users/devin/repos/lg2/test/oxcaml.lg"
+(let rec sum_to__5 = (fun n__3 acc__4 -> (if (n__3 <= 0) then acc__4 else (sum_to__5 (n__3 - 1) (acc__4 + n__3)))) in sum_to__5)
+
+# 6 "/Users/devin/repos/lg2/test/oxcaml.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (bump 41))))))
+
+# 7 "/Users/devin/repos/lg2/test/oxcaml.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_int (sum_to 100 0))))))
+
+# 8 "/Users/devin/repos/lg2/test/oxcaml.lg"
 let () = (ignore ((let v__6 = (Clj_core.Vec.of_list [1; 2; 3]) in (print_endline ((Lg_rt.str_vec (Lg_rt.str_int) (Clj_core.Vec.conj v__6 4)))))))
-let keep = ((Clj_core.Vec.of_list [1; 2; 3]) : int Clj_core.Vec.t)
+let keep = (
+# 9 "/Users/devin/repos/lg2/test/oxcaml.lg"
+(Clj_core.Vec.of_list [1; 2; 3]) : int Clj_core.Vec.t)
+
+# 10 "/Users/devin/repos/lg2/test/oxcaml.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_opt (Lg_rt.str_int) (Clj_core.Vec.get keep 0))))))
 end
 

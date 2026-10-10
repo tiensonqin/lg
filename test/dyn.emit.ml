@@ -402,18 +402,44 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Dyn = struct
-let m = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "lg")); ((Clj_core.Keyword.keyword "ver"), (Lg_rt.DInt 2)); ((Clj_core.Keyword.keyword "ok"), (Lg_rt.DBool true))])
+let m = 
+# 2 "/Users/devin/repos/lg2/test/dyn.lg"
+(Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "lg")); ((Clj_core.Keyword.keyword "ver"), (Lg_rt.DInt 2)); ((Clj_core.Keyword.keyword "ok"), (Lg_rt.DBool true))])
+
+# 3 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get m (Clj_core.Keyword.keyword "name"))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get m (Clj_core.Keyword.keyword "ver"))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn (Clj_core.Map.get_or (Lg_rt.DStr "dflt") m (Clj_core.Keyword.keyword "missing")))))))))
+
+# 4 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) (Clj_core.Map.get m (Clj_core.Keyword.keyword "missing")))))))))
-let vi = (match (Clj_core.Map.get m (Clj_core.Keyword.keyword "ver")) with Some v__1 -> v__1 | None -> (Lg_rt.DInt 0))
-let v = (Clj_core.Vec.of_list [(Lg_rt.DInt 1); (Lg_rt.DStr "two"); (Lg_rt.DKw (Clj_core.Keyword.keyword "k")); (Lg_rt.DFloat 3.5)])
+let vi = 
+# 5 "/Users/devin/repos/lg2/test/dyn.lg"
+(match (Clj_core.Map.get m (Clj_core.Keyword.keyword "ver")) with Some v__1 -> v__1 | None -> (Lg_rt.DInt 0))
+let v = 
+# 6 "/Users/devin/repos/lg2/test/dyn.lg"
+(Clj_core.Vec.of_list [(Lg_rt.DInt 1); (Lg_rt.DStr "two"); (Lg_rt.DKw (Clj_core.Keyword.keyword "k")); (Lg_rt.DFloat 3.5)])
+
+# 7 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_int (Clj_core.Vec.count v)) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn (Clj_core.Vec.nth v 0)) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn (Clj_core.Vec.nth v 1))))))))
-let i = ((Lg_rt.as_int vi) : int)
+let i = (
+# 9 "/Users/devin/repos/lg2/test/dyn.lg"
+(Lg_rt.as_int vi) : int)
+
+# 10 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_int (i + 1))))))))
+
+# 12 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string (match vi with Lg_rt.DVec mv__2 -> (if ((Clj_core.Vec.count mv__2) = 1) then (let dv__3 = mv__2 in (let x__4 = (Clj_core.Vec.nth dv__3 0) in ((Lg_rt.str_string "v") ^ (Lg_rt.str_dyn x__4)))) else (match vi with Lg_rt.DMap mm__5 -> (let dm__6 = mm__5 in (let n__7 = (Clj_core.Map.get dm__6 (Lg_rt.DKw (Clj_core.Keyword.keyword "name"))) in ((Lg_rt.str_string "m") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) n__7)))) | _ -> (let x__8 = vi in ((Lg_rt.str_string "o") ^ (Lg_rt.str_dyn x__8))))) | _ -> (match vi with Lg_rt.DMap mm__5 -> (let dm__6 = mm__5 in (let n__7 = (Clj_core.Map.get dm__6 (Lg_rt.DKw (Clj_core.Keyword.keyword "name"))) in ((Lg_rt.str_string "m") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) n__7)))) | _ -> (let x__8 = vi in ((Lg_rt.str_string "o") ^ (Lg_rt.str_dyn x__8))))))))))))
+
+# 13 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_bool (Lg_rt.dyn_eq (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))) (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) (Lg_rt.DInt v)) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]))))))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_bool (Lg_rt.dyn_eq (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) (Clj_core.Vec.of_list [1; 2]))) (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) (Clj_core.Vec.of_list [1; 2]))))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_bool ("s" = "s"))))))))
+
+# 15 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((let x__9 = (Lg_rt.DInt 5) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "truthy ") ^ (Lg_rt.str_dyn (if (Lg_rt.dyn_truthy x__9) then (if (let __ = 2 in true) then (Lg_rt.DStr "a") else (Lg_rt.DBool false)) else (Lg_rt.DBool false))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn (if false then (Lg_rt.DBool true) else x__9)) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_string (if (Lg_rt.dyn_truthy x__9) then "y" else "n")) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_int) (if (Lg_rt.dyn_truthy x__9) then (Some (1)) else None)))))))))
+
+# 16 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((let y__10 = (Lg_rt.DBool false) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "falsy ") ^ (Lg_rt.str_dyn (if (Lg_rt.dyn_truthy y__10) then (Lg_rt.DInt 2) else (Lg_rt.DBool false))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn (if (Lg_rt.dyn_truthy y__10) then (Lg_rt.DBool true) else (Lg_rt.DInt 7))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_string (if (Lg_rt.dyn_truthy y__10) then "y" else "n")))))))))
+
+# 17 "/Users/devin/repos/lg2/test/dyn.lg"
 let () = (ignore ((Stdlib.exit 0)))
 end
 

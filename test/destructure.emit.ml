@@ -402,22 +402,76 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Destructure_test = struct
-let () = (ignore ((let dv__1 = (Clj_core.Vec.of_list [10; 20]) in (let a__2 = (Clj_core.Vec.nth dv__1 0) in (let b__3 = (Clj_core.Vec.nth dv__1 1) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "vec ") ^ (Lg_rt.str_int a__2) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int b__3))))))))))
-let addpair = (let rec addpair__5 = (fun dp__4 -> (let dv__6 = dp__4 in (let (* @local *) x__7 = (Clj_core.Vec.nth dv__6 0) in (let (* @local *) y__8 = (Clj_core.Vec.nth dv__6 1) in (x__7 + y__8))))) in addpair__5)
+
+# 4 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dv__1 = (Clj_core.Vec.of_list [10; 20]) in (let a__2 = (Clj_core.Vec.nth dv__1 0) in (let b__3 = (Clj_core.Vec.nth dv__1 1) in 
+# 5 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "vec ") ^ (Lg_rt.str_int a__2) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int b__3))))))))))
+let addpair = 
+# 8 "/Users/devin/repos/lg2/test/destructure.lg"
+(let rec addpair__5 = (fun dp__4 -> (let dv__6 = dp__4 in (let (* @local *) x__7 = (Clj_core.Vec.nth dv__6 0) in (let (* @local *) y__8 = (Clj_core.Vec.nth dv__6 1) in (x__7 + y__8))))) in addpair__5)
+
+# 9 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "addpair ") ^ (Lg_rt.str_int (addpair (Clj_core.Vec.of_list [3; 4])))))))))
-let () = (ignore ((let dv__9 = (Clj_core.Vec.of_list [(Lg_rt.DInt 1); (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) (Clj_core.Vec.of_list [2; 3])))]) in (let x__10 = (Clj_core.Vec.nth dv__9 0) in (let dv__11 = (Lg_rt.as_vec (Clj_core.Vec.nth dv__9 1)) in (let y__12 = (Clj_core.Vec.nth dv__11 0) in (let z__13 = (Clj_core.Vec.nth dv__11 1) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "nested ") ^ (Lg_rt.str_dyn x__10) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn y__12) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn z__13))))))))))))
-let () = (ignore ((let dm__14 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "ann")); ((Clj_core.Keyword.keyword "age"), (Lg_rt.DInt 7))]) in (let name__15 = (Clj_core.Map.get dm__14 (Clj_core.Keyword.keyword "name")) in (let age__16 = (Clj_core.Map.get dm__14 (Clj_core.Keyword.keyword "age")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "keys ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) name__15) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) age__16))))))))))
-let () = (ignore ((let dm__17 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]) in (let a__18 = (Clj_core.Map.get dm__17 (Clj_core.Keyword.keyword "a")) in (let b__19 = (Clj_core.Map.get_or 99 dm__17 (Clj_core.Keyword.keyword "b")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "or ") ^ (Lg_rt.str_opt (Lg_rt.str_int) a__18) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int b__19))))))))))
-let () = (ignore ((let dm__20 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "px"), 5); ((Clj_core.Keyword.keyword "py"), 6)]) in (let x__21 = (Clj_core.Map.get dm__20 (Clj_core.Keyword.keyword "px")) in (let y__22 = (Clj_core.Map.get dm__20 (Clj_core.Keyword.keyword "py")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "kw ") ^ (Lg_rt.str_opt (Lg_rt.str_int) x__21) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_int) y__22))))))))))
-let () = (ignore ((let dm__23 = (Clj_core.Map.of_list [("host", (Lg_rt.DStr "h")); ("port", (Lg_rt.DInt 80))]) in (let host__24 = (Clj_core.Map.get dm__23 "host") in (let port__25 = (Clj_core.Map.get dm__23 "port") in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "strs ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) host__24) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) port__25))))))))))
-let () = (ignore ((let dm__26 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 1); ((Clj_core.Keyword.keyword "r"), 2)]) in (let q__27 = (Clj_core.Map.get dm__26 (Clj_core.Keyword.keyword "q")) in (let (* @local *) whole__28 = dm__26 in (print_endline ((Lg_rt.str_string ((Lg_rt.str_string "as ") ^ (Lg_rt.str_opt (Lg_rt.str_int) q__27) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int (Clj_core.Map.count whole__28)))))))))))
-let greet2 = (let rec greet2__30 = (fun dp__29 -> (let dm__31 = dp__29 in (let v__32 = (Clj_core.Map.get_or 0 dm__31 (Clj_core.Keyword.keyword "v")) in v__32))) in greet2__30)
+
+# 12 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dv__9 = (Clj_core.Vec.of_list [(Lg_rt.DInt 1); (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) (Clj_core.Vec.of_list [2; 3])))]) in (let x__10 = (Clj_core.Vec.nth dv__9 0) in (let dv__11 = (Lg_rt.as_vec (Clj_core.Vec.nth dv__9 1)) in (let y__12 = (Clj_core.Vec.nth dv__11 0) in (let z__13 = (Clj_core.Vec.nth dv__11 1) in 
+# 13 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "nested ") ^ (Lg_rt.str_dyn x__10) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn y__12) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_dyn z__13))))))))))))
+
+# 16 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dm__14 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "ann")); ((Clj_core.Keyword.keyword "age"), (Lg_rt.DInt 7))]) in (let name__15 = (Clj_core.Map.get dm__14 (Clj_core.Keyword.keyword "name")) in (let age__16 = (Clj_core.Map.get dm__14 (Clj_core.Keyword.keyword "age")) in 
+# 17 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "keys ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) name__15) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) age__16))))))))))
+
+# 20 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dm__17 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "a"), 1)]) in (let a__18 = (Clj_core.Map.get dm__17 (Clj_core.Keyword.keyword "a")) in (let b__19 = (Clj_core.Map.get_or 99 dm__17 (Clj_core.Keyword.keyword "b")) in 
+# 21 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "or ") ^ (Lg_rt.str_opt (Lg_rt.str_int) a__18) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int b__19))))))))))
+
+# 24 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dm__20 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "px"), 5); ((Clj_core.Keyword.keyword "py"), 6)]) in (let x__21 = (Clj_core.Map.get dm__20 (Clj_core.Keyword.keyword "px")) in (let y__22 = (Clj_core.Map.get dm__20 (Clj_core.Keyword.keyword "py")) in 
+# 25 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "kw ") ^ (Lg_rt.str_opt (Lg_rt.str_int) x__21) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_int) y__22))))))))))
+
+# 28 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dm__23 = (Clj_core.Map.of_list [("host", (Lg_rt.DStr "h")); ("port", (Lg_rt.DInt 80))]) in (let host__24 = (Clj_core.Map.get dm__23 "host") in (let port__25 = (Clj_core.Map.get dm__23 "port") in 
+# 29 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "strs ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) host__24) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) port__25))))))))))
+
+# 32 "/Users/devin/repos/lg2/test/destructure.lg"
+let () = (ignore ((let dm__26 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 1); ((Clj_core.Keyword.keyword "r"), 2)]) in (let q__27 = (Clj_core.Map.get dm__26 (Clj_core.Keyword.keyword "q")) in (let (* @local *) whole__28 = dm__26 in 
+# 33 "/Users/devin/repos/lg2/test/destructure.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "as ") ^ (Lg_rt.str_opt (Lg_rt.str_int) q__27) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_int (Clj_core.Map.count whole__28)))))))))))
+let greet2 = 
+# 36 "/Users/devin/repos/lg2/test/destructure.lg"
+(let rec greet2__30 = (fun dp__29 -> (let dm__31 = dp__29 in (let v__32 = (Clj_core.Map.get_or 0 dm__31 (Clj_core.Keyword.keyword "v")) in v__32))) in greet2__30)
+
+# 37 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "fnmap ") ^ (Lg_rt.str_int (greet2 (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "v"), 11)])))))))))
-let dm = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "bob")); ((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 3))])
-let dynid = (let rec dynid__34 = (fun m__33 -> (match m__33 with Lg_rt.DMap mm__35 -> (let dm__36 = mm__35 in (let id__37 = (Clj_core.Map.get dm__36 (Lg_rt.DKw (Clj_core.Keyword.keyword "id"))) in (match id__37 with Some v__38 -> v__38 | None -> (Lg_rt.DInt (-1))))) | _ -> (Lg_rt.DInt (-1)))) in dynid__34)
+let dm = 
+# 40 "/Users/devin/repos/lg2/test/destructure.lg"
+(Clj_core.Map.of_list [((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "bob")); ((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 3))])
+let dynid = 
+# 41 "/Users/devin/repos/lg2/test/destructure.lg"
+(let rec dynid__34 = (fun m__33 -> 
+# 42 "/Users/devin/repos/lg2/test/destructure.lg"
+(match m__33 with Lg_rt.DMap mm__35 -> (let dm__36 = 
+# 43 "/Users/devin/repos/lg2/test/destructure.lg"
+mm__35 in (let id__37 = (Clj_core.Map.get dm__36 (Lg_rt.DKw (Clj_core.Keyword.keyword "id"))) in (match id__37 with Some v__38 -> v__38 | None -> (Lg_rt.DInt (-1))))) | _ -> 
+# 44 "/Users/devin/repos/lg2/test/destructure.lg"
+(Lg_rt.DInt (-1)))) in dynid__34)
+
+# 45 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dynid ") ^ (Lg_rt.str_dyn (dynid (Lg_rt.DMap (List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m (Lg_rt.DKw k) v) (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq dm))))))))))))
+
+# 48 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((let dm__39 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 1)]) in (let s__40 = (Clj_core.Map.get_or 7 dm__39 (Clj_core.Keyword.keyword "q")) in (let t__41 = (Clj_core.Map.get_or 8 dm__39 (Clj_core.Keyword.keyword "r")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int s__40) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_int t__41))))))))))
+
+# 49 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((let dm__42 = (Clj_core.Map.of_list []) in (let u__43 = (Clj_core.Map.get_or 9 dm__42 (Clj_core.Keyword.keyword "q")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int u__43)))))))))
+
+# 50 "/Users/devin/repos/lg2/test/destructure.lg"
 let () = (ignore ((let dm__44 = (Clj_core.Map.of_list []) in (let dv__45 = (Clj_core.Map.get_or (Clj_core.Vec.of_list [3; 4]) dm__44 (Clj_core.Keyword.keyword "q")) in (let x__46 = (Clj_core.Vec.nth dv__45 0) in (let y__47 = (Clj_core.Vec.nth dv__45 1) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int x__46) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_int y__47)))))))))))
 end
 
