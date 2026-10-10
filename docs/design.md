@@ -367,10 +367,17 @@ global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
   `(k, (k, v) Map.nest)` representation, converts at that boundary via
   `Lg_rt.nest_of_flat`/`flat_of_nest` (or the keyword-keyed
   `nest_map_of_dyn_map`/`dyn_map_of_nest_map` pair).
-- **`assoc`/`conj` on `any`-typed collections dispatch on the `dyn`
-  tag** (`Lg_rt.dyn_assoc`/`dyn_conj`): a vec index must be a `DInt`,
-  a map entry is a `(k, v)` tuple (boxed tuples appear as pair-vecs —
-  `DVec` — inside `dyn`).
+- **`any` is absorbing in unification** (`seal` in typ.ml): when `any`
+  meets a composite, every free variable the composite still exposes is
+  bound to `any` — a dyn value promises nothing, so sibling positions
+  sharing the variable cannot claim a concrete type the emitted object
+  does not have. Rigid `^T` vars are exempt.
+- **`assoc`/`conj`/`update`/`merge`/`select-keys` on `any`-typed or
+  open-coll (unresolved `TVar`) collections** work end to end: `assoc`
+  and `conj` dispatch on the `dyn` tag (`Lg_rt.dyn_assoc`/`dyn_conj` —
+  a vec index must be a `DInt`, a map entry a `(k, v)` tuple, boxed
+  tuples appear as pair-vecs inside `dyn`); map ops unwrap `any` args
+  via `as_map` and keep results as flat `(dyn, dyn)` maps.
 - **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
   `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
   and constant-fold statically. `fn?` is always `false` — functions are

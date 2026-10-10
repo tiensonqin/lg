@@ -39,3 +39,14 @@
 (let [d1 ^any {:a 1} d2 ^any {:a 1}]
   (println (str (= d1 d2))))
 (println (reduce + 0 (vals {:a 1 :b 2 :c 3})))
+
+;; `^any` map args unwrap for update/merge/select-keys; assoc on an open-coll
+;; param dispatches on the runtime tag (map and vec alike)
+(let [m ^any {:a 1}] (println (str (update m :a (fn [^int x] (+ x 1))))))
+(let [m ^any {:a 1}] (println (str (merge m {:b 2}))))
+(let [m ^any {:a 1 :b 2}] (println (str (select-keys m [:a]))))
+(defn asv [c i x] (assoc c i x))
+(println (str (asv {:q 1} :q 9)))
+(println (str (nth (asv [1 2] 0 7) 0)))
+(let [m ^any {:a 1}] (println (str (assoc-in m [:a :b] 3))))
+(let [m ^any {:a {:b 1}}] (println (str (get-in m [:a :b]))))

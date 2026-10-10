@@ -61,7 +61,7 @@ let rec unify loc a b =
       if occurs v t then type_error loc "occurs check failed (infinite type)";
       v.link <- Some t
     | TImplicit t, u | u, TImplicit t -> unify loc t u
-    | TAny, _ | _, TAny -> ()
+    | TAny, u | u, TAny -> seal u
     | TInt, TInt | TFloat, TFloat | TBool, TBool | TChar, TChar | TString, TString
     | TKeyword, TKeyword | TSymbol, TSymbol | TUnit, TUnit -> ()
     | TList a, TList b | TVec a, TVec b | TSeq a, TSeq b | TSet a, TSet b | TAtom a, TAtom b | TOption a, TOption b -> unify loc a b
@@ -80,6 +80,20 @@ let rec unify loc a b =
     | _ ->
       Err.err loc "E101"
         (Printf.sprintf "type mismatch: %s vs %s" (string_of_ty a) (string_of_ty b)) []
+
+(* `any` is absorbing: when it meets a composite, every free variable the
+   composite still exposes is really `any` too — the value came from the
+   dyn boundary and promises nothing, so sibling positions that share the
+   variable must not claim a concrete type (the emitted object is dyn).
+   Rigid vars stay untouched — a declared `^T` is a contract. *)
+and seal t =
+  match repr t with
+  | TVar v -> if v.link = None && not v.rigid then v.link <- Some TAny
+  | TList a | TVec a | TSeq a | TSet a | TAtom a | TOption a | TImplicit a -> seal a
+  | TMap (k, v) -> seal k; seal v
+  | TTuple ts | TCon (_, ts) -> List.iter seal ts
+  | TFun (ts, r) -> List.iter seal ts; seal r
+  | _ -> ()
 
 and string_of_ty t =
   match repr t with

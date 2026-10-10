@@ -1466,8 +1466,11 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "merge" ->
      buf_add b
        (if is_any (t 0) then
-          "(Lg_rt.flat_merge (Lg_rt.as_map "
-          ^ a 0 ^ ") [" ^ String.concat "; " (List.map (fun i -> "(Lg_rt.as_map " ^ a i ^ ")") (List.init (List.length args - 1) (fun i -> i + 1))) ^ "])"
+          (* every operand is converted to a flat (dyn,dyn) map: `any`
+             args unwrap via as_map, concrete maps box element-wise *)
+          let cm i = conv (TMap (TAny, TAny)) (t i) (a i) in
+          "(Lg_rt.flat_merge " ^ cm 0
+          ^ " [" ^ String.concat "; " (List.map cm (List.init (List.length args - 1) (fun i -> i + 1))) ^ "])"
         else
           List.fold_left (fun acc i -> "(Clj_core.Map.merge " ^ acc ^ " " ^ a i ^ ")") (a 0)
             (List.init (List.length args - 1) (fun i -> i + 1)))
@@ -1684,26 +1687,29 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "no-match" -> buf_add b "(Lg_rt.no_match ())"
    | "dyn-eq" -> buf_add b ("(Lg_rt.dyn_eq " ^ a 0 ^ " " ^ box_of (List.nth args 1) ^ ")")
    | "select-keys" ->
-     (match repr (t 0) with
-      | TMap (k, _) when is_any k ->
-        (* already a nest map: keys are dyn — box the kw list *)
-        buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ a 0
-                   ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))")
-      | TMap _ ->
-        buf_add b ("(Clj_core.Map.select_keys " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
-      | _ ->
-        buf_add b ("(Lg_rt.dyn_map_of_nest_map (Clj_core.Map.select_keys " ^ dyn_map_arg (List.nth args 0)
-                   ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))"))
+     let dyned = match repr (t 0) with TMap (k, _) -> is_any k | TAny -> true | _ -> false in
+     if dyned then
+       (* dyn-keyed map: convert to nest for select_keys, back to flat *)
+       buf_add b ("(Lg_rt.flat_of_nest (Clj_core.Map.select_keys " ^ dyn_map_arg (List.nth args 0)
+                  ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))")
+     else
+       buf_add b ("(Clj_core.Map.select_keys " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
    | "update" ->
+     (* flat_map_arg covers both the `any` map (as_map unwrap) and an
+        open-coll map (already a flat (dyn,dyn) map); the result is a map
+        type in both cases, so no DMap wrap *)
+     let kt, vt = match repr (t 0) with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
+     let mstr = flat_map_arg (List.nth args 0) in
+     let kd = conv kt (t 1) (a 1) in
      let pf, rf = match repr (t 2) with TFun ([ p ], r) -> (p, r) | _ -> (TAny, TAny) in
-     let vt = match repr (t 0) with TMap (_, v) -> v | _ -> TAny in
      let uv = conv pf vt "uv__" in
      let res = conv vt rf ("(" ^ a 2 ^ " " ^ uv ^ ")") in
      let miss =
        if List.length args = 4 then conv vt (t 3) (a 3)
        else "failwith \"update: missing key\""
      in
-     buf_add b ("(Clj_core.Map.assoc " ^ a 0 ^ " " ^ a 1 ^ " (match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
+     buf_add b ("(Clj_core.Map.assoc " ^ mstr ^ " " ^ kd
+                ^ " (match Clj_core.Map.get " ^ mstr ^ " " ^ kd
                 ^ " with Some uv__ -> " ^ res ^ " | None -> " ^ miss ^ "))")
    | "get-in" | "assoc-in" | "update-in" ->
      let ks_arg = List.nth args 1 in
