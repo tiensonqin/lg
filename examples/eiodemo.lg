@@ -4,7 +4,8 @@
 (ns eiodemo
   (:require [ocaml.Eio_main :as em]
             [ocaml.Eio.Switch :as sw]
-            [ocaml.Eio.Fiber :as fiber]))
+            [ocaml.Eio.Fiber :as fiber]
+            [ocaml.pkg/eio]))
 
 (em/run
   (fn [env]
