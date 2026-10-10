@@ -338,16 +338,28 @@ else
   fail=1
 fi
 
-# compile-speed regression line (bench): cold builds a single module and a
-# two-module chain into a dedicated .lg-obj, plus a no-op warm relink.
-# Thresholds are order-of-magnitude guards (measured cold ~0.26s, warm
-# ~0.10s on an M-series); override via LG_BENCH_*_MS for slower machines.
+# compile-speed regression line (bench): a true cold compile (global
+# ~/.lg/cache wiped — opt out via LG_SKIP_NOCACHE=1), a cache-hit cold
+# (no .lg-obj, cache warm), a two-module chain, and a no-op warm pass.
+# Thresholds guard the observed envelope (M-series: nocache ~0.3s,
+# cache-hit ~70ms, warm ~30ms); override via LG_BENCH_*_MS.
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
-LG_BENCH_COLD_MS=${LG_BENCH_COLD_MS:-5000}
-LG_BENCH_DEPS_MS=${LG_BENCH_DEPS_MS:-8000}
-LG_BENCH_WARM_MS=${LG_BENCH_WARM_MS:-3000}
+LG_BENCH_NOCACHE_MS=${LG_BENCH_NOCACHE_MS:-1500}
+LG_BENCH_COLD_MS=${LG_BENCH_COLD_MS:-800}
+LG_BENCH_DEPS_MS=${LG_BENCH_DEPS_MS:-800}
+LG_BENCH_WARM_MS=${LG_BENCH_WARM_MS:-300}
 BDIR=.test-bin/bench
 rm -rf "$BDIR" && mkdir -p "$BDIR"
+
+if [ "${LG_SKIP_NOCACHE:-0}" != "1" ]; then
+  rm -rf "$HOME/.lg/cache"
+  t0=$(now_ms)
+  "$LG" build test/core.lg -I lib -o "$BDIR/core" >/dev/null 2>&1
+  nc=$(( $(now_ms) - t0 ))
+  echo "bench nocache-core ${nc}ms (limit ${LG_BENCH_NOCACHE_MS}ms)"
+  [ "$nc" -lt "$LG_BENCH_NOCACHE_MS" ] || { echo "FAIL(bench-nocache)"; fail=1; }
+  rm -rf "$BDIR/.lg-obj" "$BDIR/core"
+fi
 
 t0=$(now_ms)
 "$LG" build test/core.lg -I lib -o "$BDIR/core" >/dev/null 2>&1

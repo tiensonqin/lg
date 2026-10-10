@@ -182,6 +182,23 @@ compilation unit would reject the weak type variables a module struct
 tolerates (`(atom (Map.of_list []))`). The melange backend still emits a
 single merged file into the `melange.emit` workspace.
 
+**Global object cache.** On top of per-project `.lg-obj`, every unit and
+the final link are content-addressed under `~/.lg/cache/<key>`:
+key = `hash(emitted source + dep unit hashes) + ocaml<comp> -version +
+compiler mode`, and the link key additionally binds the package list and
+link flags. A cache hit copies `.cmi`/`.cmo|.cmx`/`.o`/`.ml` into
+`.lg-obj` (or the finished binary into place) and marks the unit fresh,
+so `lg_rt` and unchanged units never recompile across projects — a cold
+build with a warm cache is just file copies. Stores are atomic
+(`tmp dir` + `rename`, so concurrent builds of the same key race
+safely). The `.lg-obj` stamp still records `unit-hash + toolchain`, so a
+restored unit is validated by the same staleness check as a locally
+compiled one — the stamp and cache can never disagree about which
+content produced an artifact. Measured on an M-series (test/core.lg,
+native): true cold compile ~0.35s, cache-hit cold ~85ms, warm no-op
+~30-90ms; `--byte` hello ~50ms cold-hit, ~30ms warm. The `lg repl`
+session file builds `--byte`, so per-line latency is ~50ms.
+
 **Source map (`#` line directives).** Emitted OCaml interleaves
 `# <line> "<file>"` directives at every expression whose source line
 advances (one per .lg line, deduped, including inside nested forms —

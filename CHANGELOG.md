@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Global content-addressed build cache** (`~/.lg/cache`). Unit
+  objects and linked binaries are keyed by
+  `hash(emitted source + dep hashes + toolchain + compiler mode)`
+  and shared across projects — a cold `lg build` with a warm
+  cache is file copies only. Measured on an M-series: native
+  cold-hit ~85ms (was ~300ms), warm no-op ~30-90ms, `--byte`
+  hello ~50ms cold-hit; `lg repl` per-line latency ~50ms
+  (was ~1s). Stores are atomic (tmp dir + rename) and the
+  `.lg-obj` stamp still validates restored artifacts, so the
+  cache can never serve stale objects. The bench lane now
+  measures true-cold (cache wiped), cache-hit cold, dep-chain,
+  and warm builds against tightened limits.
 - **Builtin namespaces** (`lg.str`, `lg.io`, `lg.set`). String,
   io, and set helpers moved out of the bare namespace following
   Clojure conventions: `str/join str/split str/subs str/trim

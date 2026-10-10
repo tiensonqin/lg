@@ -380,7 +380,9 @@ let () =
                 built by OCaml X.Y is unreadable by OCaml X.Z, so the stamp
                 binds both source+dep content and the active compiler *)
              let ocaml_ver =
-               let ic = Unix.open_process_in ("ocamlfind " ^ comp ^ " -version 2>/dev/null") in
+               (* direct `ocamlc/ocamlopt -version` — ocamlfind adds ~8ms
+                  on the warm path for no benefit *)
+               let ic = Unix.open_process_in (comp ^ " -version 2>/dev/null") in
                let v = try input_line ic with End_of_file -> "unknown" in
                close_in ic; String.trim v
              in
@@ -393,10 +395,71 @@ let () =
                with _ -> ""
              in
              let uhashes = Hashtbl.create 16 in
+             (* global content-addressed object cache under ~/.lg/cache:
+                key = hash(emitted src + dep unit hashes) + toolchain +
+                compiler mode. A hit copies .cmi/.cmo|.cmx/.o/.ml into
+                .lg-obj and the unit counts as fresh — lg_rt and
+                untouched units never recompile, so a cold build is
+                emit + link only. *)
+             let cache_root =
+               match Sys.getenv_opt "HOME" with
+               | Some h -> Filename.concat h ".lg/cache"
+               | None -> Filename.concat (Filename.get_temp_dir_name ()) "lg-cache"
+             in
+             ignore (Sys.command ("mkdir -p " ^ Filename.quote cache_root));
+             let cp_file a b =
+               let ic = open_in_bin a and oc = open_out_bin b in
+               (try
+                  while true do output_char oc (input_char ic) done
+                with End_of_file -> ());
+               close_in ic; close_out oc
+             in
+             let artifact_exts =
+               (* .o only exists under ocamlopt; ocamlc emits no .o *)
+               [ ".cmi"; obj_ext; ".ml" ]
+               @ (if obj_ext = ".cmx" then [ ".o" ] else [])
+             in
+             let cache_restore fname key =
+               let d = Filename.concat cache_root key in
+               if Sys.file_exists d
+                  && List.for_all
+                       (fun e -> Sys.file_exists (Filename.concat d (fname ^ e)))
+                       artifact_exts
+               then begin
+                 List.iter
+                   (fun e ->
+                     let p = Filename.concat d (fname ^ e) in
+                     if Sys.file_exists p then
+                       cp_file p (Filename.concat objdir (fname ^ e)))
+                   artifact_exts;
+                 true
+               end else false
+             in
+             let cache_store fname key =
+               let d = Filename.concat cache_root key in
+               let tmp = d ^ ".tmp." ^ string_of_int (Unix.getpid ()) in
+               if not (Sys.file_exists d) then begin
+                 (try Unix.mkdir tmp 0o755 with Unix.Unix_error _ -> ());
+                 List.iter
+                   (fun e ->
+                     let p = Filename.concat objdir (fname ^ e) in
+                     if Sys.file_exists p then
+                       cp_file p (Filename.concat tmp (fname ^ e)))
+                   artifact_exts;
+                 (try Unix.rename tmp d
+                  with Unix.Unix_error _ ->
+                    ignore (Sys.command ("rm -rf " ^ Filename.quote tmp)))
+               end
+             in
              (* the stamp is per (unit, toolchain): ocamlc and ocamlopt
                 produce different artifacts from the same source, so a
                 shared stamp would let a stale .cmo/.cmx pass as fresh
                 after the other mode rebuilt the unit *)
+             let write_stamp fname uh =
+               let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
+               let oc = open_out stamp in
+               output_string oc (uh ^ " " ^ ocaml_ver ^ "\n"); close_out oc
+             in
              let stale = ref [] in
              List.iter
                (fun (fname, src, deps) ->
@@ -410,12 +473,16 @@ let () =
                  let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
                  let obj = Filename.concat objdir (fname ^ obj_ext) in
                  if String.trim (read_file stamp) <> (uh ^ " " ^ ocaml_ver) || not (Sys.file_exists obj) then begin
-                   let mlp = Filename.concat objdir (fname ^ ".ml") in
-                   if read_file mlp <> src then begin
-                     let oc = open_out mlp in
-                     output_string oc src; close_out oc
-                   end;
-                   stale := (fname, uh) :: !stale
+                   let key = uh ^ "-" ^ ocaml_ver ^ "-" ^ comp in
+                   if cache_restore fname key then write_stamp fname uh
+                   else begin
+                     let mlp = Filename.concat objdir (fname ^ ".ml") in
+                     if read_file mlp <> src then begin
+                       let oc = open_out mlp in
+                       output_string oc src; close_out oc
+                     end;
+                     stale := (fname, uh, key) :: !stale
+                   end
                  end)
                units;
              (* parallel unit compilation in dependency levels: a unit needs
@@ -423,7 +490,7 @@ let () =
                 deps; fresh units count as done. Children fork per level in
                 batches of -j. *)
              let stale_set =
-               List.fold_left (fun s (f, _) -> f :: s) [] !stale
+               List.fold_left (fun s (f, _, _) -> f :: s) [] !stale
              in
              let dep_of =
                let t = Hashtbl.create 16 in
@@ -443,18 +510,22 @@ let () =
                  Hashtbl.replace levels f l; l
              in
              let max_lvl =
-               List.fold_left (fun m (f, _) -> max m (level f)) (-1) !stale
+               List.fold_left (fun m (f, _, _) -> max m (level f)) (-1) !stale
              in
-             let compile fname =
-               Sys.command
-                 (Printf.sprintf "cd %s && ocamlfind %s -package %s -c %s"
-                    (Filename.quote objdir) comp pkgs
-                    (Filename.quote (fname ^ ".ml")))
+             let compile fname key =
+               let rc =
+                 Sys.command
+                   (Printf.sprintf "cd %s && ocamlfind %s -package %s -c %s"
+                      (Filename.quote objdir) comp pkgs
+                      (Filename.quote (fname ^ ".ml")))
+               in
+               if rc = 0 then cache_store fname key;
+               rc
              in
              for lvl = 0 to max_lvl do
                let fns =
                  List.filter_map
-                   (fun (f, _) -> if level f = lvl then Some f else None)
+                   (fun (f, _, k) -> if level f = lvl then Some (f, k) else None)
                    !stale
                in
                let rec chunks n l =
@@ -472,9 +543,9 @@ let () =
                  (fun grp ->
                    let pids =
                      List.map
-                       (fun f ->
+                       (fun (f, k) ->
                          match Unix.fork () with
-                         | 0 -> exit (compile f)
+                         | 0 -> exit (compile f k)
                          | pid -> pid)
                        grp
                    in
@@ -492,10 +563,7 @@ let () =
                  (chunks (max 1 !jobs) fns)
              done;
              List.iter
-               (fun (fname, uh) ->
-                 let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
-                 let oc = open_out stamp in
-                 output_string oc (uh ^ " " ^ ocaml_ver ^ "\n"); close_out oc)
+               (fun (fname, uh, _) -> write_stamp fname uh)
                !stale;
              let objs =
                String.concat " "
@@ -503,11 +571,51 @@ let () =
                     (fun (f, _, _) -> Filename.quote (Filename.concat objdir (f ^ obj_ext)))
                     units)
              in
-             let cmdline =
-               Printf.sprintf "ocamlfind %s -package %s -linkpkg %s %s -o %s"
-                 comp pkgs objs extra (Filename.quote exe)
+             (* the link itself is content-addressed too: skip it when the
+                exe is fresh (warm path ~25ms total), and cache the linked
+                binary globally so a cold build with all units restored is
+                just a file copy *)
+             let link_key =
+               Digest.to_hex
+                 (Digest.string
+                    (String.concat ""
+                       (List.map (fun (f, _, _) -> Hashtbl.find uhashes f) units)
+                     ^ comp ^ pkgs ^ extra ^ ocaml_ver))
              in
-             let code = Sys.command cmdline in
+             let link_stamp = Filename.concat objdir (".link." ^ comp ^ ".stamp") in
+             let linked =
+               String.trim (read_file link_stamp) = link_key && Sys.file_exists exe
+             in
+             let code =
+               if linked then 0
+               else
+                 let d = Filename.concat cache_root ("link-" ^ link_key) in
+                 let cached_exe = Filename.concat d "exe" in
+                 if Sys.file_exists cached_exe then begin
+                   cp_file cached_exe exe;
+                   (try Unix.chmod exe 0o755 with Unix.Unix_error _ -> ());
+                   0
+                 end else begin
+                   let cmdline =
+                     Printf.sprintf "ocamlfind %s -package %s -linkpkg %s %s -o %s"
+                       comp pkgs objs extra (Filename.quote exe)
+                   in
+                   let rc = Sys.command cmdline in
+                   if rc = 0 && not (Sys.file_exists d) then begin
+                     let tmp = d ^ ".tmp." ^ string_of_int (Unix.getpid ()) in
+                     (try Unix.mkdir tmp 0o755 with Unix.Unix_error _ -> ());
+                     cp_file exe (Filename.concat tmp "exe");
+                     (try Unix.rename tmp d
+                      with Unix.Unix_error _ ->
+                        ignore (Sys.command ("rm -rf " ^ Filename.quote tmp)))
+                   end;
+                   rc
+                 end
+             in
+             (if code = 0 then begin
+                let oc = open_out link_stamp in
+                output_string oc (link_key ^ "\n"); close_out oc
+              end);
              if code <> 0 then (Printf.eprintf "lg: ocaml link failed\n%!"; raise (Exit code))
            | _ -> Printf.printf "wrote %s\n" out_ml))
      with
