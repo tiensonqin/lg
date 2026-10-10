@@ -509,7 +509,7 @@ and box_deep ety es =
   | TList el -> "(Lg_rt.DList (List.map (fun x -> " ^ box_deep el "x" ^ ") " ^ es ^ "))"
   | TSeq el -> "(Lg_rt.DList (List.map (fun x -> " ^ box_deep el "x" ^ ") (Clj_core.Seq.to_list " ^ es ^ ")))"
   | TSet el -> "(Lg_rt.DSet (Clj_core.Set.of_list (List.map (fun x -> " ^ box_deep el "x" ^ ") (Clj_core.Set.to_list " ^ es ^ "))))"
-  | TMap _ -> "(Lg_rt.DMap " ^ nest_map_of ety es ^ ")"
+  | TMap _ -> "(Lg_rt.DMap " ^ flat_map_of ety es ^ ")"
   | TOption a -> "(Lg_rt.DOpt (match " ^ es ^ " with Some x -> Some (" ^ box_deep a "x" ^ ") | None -> None))"
   | TTuple ts ->
     let vs = List.mapi (fun i _ -> "t" ^ string_of_int i) ts in
@@ -522,36 +522,49 @@ and box_deep ety es =
 
 and box_of e = box_deep e.ety (arg_str e)
 
+(* a statically-typed map re-built as a (dyn,dyn) map — the payload of
+   Lg_rt.DMap; element-wise the flat analogue of nest_map_of *)
+and flat_map_of ety es =
+  match repr ety with
+  | TMap (kty, vty) ->
+    "(List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m " ^ box_deep kty "k" ^ " " ^ box_deep vty "v"
+    ^ ") (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq " ^ es ^ ")))"
+  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> m | _ -> Clj_core.Map.of_list [])"
+  | _ -> "(Clj_core.Map.of_list [])"
+
 (* a statically-typed map re-built as clj-core's (dyn, (dyn,dyn) nest) map —
-   the shape Map.get_in / assoc_in / update_in / select_keys on dyn maps take,
-   and the payload of Lg_rt.DMap *)
+   the shape Map.get_in / assoc_in / update_in / select_keys on dyn maps take. *)
 and nest_map_of ety es =
   match repr ety with
   | TMap (k, v) ->
     "(List.fold_left (fun m (k, v) -> Clj_core.Map.assoc m " ^ box_deep k "k" ^ " " ^ box_nest v "v"
     ^ ") (Clj_core.Map.of_list []) (List.of_seq (Clj_core.Map.seq " ^ es ^ ")))"
-  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> m | _ -> Clj_core.Map.of_list [])"
+  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> Lg_rt.nest_of_flat m | _ -> Clj_core.Map.of_list [])"
   | _ -> "(Clj_core.Map.of_list [])"
 
 (* a map value in a nest map: sub-maps are Nest, leaves are Leaf dyn *)
 and box_nest ety es =
   match repr ety with
   | TMap _ -> "(Clj_core.Map.Nest " ^ nest_map_of ety es ^ ")"
-  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> Clj_core.Map.Nest m | d -> Clj_core.Map.Leaf d)"
+  | TAny -> "(match " ^ es ^ " with Lg_rt.DMap m -> Clj_core.Map.Nest (Lg_rt.nest_of_flat m) | d -> Clj_core.Map.Leaf d)"
   | _ -> "(Clj_core.Map.Leaf " ^ box_deep ety es ^ ")"
 
-(* the dyn-map arg of get-in / assoc-in / select-keys *)
+(* the nest-map arg of get-in / assoc-in / update-in / select-keys *)
 and dyn_map_arg e = nest_map_of e.ety (arg_str e)
 
-(* `Some dyn` lookup on a (dyn,(dyn,dyn)nest) map, keyed by a dyn *)
+(* the flat (dyn,dyn) map held by a DMap value *)
+and flat_map_arg e =
+  match repr e.ety with
+  | TAny -> "(Lg_rt.as_map " ^ arg_str e ^ ")"
+  | _ -> arg_str e
+
+(* `Some dyn` lookup on a (dyn,dyn) map, keyed by a dyn *)
 and dyn_map_get mstr kdyn =
-  "(match Clj_core.Map.get " ^ mstr ^ " " ^ kdyn
-  ^ " with Some (Clj_core.Map.Leaf d) -> Some d | Some (Clj_core.Map.Nest s) -> Some (Lg_rt.DMap s) | None -> None)"
+  "(Clj_core.Map.get " ^ mstr ^ " " ^ kdyn ^ ")"
 
 (* unwrapped lookup with default *)
 and dyn_map_get_or dstr mstr kdyn =
-  "(match Clj_core.Map.get " ^ mstr ^ " " ^ kdyn
-  ^ " with Some (Clj_core.Map.Leaf d) -> d | Some (Clj_core.Map.Nest s) -> Lg_rt.DMap s | None -> " ^ dstr ^ ")"
+  "(Clj_core.Map.get_or " ^ dstr ^ " " ^ mstr ^ " " ^ kdyn ^ ")"
 and is_any t = match repr t with TAny -> true | _ -> false
 and as_dyn_list e =
   match repr e.ety with
@@ -841,7 +854,18 @@ and emit_mop b bn kt vt op =
   | CPut (k, v) -> buf_add b ("Lg_rt.mb_assoc " ^ bn ^ " " ^ ke k ^ " " ^ ve v ^ "; ")
   | CDrop k -> buf_add b ("Lg_rt.mb_dissoc " ^ bn ^ " " ^ ke k ^ "; ")
   | CUpdMap (k, f) -> buf_add b ("Lg_rt.mb_update " ^ bn ^ " " ^ ke k ^ " " ^ ax f ^ "; ")
-  | CPair kv -> buf_add b ("Lg_rt.mb_assoc_pair " ^ bn ^ " " ^ ax kv ^ "; ")
+  | CPair kv ->
+    let ke = ax kv in
+    (match repr kv.ety with
+     | TTuple [ tk; tv ] ->
+       buf_add b ("Lg_rt.mb_assoc " ^ bn ^ " " ^ conv kt tk ("(fst " ^ ke ^ ")") ^ " " ^ conv vt tv ("(snd " ^ ke ^ ")") ^ "; ")
+     | TAny ->
+       buf_add b ("(match Lg_rt.dyn_to_list " ^ ke ^ " with [k; v] -> Lg_rt.mb_assoc " ^ bn ^ " "
+                  ^ conv kt TAny "k" ^ " " ^ conv vt TAny "v" ^ " | _ -> failwith \"conj: map entry must be [k v]\"); ")
+     | TVec pe ->
+       buf_add b ("(match Clj_core.Vec.to_list " ^ ke ^ " with [k; v] -> Lg_rt.mb_assoc " ^ bn ^ " "
+                  ^ conv kt pe "k" ^ " " ^ conv vt pe "v" ^ " | _ -> failwith \"conj: map entry must be [k v]\"); ")
+     | _ -> ())
   | CMExt m2 ->
     (match repr m2.ety with
      | TMap (sk, sv) ->
@@ -1307,7 +1331,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | `Seq -> buf_add b ("(" ^ "Clj_core.Seq.mem" ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
       | `Str -> buf_add b "(failwith \"contains? on string\")")
    | "get" when (match repr (t 0) with TAny -> true | _ -> false) ->
-     let mstr = dyn_map_arg (List.nth args 0) in
+     let mstr = flat_map_arg (List.nth args 0) in
      let kd = box_of (List.nth args 1) in
      if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) mstr kd)
      else buf_add b (dyn_map_get mstr kd)
@@ -1384,13 +1408,36 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | `Set ->
         buf_add b (List.fold_left (fun acc i -> "(Clj_core.Set.conj " ^ acc ^ " " ^ arg i ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
       | `Map ->
-        buf_add b (List.fold_left
-                     (fun acc i -> "(match Clj_core.Vec.to_list " ^ a i ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (k, v) | _ -> failwith \"conj: map entry must be [k v]\")")
-                     (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
+        (* a map entry is a (k, v) tuple — the OCaml pair `Map.conj`
+           takes directly; dyn/vec entries destructure first *)
+        let kt, vt = match repr (t 0) with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
+        let one acc i =
+          let e = a i in
+          match repr (t i) with
+          | TTuple [ tk; tv ] ->
+            "(Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt tk ("(fst " ^ e ^ ")") ^ ", " ^ conv vt tv ("(snd " ^ e ^ ")") ^ "))"
+          | TAny ->
+            "(match Lg_rt.dyn_to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt TAny "k" ^ ", " ^ conv vt TAny "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
+          | TMap _ -> "(Clj_core.Map.merge " ^ acc ^ " " ^ e ^ ")"
+          | TVec pe ->
+            "(match Clj_core.Vec.to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt pe "k" ^ ", " ^ conv vt pe "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
+          | _ ->
+            "(match Clj_core.Vec.to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt TAny "k" ^ ", " ^ conv vt TAny "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
+        in
+        buf_add b (List.fold_left one (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
       | `Seq ->
         buf_add b (List.fold_left (fun acc i -> "(Clj_core.Seq.cons " ^ arg i ^ " " ^ acc ^ ")") (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
       | `Str -> buf_add b "(failwith \"conj on string\")")
    | "assoc" ->
+     if is_any (t 0) then
+       (* dyn destination: dispatch on the collection tag at runtime *)
+       let cv i = let e = List.nth args i in conv TAny e.ety (arg_str e) in
+       let rec go acc i =
+         if i + 1 >= List.length args then acc
+         else go ("(Lg_rt.dyn_assoc " ^ acc ^ " " ^ cv i ^ " " ^ cv (i + 1) ^ ")") (i + 2)
+       in
+       buf_add b (go (a 0) 1)
+     else
      (match coll with
       | `Vec ->
         let el = match repr (t 0) with TVec e -> e | _ -> TUnit in
@@ -1431,7 +1478,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) (a 1) kd)
         else buf_add b (dyn_map_get (a 1) kd)
       | TAny ->
-        let mstr = dyn_map_arg (List.nth args 1) in
+        let mstr = flat_map_arg (List.nth args 1) in
         if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) mstr kd)
         else buf_add b (dyn_map_get mstr kd)
       | _ ->
@@ -1670,10 +1717,10 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      if name = "get-in" then
        if List.length args = 3 then
          buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
-                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> Lg_rt.DMap s) | None -> " ^ box_of (List.nth args 2) ^ ")")
+                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> Lg_rt.DMap (Lg_rt.flat_of_nest s)) | None -> " ^ box_of (List.nth args 2) ^ ")")
        else
          buf_add b ("(match Clj_core.Map.get_in " ^ dyn_map_arg (List.nth args 0) ^ " " ^ kw_list
-                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap s)) | None -> None)")
+                    ^ " with Some n -> (match n with Clj_core.Map.Leaf d -> Some d | Clj_core.Map.Nest s -> Some (Lg_rt.DMap (Lg_rt.flat_of_nest s))) | None -> None)")
      else if name = "update-in" then
        let miss =
          if List.length args = 4 then box_of (List.nth args 3)
@@ -1686,7 +1733,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
          ("(let um__ = " ^ dyn_map_arg (List.nth args 0) ^ " and uks__ = " ^ kw_list ^ " in "
           ^ "Lg_rt.dyn_map_of_nest_map (Clj_core.Map.assoc_in um__ uks__ (Clj_core.Map.Leaf "
           ^ "(match Clj_core.Map.get_in um__ uks__ with Some (Clj_core.Map.Leaf d) -> (match d with uv__ -> "
-          ^ res ^ ") | Some (Clj_core.Map.Nest s) -> (match Lg_rt.DMap s with uv__ -> " ^ res
+          ^ res ^ ") | Some (Clj_core.Map.Nest s) -> (match Lg_rt.DMap (Lg_rt.flat_of_nest s) with uv__ -> " ^ res
           ^ ") | None -> (match " ^ miss ^ " with uv__ -> " ^ res ^ ")))))")
      else
        let v_arg = List.nth args 2 in

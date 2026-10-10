@@ -74,7 +74,7 @@ type dyn =
   | DOpt of dyn option
   | DList of dyn list
   | DVec of dyn Clj_core.Vec.t
-  | DMap of (dyn, (dyn, dyn) Clj_core.Map.nest) Clj_core.Map.t
+  | DMap of (dyn, dyn) Clj_core.Map.t
   | DSet of dyn Clj_core.Set.t
 
 let rec str_dyn = function
@@ -90,13 +90,8 @@ let rec str_dyn = function
   | DOpt None -> "nil"
   | DList xs -> str_list str_dyn xs
   | DVec v -> str_vec str_dyn v
-  | DMap m -> str_map str_dyn str_nest_dyn m
+  | DMap m -> str_map str_dyn str_dyn m
   | DSet s -> str_set str_dyn s
-
-and str_nest_dyn n =
-  match n with
-  | Clj_core.Map.Leaf d -> str_dyn d
-  | Clj_core.Map.Nest m -> str_map str_dyn str_nest_dyn m
 
 let as_int = function DInt i -> i | _ -> invalid_arg "dyn: expected int"
 let as_float = function DFloat x -> x | DInt i -> float_of_int i | _ -> invalid_arg "dyn: expected float"
@@ -122,11 +117,7 @@ let dyn_to_list = function
   | DList l -> l
   | DSet s -> Clj_core.Set.to_list s
   | DMap m ->
-    List.map
-      (fun (k, v) ->
-        DVec
-          (Clj_core.Vec.of_list
-             [ k; (match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d) ]))
+    List.map (fun (k, v) -> DVec (Clj_core.Vec.of_list [ k; v ]))
       (List.of_seq (Clj_core.Map.seq m))
   | DStr s -> List.map (fun c -> DChar c) (string_chars s)
   | _ -> []
@@ -139,10 +130,7 @@ let dyn_to_seq = function
   | DSet s -> Clj_core.Seq.of_set s
   | DMap m ->
     Clj_core.Seq.map
-      (fun (k, v) ->
-        DVec
-          (Clj_core.Vec.of_list
-             [ k; (match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d) ]))
+      (fun (k, v) -> DVec (Clj_core.Vec.of_list [ k; v ]))
       (Clj_core.Seq.of_map m)
   | DStr s -> Clj_core.Seq.map (fun c -> DChar c) (Clj_core.Seq.of_string s)
   | _ -> Clj_core.Seq.empty
@@ -150,11 +138,8 @@ let dyn_to_seq = function
 (* unbox a dyn into a lazy seq (target element type is `any`) *)
 let as_seq = dyn_to_seq
 
-(* values of a dyn-keyed map: nest entries unwrap back into DMap *)
-let dyn_vals m =
-  List.map
-    (fun v -> match v with Clj_core.Map.Nest s -> DMap s | Clj_core.Map.Leaf d -> d)
-    (List.of_seq (Clj_core.Map.vals m))
+(* values of a dyn-keyed map *)
+let dyn_vals m = List.of_seq (Clj_core.Map.vals m)
 
 (* conj on a dyn collection: keeps the collection's own tag *)
 let dyn_conj c x =
@@ -165,10 +150,20 @@ let dyn_conj c x =
   | DMap m ->
     (match x with
      | DVec pv when Clj_core.Vec.count pv = 2 ->
-       DMap (Clj_core.Map.assoc m (Clj_core.Vec.nth pv 0) (Clj_core.Map.Leaf (Clj_core.Vec.nth pv 1)))
+       DMap (Clj_core.Map.assoc m (Clj_core.Vec.nth pv 0) (Clj_core.Vec.nth pv 1))
      | DMap m2 -> DMap (Clj_core.Map.merge m m2)
      | _ -> invalid_arg "conj: map entry must be a pair")
   | _ -> invalid_arg "conj: not a collection"
+
+(* assoc on a dyn collection: vec index must be a dyn int, map keys stay dyn *)
+let dyn_assoc c k v =
+  match c with
+  | DVec vv ->
+    (match k with
+     | DInt i -> DVec (Clj_core.Vec.assoc vv i v)
+     | _ -> invalid_arg "assoc: vec index must be int")
+  | DMap m -> DMap (Clj_core.Map.assoc m k v)
+  | _ -> invalid_arg "assoc: not a collection"
 
 (* ordering on dyn scalars for min/max/sort on `any` sequences *)
 let dyn_cmp a b =
@@ -199,26 +194,18 @@ let rec dyn_eq (a : dyn) (b : dyn) : bool =
   | DList x, DList y -> List.equal dyn_eq x y
   | DVec x, DVec y -> Clj_core.Vec.equal ~eq:dyn_eq x y
   | DSet x, DSet y -> Clj_core.Set.equal x y
-  | DMap x, DMap y -> nest_eq x y
+  | DMap x, DMap y -> Clj_core.Map.equal ~eq:dyn_eq x y
   | _ -> false
-and leaf_eq a b =
-  match a, b with
-  | Clj_core.Map.Leaf x, Clj_core.Map.Leaf y -> dyn_eq x y
-  | Clj_core.Map.Nest m1, Clj_core.Map.Nest m2 -> nest_eq m1 m2
-  | _ -> false
-and nest_eq a b = Clj_core.Map.equal ~eq:leaf_eq a b
 
 let as_map = function DMap m -> m | _ -> invalid_arg "dyn: expected map"
 let as_set = function DSet s -> s | _ -> invalid_arg "dyn: expected set"
 
-(* merge nest maps then flatten the payload back to a (dyn, dyn) map —
+(* merge dyn maps then re-assoc the values into a fresh (dyn, dyn) map —
    the canonical emitter representation of lg map<any,any> *)
 let flat_merge base ms =
   let m = List.fold_left (fun acc x -> Clj_core.Map.merge acc x) base ms in
   List.fold_left
-    (fun acc (k, n) ->
-      Clj_core.Map.assoc acc k
-        (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap s))
+    (fun acc (k, v) -> Clj_core.Map.assoc acc k v)
     (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
 
 
@@ -284,13 +271,29 @@ let trimr s =
   let i = last (String.length s - 1) in
   if i < 0 then "" else String.sub s 0 (i + 1)
 
-(* bridges between a (Keyword.t, dyn) heterogeneous lg map (TMap (kw, any))
-   and clj-core's (dyn, (dyn, dyn) nest) Map.t used by Map.get_in / assoc_in /
-   update_in / select_keys on dyn maps *)
+(* bridges between the flat (dyn, dyn) payload of DMap and clj-core's
+   (dyn, (dyn, dyn) nest) Map.t used by Map.get_in / assoc_in / update_in /
+   select_keys on dyn maps *)
+let rec nest_of_flat m =
+  List.fold_left
+    (fun acc (k, v) ->
+      let n = match v with DMap s -> Clj_core.Map.Nest (nest_of_flat s) | d -> Clj_core.Map.Leaf d in
+      Clj_core.Map.assoc acc k n)
+    (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
+
+let rec flat_of_nest m =
+  List.fold_left
+    (fun acc (k, n) ->
+      Clj_core.Map.assoc acc k
+        (match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap (flat_of_nest s)))
+    (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
+
+(* keyword-keyed variants: a (Keyword.t, dyn) lg map (TMap (kw, any)) <-> the
+   dyn-keyed nest map the *_in APIs walk *)
 let nest_map_of_dyn_map m =
   List.fold_left
     (fun acc (k, v) ->
-      let n = match v with DMap s -> Clj_core.Map.Nest s | d -> Clj_core.Map.Leaf d in
+      let n = match v with DMap s -> Clj_core.Map.Nest (nest_of_flat s) | d -> Clj_core.Map.Leaf d in
       Clj_core.Map.assoc acc (DKw k) n)
     (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
 
@@ -299,7 +302,7 @@ let dyn_map_of_nest_map m =
     (fun acc (k, n) ->
       match k with
       | DKw kw ->
-        let d = match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap s in
+        let d = match n with Clj_core.Map.Leaf d -> d | Clj_core.Map.Nest s -> DMap (flat_of_nest s) in
         Clj_core.Map.assoc acc kw d
       | _ -> acc)
     (Clj_core.Map.of_list []) (Clj_core.Map.to_list m)
@@ -377,10 +380,7 @@ let mb_assoc b k v = Hashtbl.replace b k v
 let mb_dissoc b k = Hashtbl.remove b k
 let mb_update b k f = match Hashtbl.find_opt b k with Some v -> Hashtbl.replace b k (f v) | None -> ()
 let mb_extend_map b m = Clj_core.List.iter (fun (k, v) -> mb_assoc b k v) (Clj_core.Map.to_list m)
-let mb_assoc_pair b kv =
-  match Clj_core.Vec.to_list kv with
-  | [ k; v ] -> Hashtbl.replace b k v
-  | _ -> failwith "conj: map entry must be [k v]"
+let mb_assoc_pair b (k, v) = Hashtbl.replace b k v
 let mb_freeze b = Clj_core.Map.of_list (Hashtbl.fold (fun k v acc -> (k, v) :: acc) b [])
 
 type 'a sbuilder = ('a, unit) Hashtbl.t

@@ -1,0 +1,41 @@
+;; polymorphic collection params canonicalize to `any` at the def boundary —
+;; the emitted object really holds dyn values and callers re-box at the call
+;; boundary, so get/conj/seq work on what was actually emitted
+(def m0 ((fn go [i acc] (if (< i 2) (go (+ i 1) (assoc acc i 9)) acc)) 0 {}))
+(println (get m0 1))
+(println (get m0 5 "none"))
+
+;; assoc on a poly map param — both call sites pass different concrete types
+(defn put [m k v] (assoc m k v))
+(def a (put {} :x 1))
+(def b (put {} "s" true))
+(println (str (get a :x) " " (get b "s")))
+
+;; get with a default through a poly param
+(defn getx [m] (get m :x 0))
+(println (getx {:x 7}))
+(println (getx {:y 7}))
+
+;; kw-fn call on a dyn map
+(println (str (:x a) " " (:missing a)))
+
+;; get-in / assoc-in / update-in walk the nest representation at the boundary
+(defn inn [m] (get-in m [:a :b]))
+(println (inn {:a {:b 1}}))
+(println (get-in {:a {:b {:c 2}}} [:a :b :c] 0))
+(defn deepput [m] (assoc-in m [:a :b] 9))
+(println (str (get (deepput {}) :a)))
+(defn bump [m] (update-in m [:a] (fn [^int x] (+ x 1))))
+(println (get (bump {:a 1}) :a))
+
+;; select-keys / merge / conj produce flat dyn maps
+(println (str (select-keys {:a 1 :b 2 :c 3} [:a :c])))
+(println (get (merge {:a 1} {:b 2 :a 5}) :a))
+(println (get (conj {} (tuple :k 1)) :k))
+
+;; seq / str / eq / vals over dyn maps
+(println (count (into [] {:a 1 :b 2})))
+(println (str {:a 1}))
+(let [d1 ^any {:a 1} d2 ^any {:a 1}]
+  (println (str (= d1 d2))))
+(println (reduce + 0 (vals {:a 1 :b 2 :c 3})))

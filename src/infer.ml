@@ -218,6 +218,39 @@ let rec split_meta = function
 let scheme_of_ty sty = { svars = free_tvars sty []; sty }
 let fn_t args ret = TFun (args, ret)
 
+(* Canonicalize a def's stored type: an inferred tvar left unconstrained
+   inside a collection argument is really `any` — emit's repr maps every
+   free TVar to the dyn repr, so the emitted object holds dyn values there
+   (dyn-keyed/valued collections) and callers instantiating the var to a
+   concrete type would pass unboxed values the object cannot hold.
+   Bare tvars — the whole type or a direct fn domain/codomain — stay
+   quantified: OCaml 'a (or a concrete inferred type) accepts whatever the
+   call site passes, boxed or not. Vars bound by an explicit `^` annotation
+   (`keep`) always stay quantified: the programmer declared them. *)
+let canon_free keep t =
+  let rec deep t =
+    match repr t with
+    | TVar v -> if List.mem v.id keep then t else TAny
+    | TList a -> TList (deep a) | TVec a -> TVec (deep a)
+    | TSeq a -> TSeq (deep a) | TSet a -> TSet (deep a)
+    | TAtom a -> TAtom (deep a) | TOption a -> TOption (deep a)
+    | TImplicit a -> TImplicit (deep a)
+    | TMap (k, v) -> TMap (deep k, deep v)
+    | TTuple ts -> TTuple (List.map deep ts)
+    | TCon (n, ts) -> TCon (n, List.map deep ts)
+    | TFun (ts, r) -> TFun (List.map deep ts, deep r)
+    | u -> u
+  in
+  let slot u = match repr u with TVar _ -> u | _ -> deep u in
+  match repr t with
+  | TFun (ts, r) -> TFun (List.map slot ts, slot r)
+  | TVar _ -> t
+  | _ -> deep t
+
+(* free tvar ids declared by an annotation — they quantify, everything else
+   defaults to `any` in the stored scheme *)
+let ann_vars = function Some t -> free_tvars t [] | None -> []
+
 (* Table of builtin names -> thunk producing a fresh type each call.
    Builtins whose inference needs argument types (numeric ops, map, get, ...)
    are also listed here so bare-symbol resolution succeeds; their real typing
@@ -737,7 +770,8 @@ and infer_def ctx f =
     let texpr = infer_expr ctx e in
     (match ty_ann with Some t -> unify texpr.loc texpr.ety t | None -> ());
     (match imp with Some (Some t) -> unify texpr.loc texpr.ety t | _ -> ());
-    let sch = generalize [] texpr.ety in
+    let keep = ann_vars ty_ann @ (match imp with Some (Some t) -> free_tvars t [] | _ -> []) in
+    let sch = generalize [] (canon_free keep texpr.ety) in
     let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
     register_global ctx name sch false;
     register_implicit ctx l name imp top;
@@ -812,7 +846,8 @@ and infer_defn ctx f =
             | _ -> fe.ety)
          | None -> fe.ety
        in
-       let sch = generalize [] sch_ty in
+       let keep = ann_vars ty_ann @ (match imp with Some (Some t) -> free_tvars t [] | _ -> []) in
+       let sch = generalize [] (canon_free keep sch_ty) in
        let variadic = match fe.desc with EFun fn -> fn.variadic <> None | _ -> false in
        let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
        register_global ctx name sch variadic;
@@ -846,7 +881,7 @@ and infer_defn ctx f =
            (fun (al, ps, body, an, ph) ->
              let fe = infer_fn ctx al (Some an) ps body in
              unify al ph fe.ety;
-             { tname = an; tloc = al; tsch = generalize [] fe.ety; texpr = fe;
+             { tname = an; tloc = al; tsch = generalize [] (canon_free [] fe.ety); texpr = fe;
                tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None })
            infos
        in

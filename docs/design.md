@@ -353,7 +353,24 @@ global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
   also crosses a boundary. Stored signature types govern cross-module
   call boundaries: argument and result conversions use the callee's
   declared scheme (free type variables appear as `dyn`), not the
-  call-site instantiation.
+  call-site instantiation. At the def boundary the stored scheme itself
+  is canonicalized (`canon_free` in infer.ml): a free type variable
+  that survives unconstrained inside a collection argument is recorded
+  as `any`, because the emitter really does box that position into the
+  `dyn` representation (dyn-keyed/valued collections). Bare type
+  variables — the whole result type or a direct fn domain/codomain —
+  stay quantified (OCaml `'a` accepts boxed or unboxed args alike).
+- **The `DMap` payload is a flat `(dyn, dyn) Clj_core.Map.t`
+  everywhere** — literals, `assoc`/`conj`/`merge`, conversions, and
+  builder freeze all produce flat maps. Only the `get-in`/`assoc-in`/
+  `update-in`/`select-keys` family, which walks clj-core's
+  `(k, (k, v) Map.nest)` representation, converts at that boundary via
+  `Lg_rt.nest_of_flat`/`flat_of_nest` (or the keyword-keyed
+  `nest_map_of_dyn_map`/`dyn_map_of_nest_map` pair).
+- **`assoc`/`conj` on `any`-typed collections dispatch on the `dyn`
+  tag** (`Lg_rt.dyn_assoc`/`dyn_conj`): a vec index must be a `DInt`,
+  a map entry is a `(k, v)` tuple (boxed tuples appear as pair-vecs —
+  `DVec` — inside `dyn`).
 - **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
   `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
   and constant-fold statically. `fn?` is always `false` — functions are

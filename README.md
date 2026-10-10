@@ -93,6 +93,13 @@ unresolved), E2xx reader.
   `any` never leaks into surrounding inference (it unifies as a no-op);
   `get`, `match`, and `:keys` destructuring do checked unboxing at the
   boundary (`option any` for possibly-missing keys — `if-let` unwraps).
+  A free type variable left unconstrained inside a collection argument
+  canonicalizes to `any` in the stored scheme — the emitted object
+  really holds `dyn` values there, and callers re-box to match.
+  `assoc`/`conj` on `any`-typed collections dispatch on the runtime
+  tag; `get-in`/`assoc-in`/`update-in`/`select-keys` convert dyn maps
+  to the nested representation at that boundary only (the `DMap`
+  payload is a flat `(dyn, dyn) Clj_core.Map.t` everywhere else).
 - **Hygienic `defmacro`.** Macros run at compile time on a form-level
   evaluator with the full `syntax-quote` / `~` (unquote) / `~@`
   (unquote-splicing) reader support. Bindings introduced by a macro are
