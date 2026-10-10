@@ -1,0 +1,3 @@
+;; calling a multi-arity defmacro at an unprovided arity is a compile error
+(defmacro two-only ([a b] `(+ ~a ~b)) ([a b c] `(+ ~a ~b ~c)))
+(println (two-only 1))

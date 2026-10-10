@@ -24,6 +24,10 @@ and mfn = {
   (* module the macro was defined in — the hygiene boundary: unqualified
      symbols in its templates resolve against this module first *)
   mns : string;
+  (* multi-arity bodies — (defmacro m ([x] ..) ([x y] ..)): the call
+     dispatches on argument count, like defn's arity selection;
+     empty for ordinary single-arity functions *)
+  marities : mfn list;
 }
 
 exception Macro_error of loc * string
@@ -454,7 +458,7 @@ and eval_fn l env name rest =
       in
       split [] (Array.to_list params)
     in
-    MFn { mname = name; mparams = ps; mrest = rst; mbody = body; menv = env; mns = "" }
+    MFn { mname = name; mparams = ps; mrest = rst; mbody = body; menv = env; mns = ""; marities = [] }
   | Atom (_, Symbol n) :: rest -> eval_fn l env n rest
   | Atom (_, Str _) :: rest -> eval_fn l env name rest  (* docstring *)
   | _ -> form_error l "fn: expected parameter vector"
@@ -464,11 +468,27 @@ and apply l v args : mval =
   | MFn fn ->
     let old_mns = !cur_mns in
     if fn.mns <> "" then cur_mns := fn.mns;
-    (try apply_mfn l fn args
+    (try
+       (match fn.marities with
+        | [] -> apply_mfn l fn args
+        | ars ->
+          let argc = List.length args in
+          (match List.find_opt (fun a -> arity_fits a argc) ars with
+           | Some a -> apply_mfn l a args
+           | None ->
+             form_error l "%s: no matching arity for %d argument%s"
+               fn.mname argc (if argc = 1 then "" else "s")))
      with e -> cur_mns := old_mns; raise e)
     |> fun r -> cur_mns := old_mns; r
   | MBuiltin name -> eval_builtin_apply l name args
   | _ -> form_error l "macro apply: not a function"
+
+(* arity fit: fixed arity takes exactly its param count; a `& rest`
+   arity takes at least its fixed params *)
+and arity_fits a argc =
+  match a.mrest with
+  | Some _ -> argc >= List.length a.mparams
+  | None -> argc = List.length a.mparams
 
 and apply_mfn l fn args : mval =
     let env = Hashtbl.copy fn.menv in
@@ -497,13 +517,38 @@ let expand (fn : mfn) (args : form list) (l : loc) : form =
   | MForm f -> f
   | _ -> form_error l "macro %s did not return a form" fn.mname
 
-(* parse a defmacro form: (defmacro name [params & rest] body...) *)
+(* parse a defmacro form: (defmacro name [params & rest] body...) or the
+   multi-arity (defmacro name ([p] body...) ([p p] body...)) — same arity
+   dispatch as defn: each clause is an independent body selected by the
+   call's argument count *)
 let register_defmacro (ns : string) (f : form) : unit =
   match f with
   | List (l, _ :: Atom (_, Symbol name) :: rest) ->
-    (match eval_fn l (Hashtbl.create 8) name rest with
-     | MFn fn -> register_macro ns name { fn with mns = ns }
-     | _ -> form_error l "defmacro: bad form")
+    let after_doc =
+      match rest with Atom (_, Str _) :: r -> r | _ -> rest
+    in
+    (match after_doc with
+     | (List (_, Vector _ :: _) :: _) as ars
+       when List.for_all (function List (_, Vector _ :: _) -> true | _ -> false) ars ->
+       let env = Hashtbl.create 8 in
+       let ars =
+         List.map
+           (fun af ->
+             match af with
+             | List (al, ((Vector _ :: _) as inner)) ->
+               (match eval_fn al env name inner with
+                | MFn a -> { a with mns = ns }
+                | _ -> form_error al "defmacro: bad arity")
+             | _ -> form_error l "defmacro: malformed arity (want ([params] body...))")
+           ars
+       in
+       register_macro ns name
+         { mname = name; mparams = []; mrest = None; mbody = [];
+           menv = env; mns = ns; marities = ars }
+     | _ ->
+       (match eval_fn l (Hashtbl.create 8) name rest with
+        | MFn fn -> register_macro ns name { fn with mns = ns }
+        | _ -> form_error l "defmacro: bad form"))
   | _ -> ()
 
 let locate l = l

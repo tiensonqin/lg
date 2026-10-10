@@ -26,4 +26,28 @@
 ;; defmacro with docstring — skipped like defn's
 (defmacro twice-doc "evaluate x in a doubled context" [x] `(+ ~x ~x))
 (println (str (twice-doc 21)))
+
+;; multi-arity defmacro: dispatch on argument count, like defn
+(defmacro greet-m
+  ([x] `(str "hi " ~x))
+  ([x y] `(str "hi " ~x " and " ~y)))
+(println (greet-m "world"))
+(println (greet-m "a" "b"))
+
+;; each arity is an independent body; a `& rest` arity accepts at least
+;; its fixed params
+(defmacro mklist
+  ([x] `(list ~x))
+  ([x & xs] `(list ~x ~@xs)))
+(println (str (mklist 1) " " (mklist 1 2 3)))
+
+;; an arity may expand into a call of the same macro at another arity
+(defmacro sumto-m
+  ([n] `(sumto-m ~n 0))
+  ([n acc] `(+ ~n ~acc)))
+(println (str (sumto-m 5)))
+
+;; docstring before the arity bodies
+(defmacro mdoc "two arities" ([a] `(inc ~a)) ([a b] `(+ ~a ~b)))
+(println (str (mdoc 10) " " (mdoc 10 20)))
 (exit 0)

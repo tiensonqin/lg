@@ -107,6 +107,12 @@ Special forms (v2): `def`, `defn`, `defmacro`, `fn`, `let`, `if`, `do`,
   happens after reading, on raw forms. Expansion threads the expanding
   macro's module through a dynamically-bound value (like Clojure's
   `*ns*`), so nested macro calls keep their own boundary.
+- **Multi-arity `defmacro`** — `(defmacro m ([x] …) ([x y] …))` selects
+  the clause whose arity accepts the call's argument count, like
+  `defn`. Each clause is an independent body (a `& rest` clause accepts
+  at least its fixed params); an optional docstring may precede the
+  clauses. A clause may expand into a call to the same macro at another
+  arity. Calling at an unprovided arity is a compile error.
 
 ## 5. Memory model and mode inference (v0)
 
@@ -207,6 +213,8 @@ structures — never hand-rolled collections, never vendored copies, never
 - **Multi-arity `defn`** — `(defn f ([x] …) ([x y] …))` dispatched on
   arity; arities emit as a `let rec .. and ..` group so they can call
   each other.
+- **Multi-arity `defmacro`** — `(defmacro m ([x] …) ([x y] …))` with
+  arity dispatch on expansion; clauses are independent bodies.
 - **Destructuring** — sequential `[a [b c]]` and map
   `{:keys [..] :strs [..] :as s :or {..}}` / `{sym :kw}` / `{sym "s"}`
   binding forms in `let`/`fn`/`defn`; nested and `any`-valued patterns
