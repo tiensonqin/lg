@@ -1882,9 +1882,12 @@ and infer_match ctx l scrut clauses =
     List.exists (fun (te, _) -> match repr te.ety with TAny -> true | _ -> false) items
   in
   if ret_any then
-    (match repr ret with TVar v -> v.link <- Some TAny | _ -> ())
-  else
-    List.iter (fun (te, _) -> unify te.loc ret te.ety) items;
+    (match repr ret with TVar v -> v.link <- Some TAny | _ -> ());
+  (* unify every arm into ret even when it resolved to `any`: arms whose
+     type is still an open var (e.g. a recursive call's return) must settle
+     on `any` too — otherwise emit-time conv sees an unresolved var while
+     the arm's OCaml value is dyn, and the arms no longer share a type *)
+  List.iter (fun (te, _) -> unify te.loc ret te.ety) items;
   let join te =
     if ret_any && not (match repr te.ety with TAny -> true | _ -> false)
     then mk te.loc TAny (EBox te) else te

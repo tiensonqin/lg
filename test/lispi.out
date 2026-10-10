@@ -1,0 +1,17 @@
+#<closure>
+3628800
+#<closure>
+#<closure>
+7
+(1 2 3)
+7
+(8 9)
+(0 1 2)
+true
+false
+(a b 3)
+"yes"
+2
+error: +: needs 2 ints
+error: unbound: no-such-name
+error: car of non-list

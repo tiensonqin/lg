@@ -1,0 +1,26 @@
+;; Regression: match arms mixing `unit`/`any` must emit a consistent type.
+;; An arm whose type is still an open var (a recursive call's return) must
+;; settle on `any` when the join is dyn — otherwise the emitted OCaml arms
+;; disagree (unit vs dyn). Self-recursive fns also convert the body to the
+;; binder's return var that callers share.
+(declare go)
+
+;; `(go n)` recurses through a dyn join: `true nil` arm is `any`, the
+;; `false` arm's inner match joins unit (println) against the recursive
+;; call's then-open return var.
+(defn go [^int n]
+  (match (<= n 0)
+    true nil
+    false (match n
+            1 (println "one")
+            _ (go (- n 1)))))
+
+(go 3)
+(println "done")
+
+;; same shape without the dyn join: both arms concrete, no coercion needed
+(defn go2 [^int n]
+  (match n
+    0 "zero"
+    _ (go2 (- n 1))))
+(println (go2 2))

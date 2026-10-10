@@ -194,7 +194,17 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
     (match fn.variadic with Some p -> buf_add b (sanitize p.bname ^ "__" ^ string_of_int p.bid ^ " ") | None -> ());
     if fn.params = [] && fn.variadic = None then buf_add b "() ";
     buf_add b "-> ";
-    (match repr e.ety with
+    (* a self-recursive fn's callers share the *binder's* return var
+       (sb.bty), which may resolve differently from the EFun node's own
+       ety ret (e.g. a match arm pinched it to unit while the body
+       still emits dyn). Convert the body to what callers see — that is
+       the sig emit_call consults via `sret`. *)
+    let ret_ty =
+      match fn.Ast.fself with
+      | Some sb -> sb.Ast.bty
+      | None -> e.ety
+    in
+    (match repr ret_ty with
      | TFun (_, r) -> buf_add b (conv r fn.body.ety (arg_str fn.body))
      | _ -> emit_expr b fn.body);
     buf_add b ")";

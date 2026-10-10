@@ -1,0 +1,430 @@
+;; mini Lisp interpreter in lg: reader + eval with lexical envs and closures.
+;; Values and parsed forms share the `v` variant — like a real Lisp's s-expr.
+(ns lispi-test)
+
+(defvariant lv
+  (vnum [n int])
+  (vstr [s string])
+  (vsym [s string])
+  (vbool [b bool])
+  vnil
+  (verr [msg string])
+  (vcons [h lv] [t lv])
+  (vprim [name string])
+  (vbind [k string] [x lv])
+  (vclo [params lv] [body lv] [env lv]))
+
+;; pair conventions (all values are v):
+;;   reader fns return (vcons form (vnum next-index))
+;;   eval fns   return (vcons value env)   — env is a vbind chain
+;; accessor: (vhead p) = first, (vtail p) = rest, (vnum n) unwraps an index.
+
+(declare rd-list)
+(declare v-rev)
+(declare rev-onto)
+(declare ev)
+(declare prim-call)
+(declare show)
+
+;; ---------------- reader: string -> v forms ----------------
+
+(defn wspace? [^string c]
+  (match c " " true "\n" true "\t" true "\r" true _ false))
+(defn delim? [^string c]
+  (match (wspace? c) true true _ (match c "(" true ")" true "[" true "]" true _ false)))
+
+;; unwrap a (vnum i) index
+(defn vn->i [^lv x]
+  (match x (vnum n) n _ -1))
+
+;; vcons chain accessors (the interpreter's car/cdr/nth)
+(defn vhead [^lv xs]
+  (match xs (vcons h t) h _ (verr "car of non-list")))
+(defn vtail [^lv xs]
+  (match xs (vcons h t) t _ (verr "cdr of non-list")))
+(defn vnth [^lv xs ^int i]
+  (match xs
+    (vcons h t) (if (= i 0) h (vnth t (- i 1)))
+    _ (verr "nth of non-list")))
+
+;; read a symbol/number token starting at i -> (vcons form (vnum i'))
+(defn rd-atom [^string s ^int i]
+  (let [n (count s)
+        go (fn go [j]
+             (if (and (< j n) (not (delim? (subs s j (+ j 1)))))
+               (go (+ j 1))
+               j))
+        j (go i)
+        tok (subs s i j)]
+    (match (re-matches "-?[0-9]+" tok)
+      (Some n2) (vcons (vnum (int tok)) (vnum j))
+      None
+      (match tok
+        "nil" (vcons vnil (vnum j))
+        "true" (vcons (vbool true) (vnum j))
+        "false" (vcons (vbool false) (vnum j))
+        _ (vcons (vsym tok) (vnum j))))))
+
+;; read a double-quoted string starting after the opening quote at i
+(defn rd-string [^string s ^int i]
+  (let [n (count s)
+        go (fn go [j]
+             (if (and (< j n) (not (= (subs s j (+ j 1)) "\"")))
+               (go (+ j 1))
+               j))
+        j (go i)]
+    (vcons (vstr (subs s i j)) (vnum (+ j 1)))))
+
+;; skip whitespace, return next index
+(defn skip-ws [^string s ^int i]
+  (let [n (count s)]
+    (let [go (fn go [j] (if (and (< j n) (wspace? (subs s j (+ j 1)))) (go (+ j 1)) j))]
+      (go i))))
+
+;; read one form at i -> (vcons form (vnum i'))
+(defn rd-form [^string s ^int i]
+  (let [n (count s) i (skip-ws s i)]
+    (match (>= i n)
+      true (vcons (verr "eof") (vnum i))
+      false
+      (match (subs s i (+ i 1))
+        "(" (rd-list s (+ i 1) vnil ")")
+        "[" (rd-list s (+ i 1) vnil "]")
+        "\"" (rd-string s (+ i 1))
+        "'" (let [q (rd-form s (+ i 1))
+                  qf (vhead q) qj (vtail q)]
+              (vcons (vcons (vsym "quote") (vcons qf vnil)) qj))
+        _ (rd-atom s i)))))
+
+;; read list elements until `endc` (")" or "]"), acc is a reversed v-list
+(defn rd-list [^string s ^int i ^lv acc ^string endc]
+  (let [n (count s) i (skip-ws s i)]
+    (match (>= i n)
+      true (vcons (verr "unclosed list") (vnum i))
+      false
+      (match (= (subs s i (+ i 1)) endc)
+        true (vcons (v-rev acc) (vnum (+ i 1)))
+        false
+        (let [q (rd-form s i)
+              qf (vhead q) qj (vn->i (vtail q))]
+          (match qf
+            (verr m) q
+            _ (rd-list s qj (vcons qf acc) endc)))))))
+
+;; reverse a vcons chain
+(defn v-rev [^lv xs]
+  (match xs
+    vnil vnil
+    (vcons h t) (rev-onto t (vcons h vnil))
+    _ xs))
+(defn rev-onto [^lv xs ^lv acc]
+  (match xs
+    vnil acc
+    (vcons h t) (rev-onto t (vcons h acc))
+    _ acc))
+
+;; ---------------- eval ----------------
+
+(defn prim-env [^lv names ^lv env]
+  (match names
+    vnil env
+    (vcons n0 rest)
+    (match n0
+      (vsym n) (prim-env rest (vcons (vbind n (vprim n)) env))
+      _ env)
+    _ env))
+
+(def prim-names
+  (vcons (vsym "+") (vcons (vsym "-") (vcons (vsym "*") (vcons (vsym "/")
+    (vcons (vsym "<") (vcons (vsym ">") (vcons (vsym "=") (vcons (vsym "car")
+      (vcons (vsym "cdr") (vcons (vsym "cons") (vcons (vsym "list")
+        (vcons (vsym "list?") (vcons (vsym "nil?") vnil))))))))))))))
+(def base-env (prim-env prim-names vnil))
+;; global def table: every (def k v) lands here; env-get falls back to it
+(def genv (atom base-env))
+
+;; env: vcons chain of (vbind k x); lookup walks the list.
+;; Misses fall through to the global def table `genv` (an atom) — defs are
+;; late-bound there so a closure's captured env never needs the def's own
+;; binding (this is what makes recursive defs work).
+(declare genv)
+;; walk one vbind chain to its end -> found value or (verr "unbound")
+(defn env-scan [^lv env ^string k]
+  (match env
+    vnil (verr (str "unbound: " k))
+    (vcons b rest)
+    (match b
+      (vbind kk x) (if (= kk k) x (env-scan rest k))
+      _ (env-scan rest k))
+    _ (verr "bad env")))
+;; lookup: lexical env first, then the global def table
+(defn env-get [^lv env ^string k]
+  (let [x (env-scan env k)]
+    (match x
+      (verr m) (env-scan @genv k)
+      _ x)))
+
+;; bind a param list v (of vsym) to arg v-list -> env
+(defn bind-params [^lv params ^lv args ^lv env]
+  (match params
+    vnil env
+    (vcons p0 ps)
+    (match p0
+      (vsym p)
+      (match args
+        vnil (vcons (verr (str "missing arg: " p)) env)
+        (vcons a as) (bind-params ps as (vcons (vbind p a) env))
+        _ (vcons (verr "bad args") env))
+      _ (vcons (verr "bad params") env))
+    _ (vcons (verr "bad params") env)))
+
+;; truthy: everything except vnil and (vbool false)
+(defn truthy? [^lv x]
+  (match x
+    vnil false
+    (vbool b) b
+    _ true))
+
+;; eval body forms left-to-right threading env -> (vcons last-val env)
+(defn ev-last [^lv forms ^lv env]
+  (match forms
+    vnil (vcons vnil env)
+    (vcons f rest)
+    (let [p (ev f env) x (vhead p) e1 (vtail p)]
+      (match x
+        (verr m) p
+        _ (match rest
+            vnil p
+            _ (ev-last rest e1))))
+    _ (vcons (verr "bad body") env)))
+
+;; eval a list of arg forms -> (vcons v-list env)
+(defn ev-args [^lv forms ^lv env]
+  (match forms
+    vnil (vcons vnil env)
+    (vcons f rest)
+    (let [p (ev f env) x (vhead p) e1 (vtail p)]
+      (match x
+        (verr m) p
+        _ (let [p2 (ev-args rest e1)]
+            (vcons (vcons x (vhead p2)) (vtail p2)))))
+    _ (vcons (verr "bad args") env)))
+
+;; apply a vprim or vclo to evaluated args -> v
+(defn apply-v [^lv f ^lv args]
+  (match f
+    (vprim name) (prim-call name args)
+    (vclo params body cenv)
+    (let [env2 (bind-params params args cenv)]
+      (match env2
+        (vcons e0 _)
+        (match e0
+          (verr m) (verr m)
+          _ (vhead (ev-last body env2)))
+        _ (vhead (ev-last body env2))))
+    _ (verr "not applicable")))
+
+;; eval one form -> (vcons value env)
+(defn ev [^lv form ^lv env]
+  (match form
+    (vnum n) (vcons form env)
+    (vstr s) (vcons form env)
+    (vbool b) (vcons form env)
+    vnil (vcons form env)
+    (verr m) (vcons form env)
+    (vsym s) (vcons (env-get env s) env)
+    (vcons h t)
+    (match h
+      (vsym nm)
+      (match nm
+        "quote" (vcons (vhead t) env)
+        "if"
+        (let [p (ev (vnth t 0) env) c1 (vhead p) e1 (vtail p)]
+          (match c1
+            (verr m) p
+            _ (if (truthy? c1)
+                (ev (vnth t 1) e1)
+                (ev (vnth t 2) e1))))
+        "do" (ev-last t env)
+        "def"
+        (let [k (match (vhead t) (vsym s) s _ "?")
+              p (ev (vnth t 1) env) x (vhead p) e1 (vtail p)]
+          (match x
+            (verr m) p
+            _ (do (swap! genv (fn [e] (vcons (vbind k x) e)))
+                  (vcons x e1))))
+        "fn"
+        (vcons (vclo (vhead t) (vtail t) env) env)
+        _
+        (let [p (ev h env) f (vhead p) e1 (vtail p)]
+          (match f
+            (verr m) p
+            _ (let [p2 (ev-args t e1) avs (vhead p2) e2 (vtail p2)]
+                (match avs
+                  (verr m) p2
+                  _ (vcons (apply-v f avs) e2))))))
+      _
+      (let [p (ev h env) f (vhead p) e1 (vtail p)]
+        (match f
+          (verr m) p
+          _ (let [p2 (ev-args t e1) avs (vhead p2) e2 (vtail p2)]
+              (match avs
+                (verr m) p2
+                _ (vcons (apply-v f avs) e2))))))
+    _ (vcons (verr "bad form") env)))
+
+;; ---------------- primitives ----------------
+
+;; 2-int arithmetic prim
+(defn i2 [^lv args ^string op]
+  (match args
+    (vcons a0 r1)
+    (match a0
+      (vnum a)
+      (match r1
+        (vcons b0 r2)
+        (match b0
+          (vnum b)
+          (match r2
+            vnil (vnum (match op "+" (+ a b) "-" (- a b) "*" (* a b) _ (/ a b)))
+            _ (verr (str op ": needs 2 ints")))
+          _ (verr (str op ": needs 2 ints")))
+        _ (verr (str op ": needs 2 ints")))
+      _ (verr (str op ": needs 2 ints")))
+    _ (verr (str op ": needs 2 ints"))))
+
+;; 2-arg equality/ordering prim
+(defn two-int [^lv args]
+  (match args
+    (vcons a0 r1)
+    (match a0
+      (vnum a)
+      (match r1
+        (vcons b0 r2)
+        (match b0
+          (vnum b) (match r2 vnil (vcons (vnum a) (vcons (vnum b) vnil)) _ vnil)
+          _ vnil)
+        _ vnil)
+      _ vnil)
+    _ vnil))
+(defn two-same [^lv args ^string kind]
+  (match args
+    (vcons a0 r1)
+    (match r1
+      (vcons b0 r2)
+      (match r2
+        vnil
+        (match a0
+          (vnum a) (match b0 (vnum b) (vbool (= a b)) _ (verr "mixed"))
+          (vbool a) (match b0 (vbool b) (vbool (= a b)) _ (verr "mixed"))
+          (vstr a) (match b0 (vstr b) (vbool (= a b)) _ (verr "mixed"))
+          _ (verr (str kind ": bad args")))
+        _ (verr (str kind ": bad args")))
+      _ (verr (str kind ": bad args")))
+    _ (verr (str kind ": bad args"))))
+(defn b2 [^lv args ^string op]
+  (match (two-int args)
+    (vcons n0 r)
+    (match n0
+      (vnum a)
+      (match (vhead r)
+        (vnum b)
+        (vbool (match op "<" (< a b) ">" (> a b) _ (= a b)))
+        _ (verr "b2"))
+      _ (two-same args op))
+    _ (two-same args op)))
+
+(defn prim-call [^string name ^lv args]
+  (match name
+    "+" (i2 args "+")
+    "-" (i2 args "-")
+    "*" (i2 args "*")
+    "/" (i2 args "/")
+    "<" (b2 args "<")
+    ">" (b2 args ">")
+    "=" (b2 args "=")
+    "car" (match args (vcons l vnil) (vhead l) _ (verr "car: bad args"))
+    "cdr" (match args (vcons l vnil) (vtail l) _ (verr "cdr: bad args"))
+    "cons" (match args
+            (vcons h r1)
+            (match r1
+              (vcons t r2) (match r2 vnil (vcons h t) _ (verr "cons: bad args"))
+              _ (verr "cons: bad args"))
+            _ (verr "cons: bad args"))
+    "list" args
+    "list?" (match args
+              (vcons l r1)
+              (match l
+                (vcons _ _) (match r1 vnil (vbool true) _ (vbool false))
+                vnil (match r1 vnil (vbool true) _ (vbool false))
+                _ (vbool false))
+              _ (vbool false))
+    "nil?" (match args
+             (vcons x r1)
+             (match x vnil (match r1 vnil (vbool true) _ (vbool false)) _ (vbool false))
+             _ (vbool false))
+    _ (verr (str "unknown prim: " name))))
+
+;; ---------------- printer ----------------
+
+(defn show-list [^lv xs]
+  (match xs
+    vnil ""
+    (vcons h t)
+    (match t
+      vnil (show h)
+      (vcons _ _) (str (show h) " " (show-list t))
+      _ (str (show h) " . " (show t)))
+    _ (str ". " (show xs))))
+(defn show [^lv x]
+  (match x
+    (vnum n) (str n)
+    (vstr s) (str "\"" s "\"")
+    (vsym s) s
+    (vbool b) (str b)
+    vnil "nil"
+    (verr m) (str "error: " m)
+    (vcons h t) (str "(" (show-list (vcons h t)) ")")
+    (vprim name) (str "#<prim " name ">")
+    (vbind k x) (str "#<bind " k ">")
+    (vclo p b e) "#<closure>"))
+
+;; ---------------- driver ----------------
+
+
+;; eval every top-level form in the program text; env threads through
+(defn run-all [^string src]
+  (let [n (count src)]
+    (let [go (fn go [i env]
+               (let [i (skip-ws src i)]
+                 (match (>= i n)
+                   true vnil
+                   false
+                   (let [q (rd-form src i)
+                         qf (vhead q) qj (vn->i (vtail q))]
+                     (match qf
+                       (verr m) (vcons (vstr (show qf)) env)
+                       _ (let [p (ev qf env)
+                               x (vhead p) e2 (vtail p)]
+                           (println (show x))
+                           (go qj e2)))))))]
+      (go 0 base-env))))
+
+(run-all
+ "(def fact (fn [n] (if (= n 0) 1 (* n (fact (- n 1))))))
+  (fact 10)
+  (def make-adder (fn [x] (fn [y] (+ x y))))
+  (def add3 (make-adder 3))
+  (add3 4)
+  (list 1 2 (+ 1 2))
+  (car (list 7 8 9))
+  (cdr (list 7 8 9))
+  (cons 0 (list 1 2))
+  (list? (list 1))
+  (list? 5)
+  (quote (a b 3))
+  (if (< 1 2) \"yes\" \"no\")
+  (if nil 1 2)
+  (+ 1 2 3)
+  no-such-name
+  (car 5)")
