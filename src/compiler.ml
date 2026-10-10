@@ -89,13 +89,48 @@ let find_module_file ~roots ns =
 
 (* a parsed .lgi entry — one per form *)
 type lgi_entry =
-  | LDef of string * Typ.scheme * bool list * bool    (* name, sch, escapes, implicit *)
+  | LDef of string * Typ.scheme * bool list * bool * string option (* name, sch, escapes, implicit, docstring *)
+  | LMacro of string * Typ.scheme * string option    (* doc-only macro entry — never a value export *)
   | LExtern of string
   | LVariant of string * Typ.ty list * (string * (string * Typ.ty) list) list
   | LPrivate of string
 
+(* 'aNN tyvars carry internal ids; drift checks compare alpha-normalized forms *)
+let lgi_form_canon s =
+  let tbl = Hashtbl.create 8 in
+  let next = ref 0 in
+  let n = String.length s in
+  let is_id c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '_' || c = '?' || c = '-' in
+  let b = Buffer.create n in
+  let rec scan i =
+    if i < n then begin
+      if s.[i] = '\'' && i + 1 < n && is_id s.[i + 1] then begin
+        let j = ref (i + 1) in
+        while !j < n && is_id s.[!j] do incr j done;
+        let tok = String.sub s i (!j - i) in
+        let k = String.length tok in
+        if k > 2 && tok.[k - 1] >= '0' && tok.[k - 1] <= '9' then begin
+          let nm =
+            match Hashtbl.find_opt tbl tok with
+            | Some v -> v
+            | None ->
+              let v = "'" ^ String.make 1 (Char.chr (Char.code 'a' + !next)) in
+              incr next; Hashtbl.replace tbl tok v; v
+          in
+          Buffer.add_string b nm
+        end else Buffer.add_string b tok;
+        scan !j
+      end else begin
+        Buffer.add_char b s.[i];
+        scan (i + 1)
+      end
+    end
+  in
+  scan 0;
+  Buffer.contents b
+
 let lgi_entry_name = function
-  | LDef (n, _, _, _) | LExtern n | LPrivate n -> n
+  | LDef (n, _, _, _, _) | LMacro (n, _, _) | LExtern n | LPrivate n -> n
   | LVariant (n, _, _) -> n
 
 (* like string_of_lg_ty, but the variant's parameter vars print as the
@@ -130,12 +165,16 @@ let lgi_ty_str (ptys : Typ.ty list) : Typ.ty -> string =
   in
   go
 
-let lgi_entry_form (e : lgi_entry) : string =
+let lgi_entry_form ?(doc = true) (e : lgi_entry) : string =
   match e with
-  | LDef (n, sch, esc, imp) ->
+  | LDef (n, sch, esc, imp, d) ->
     let kw = if imp then "implicit" else "def" in
     let es = if esc = [] then "" else " :escapes [" ^ String.concat " " (List.map string_of_bool esc) ^ "]" in
-    Printf.sprintf "(%s %s %s%s)" kw n (Typ.string_of_lg_ty sch.sty) es
+    let ds = match doc, d with true, Some d -> " " ^ Printf.sprintf "%S" d | _ -> "" in
+    Printf.sprintf "(%s %s %s%s%s)" kw n (Typ.string_of_lg_ty sch.sty) es ds
+  | LMacro (n, sch, d) ->
+    let ds = match doc, d with true, Some d -> " " ^ Printf.sprintf "%S" d | _ -> "" in
+    Printf.sprintf "(macro %s %s%s)" n (Typ.string_of_lg_ty sch.sty) ds
   | LExtern n -> Printf.sprintf "(extern-type %s)" n
   | LVariant (n, ptys, cs) ->
     let tys = lgi_ty_str ptys in
@@ -159,12 +198,12 @@ let lgi_entries_of_module (m : Ast.modl) : lgi_entry list =
           | Some l -> l
           | None -> []
         in
-        Some (LDef (d.tname, d.tsch, esc, d.timplicit <> None))
+        Some (LDef (d.tname, d.tsch, esc, d.timplicit <> None, d.tdoc))
       | Ast.TExtern (_, n) -> Some (LExtern n)
       | Ast.TVariant (_, n, ps, cs, _) -> Some (LVariant (n, ps, cs))
       | Ast.TEffect _ -> None
       | Ast.TFfi (_, n, args, ret, _, _) ->
-        Some (LDef (n, Typ.generalize [] (Typ.TFun (args, ret)), [], false)))
+        Some (LDef (n, Typ.generalize [] (Typ.TFun (args, ret)), [], false, None)))
     m.tops
 
 let lgi_of_module (m : Ast.modl) : string =
@@ -188,6 +227,13 @@ let parse_lgi path : lgi_entry list =
   List.filter_map
     (fun f ->
       match f with
+      | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol "macro") :: Syntax.Atom (_, Syntax.Symbol n) :: tyf :: rest) ->
+        let doc =
+          List.find_map
+            (function Syntax.Atom (_, Syntax.Str d) -> Some d | _ -> None)
+            rest
+        in
+        Some (LMacro (n, Typ.generalize [] (ty_of tyf), doc))
       | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol kw) :: Syntax.Atom (_, Syntax.Symbol n) :: tyf :: rest)
         when kw = "def" || kw = "implicit" || kw = "ffi" ->
         let esc =
@@ -201,7 +247,12 @@ let parse_lgi path : lgi_entry list =
           in
           go rest
         in
-        Some (LDef (n, Typ.generalize [] (ty_of tyf), esc, kw = "implicit"))
+        let doc =
+          List.find_map
+            (function Syntax.Atom (_, Syntax.Str d) -> Some d | _ -> None)
+            rest
+        in
+        Some (LDef (n, Typ.generalize [] (ty_of tyf), esc, kw = "implicit", doc))
       | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol "extern-type") :: [ Syntax.Atom (_, Syntax.Symbol n) ]) ->
         Some (LExtern n)
       | Syntax.List (_, Syntax.Atom (_, Syntax.Symbol "private") :: [ Syntax.Atom (_, Syntax.Symbol n) ]) ->
@@ -277,9 +328,9 @@ let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
     let listed =
       List.concat_map
         (function
-          | LDef (n, _, _, _) -> [ n ]
+          | LDef (n, _, _, _, _) -> [ n ]
           | LVariant (_, _, cs) -> List.map fst cs
-          | LExtern _ | LPrivate _ -> [])
+          | LExtern _ | LPrivate _ | LMacro _ -> [])
         entries
     in
     Hashtbl.iter
@@ -288,7 +339,7 @@ let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
     List.iter
       (fun e ->
         match e with
-        | LDef (n, sch, esc, imp) ->
+        | LDef (n, sch, esc, imp, _) ->
           (match Hashtbl.find_opt tbl n with
            | Some (g : Infer.gbind) ->
              g.gsch <- sch;
@@ -312,7 +363,7 @@ let apply_lgi ~(globals : Infer.globals) ~(m : Ast.modl)
               Infer.register_variant_mod m.ocaml_name c sch (List.length ftys))
             cs;
           Hashtbl.replace Infer.all_vtypes vname (List.map fst cs)
-        | LExtern _ | LPrivate _ -> ())
+        | LExtern _ | LPrivate _ | LMacro _ -> ())
       entries
 
 let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : string) : Ast.modl list =
@@ -378,7 +429,7 @@ let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : strin
       List.iter
         (fun e ->
           match e with
-          | LDef (n, sch, esc, imp) ->
+          | LDef (n, sch, esc, imp, _) ->
             Hashtbl.replace tbl n { Infer.gsch = sch; gvar = false; gexp = true };
             if esc <> [] then
               Hashtbl.replace Modes.global_escapes (ocaml_m ^ "." ^ n) esc;
@@ -395,7 +446,7 @@ let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : strin
                 Infer.register_variant_mod ocaml_m c sch (List.length ftys))
               cs;
             Hashtbl.replace Infer.all_vtypes vname (List.map fst cs)
-          | LExtern _ | LPrivate _ -> ())
+          | LExtern _ | LPrivate _ | LMacro _ -> ())
         entries;
       order :=
         { Ast.mname = rn; ocaml_name = Infer.ocaml_mod_of_ns rn; mpath = lf;

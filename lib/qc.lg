@@ -1,8 +1,8 @@
-;; qc — property-based testing for lg.
+;; qc - property-based testing for lg.
 ;;
 ;; A generator is a pair (tuple sample shrink):
-;;   sample : (fn [int] (tuple a int))  — seed -> (value, next-seed)
-;;   shrink : (fn [a] (seq a))          — smaller candidate values
+;;   sample : (fn [int] (tuple a int))  - seed -> (value, next-seed)
+;;   shrink : (fn [a] (seq a))          - smaller candidate values
 ;; for-all runs n deterministic trials; on failure it shrinks to a minimal
 ;; counterexample and reports it.
 (ns qc)
@@ -17,7 +17,7 @@
 
 
 
-(defn shrinks ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) a] (seq a))
+(defn shrinks "Run a generator's shrinker: value -> seq of smaller candidates." ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) a] (seq a))
   [g v]
   ((nth g 1) v))
 
@@ -51,9 +51,9 @@
     (fn [v] (concat [(nth xs 0 ())] []))))
 
 ;; character-based strings over a small alphabet
-(def qc-alpha ["a" "b" "c" "x" "y" "0" "1"])
+(def qc-alpha "Alphabet used by gen-string." ["a" "b" "c" "x" "y" "0" "1"])
 
-(defn gen-string [n]
+(defn gen-string "Random string of the given length over qc-alpha." [n]
   (gen
     (fn [s]
       (let [go (fn go [i s acc]
@@ -64,7 +64,7 @@
         (go n s "")))
     (fn [^string v] (concat ["" (subs v 0 (max 0 (- (count v) 1)))] []))))
 
-(defn gen-vec [g n]
+(defn gen-vec "vec generator: element generator g, n elements." [g n]
   (gen
     (fn [s]
       (let [go (fn go [i s acc]
@@ -79,7 +79,7 @@
                   (map (fn [y] (assoc v i y)) (shrinks g x))))
               (range (count v))))))
 
-(defn gen-list [g n]
+(defn gen-list "list generator: element generator g, n elements." [g n]
   (gen
     (fn [s]
       (let [r (sample (gen-vec g n) s)]
@@ -87,7 +87,7 @@
     (fn [^(list a) v]
       (map (fn [x] (into (list) x)) (shrinks (gen-vec g n) (vec v))))))
 
-(defn gen-map [kg vg n]
+(defn gen-map "map generator: key generator kg, value generator vg, n entries." [kg vg n]
   (gen
     (fn [s]
       (let [go (fn go [i s acc]
@@ -102,7 +102,7 @@
 
 ;; shrink loop: walk candidate shrinks; take the first that still fails,
 ;; repeat until no failing shrink remains or fuel runs out.
-(defn shrink-min [g prop v fuel]
+(defn shrink-min "Walk g's shrinker to the smallest value that still fails prop." [g prop v fuel]
   (let [go (fn go [cur f]
              (if (= f 0) cur
                (match (first (filter (fn [x] (not (prop x))) (shrinks g cur)))
@@ -112,7 +112,7 @@
 
 ;; for-all: run n trials over g; false -> shrink to minimal counterexample.
 ;; Returns true on success, false on falsification (and prints the witness).
-(defn for-all [n g prop]
+(defn for-all "Run n deterministic trials of prop over g; prints a shrunk witness on falsification." [n g prop]
   (let [go (fn go [i s]
              (if (= i 0)
                (do (println "qc: " n " trials passed") true)
@@ -129,7 +129,7 @@
 
 ;; for-all over two generators: prop takes (v1 v2).
 ;; the inner generator produces (tuple v1 v2) pairs.
-(defn for-all2 [n g1 g2 prop]
+(defn for-all2 "for-all over a pair of generators; prop takes two sampled values." [n g1 g2 prop]
   (for-all n
     (gen
       (fn [s]

@@ -34,7 +34,10 @@ deps clone into `.lg/deps/<name>`; `lg deps` resolves and writes
 inferred signatures, defvariant constructors, docstrings, and
 cross-module links; a module's `.lgi` gates which entries render.
 `--format=md` prints the old markdown to stdout. `--title` names the
-site. `lg version` prints the version.
+site, and `--tutorials <dir>` renders `<dir>/*.md` as tutorial pages
+(sidebar section + index listing, ordered by filename). `.lgi` entries
+carry docstrings: `(def n sig "doc")`, `(macro n sig "doc")`.
+`lg version` prints the version.
 `tools/release.sh [ver]` builds `dist/lg-<ver>-<os>-<arch>.tar.gz`;
 push a `v*` tag and CI builds ubuntu+macos tarballs.
 

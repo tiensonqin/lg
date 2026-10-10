@@ -544,11 +544,61 @@ and box_deep ety es =
     "(let (" ^ String.concat ", " vs ^ ") = " ^ es ^ " in Lg_rt.DVec (Clj_core.Vec.of_list ["
     ^ String.concat "; " (List.map2 (fun v ty -> box_deep ty v) vs ts) ^ "]))"
   | TFun _ -> "(ignore (" ^ es ^ "); Lg_rt.DStr \"<fn>\")"
+  | TCon (n, _) when Hashtbl.mem Infer.all_vtypes n -> variant_box ety es
   | TAny -> es
   | TUnit -> "(ignore (" ^ es ^ "); Lg_rt.DUnit)"
   | _ -> "(Lg_rt." ^ dyn_ctor ety ^ " " ^ es ^ ")"
 
 and box_of e = box_deep e.ety (arg_str e)
+
+(* box a user defvariant value into dyn: per-ctor match -> DVariant.
+   Poly ('a) fields box as a literal marker — an OCaml 'a is not a dyn. *)
+and variant_box ety es =
+  let n = match repr ety with TCon (n, _) -> n | _ -> "" in
+  let targs = match repr ety with TCon (_, ps) -> ps | _ -> [] in
+  let ctors = try Hashtbl.find Infer.all_vtypes n with Not_found -> [] in
+  let arm c =
+    let vc = Hashtbl.find Infer.all_variants c in
+    (* same-module ctor refs are unqualified *)
+    let vc_ocaml =
+      let pfx = !cur_mod ^ "." in
+      if String.starts_with ~prefix:pfx vc.Infer.vc_ocaml then
+        String.sub vc.Infer.vc_ocaml (String.length pfx)
+          (String.length vc.Infer.vc_ocaml - String.length pfx)
+      else vc.Infer.vc_ocaml
+    in
+    let ftys, retv =
+      match repr vc.Infer.vc_scheme.Typ.sty with
+      | Typ.TFun (fs, r) -> (fs, r)
+      | r -> ([], r)
+    in
+    let tvars = match repr retv with Typ.TCon (_, vs) -> vs | _ -> [] in
+    let box_f i t =
+      let t =
+        match repr t with
+        | Typ.TVar _ as tv ->
+          (match
+             List.combine tvars targs
+             |> List.find_opt (fun (tv2, _) -> Typ.dimp tv2 == tv)
+           with
+           | Some (_, a) -> a
+           | None -> t)
+        | _ -> t
+      in
+      match repr t with
+      | Typ.TVar _ -> "Lg_rt.DStr \"<poly>\""
+      | _ -> box_deep t ("f" ^ string_of_int i)
+    in
+    let pat =
+      match ftys with
+      | [] -> vc_ocaml
+      | [ _ ] -> "(" ^ vc_ocaml ^ " f0)"
+      | _ -> "(" ^ vc_ocaml ^ " (" ^ String.concat ", " (List.mapi (fun i _ -> "f" ^ string_of_int i) ftys) ^ "))"
+    in
+    "| " ^ pat ^ " -> Lg_rt.DVariant (\"" ^ c ^ "\", ["
+    ^ String.concat "; " (List.mapi box_f ftys) ^ "])"
+  in
+  "(match " ^ es ^ " with " ^ String.concat " " (List.map arm ctors) ^ ")"
 
 (* a statically-typed map re-built as a (dyn,dyn) map — the payload of
    Lg_rt.DMap; element-wise the flat analogue of nest_map_of *)
@@ -598,7 +648,11 @@ and as_dyn_list e =
   match repr e.ety with
   | TList el | TVec el | TSeq el | TSet el | TOption el ->
     if is_any el then as_list e
-    else "(List.map (fun x -> Lg_rt." ^ dyn_ctor el ^ " x) " ^ as_list e ^ ")"
+    else
+      (match repr el with
+       | TCon (n, _) when Hashtbl.mem Infer.all_vtypes n ->
+         "(List.map (fun x -> " ^ variant_box el "x" ^ ") " ^ as_list e ^ ")"
+       | _ -> "(List.map (fun x -> Lg_rt." ^ dyn_ctor el ^ " x) " ^ as_list e ^ ")")
   | _ -> as_list e
 
 (* element conversion across the any boundary: a concrete value is boxed

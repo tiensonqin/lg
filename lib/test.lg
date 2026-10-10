@@ -1,4 +1,4 @@
-;; lg test library — clojure.test-style framework.
+;; lg test library - clojure.test-style framework.
 ;; Usage:
 ;;   (ns my-test (:require [test :as t]))
 ;;   (t/deftest addition (t/is (= 4 (+ 2 2))))
@@ -12,23 +12,23 @@
 
 (ns test)
 
-(def test-order ^(atom (vec symbol)) (atom [])) ;; definition order
-(def tests ^(atom (map symbol (fn [] unit))) (atom {}))
-(def checks ^(atom int) (atom 0))
-(def failures ^(atom int) (atom 0))
-(def current ^(atom symbol) (atom 'none))
-(def contexts ^(atom (vec string)) (atom []))   ;; `testing` labels
+(def test-order "Test names in definition order (used by macro expansions)." ^(atom (vec symbol)) (atom []))
+(def tests "Registry of deftest bodies, keyed by name." ^(atom (map symbol (fn [] unit))) (atom {}))
+(def checks "Count of is-checks run so far." ^(atom int) (atom 0))
+(def failures "Count of failed checks." ^(atom int) (atom 0))
+(def current "Name of the test currently running." ^(atom symbol) (atom 'none))
+(def contexts "Active testing-label stack." ^(atom (vec string)) (atom []))
 
-(defn pass []
+(defn pass "Record a passing check (called by the is expansion)." []
   (do (swap! checks inc)
       ()))
 
-(defn ctx-str []
+(defn ctx-str "Render the testing-label stack for failure messages." []
   (if (empty? (deref contexts))
       ""
       (str " " (deref contexts))))
 
-(defn fail [form]
+(defn fail "Record a failed check and print FAIL <name>: <form>." [form]
   (do (swap! failures inc)
       (println (str "FAIL " (deref current) (ctx-str) ": " form))))
 
@@ -60,7 +60,7 @@
                        (mk (drop n xs)))))]
     (cons 'do (mk args))))
 
-(defn run-tests []
+(defn run-tests "Run every registered deftest in definition order. Returns the failure count - feed to exit." []
   (let [order (deref test-order)
         ts (deref tests)]
     (do

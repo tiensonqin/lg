@@ -1,0 +1,19 @@
+;; test.lgi - public test-framework API plus the helpers macro expansions call
+(macro deftest (fn [symbol] unit) :escapes [true]
+  "(t/deftest name body...) registers a zero-arg test under a quoted name, in definition order.")
+(macro is (fn [bool] unit) :escapes [true]
+  "(t/is form) checks a boolean form; reports FAIL <name>: <form> on failure.")
+(macro testing (fn [string] unit) :escapes [true]
+  "(t/testing msg body...) adds a context label to failures inside the body.")
+(macro are (fn [vec] unit) :escapes [true]
+  "(t/are [x y] expr arg...) expands rows into t/is checks: (are [x y] (= x y) 1 1 2 2).")
+(def run-tests (fn [] int) :escapes [true])
+(def test-order (atom (vec symbol)) :escapes [true])
+(def tests (atom (map symbol (fn [] unit))) :escapes [true])
+(def checks (atom int) :escapes [true])
+(def failures (atom int) :escapes [true])
+(def current (atom symbol) :escapes [true])
+(def contexts (atom (vec string)) :escapes [true])
+(def pass (fn [] unit) :escapes [true])
+(def ctx-str (fn [] string) :escapes [true])
+(def fail (fn [a] unit) :escapes [true])

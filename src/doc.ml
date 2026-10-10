@@ -58,6 +58,99 @@ let linkify ~mods s =
   scan 0;
   Buffer.contents buf
 
+
+(* minimal markdown -> html: #..#### headings, ``` fences, - bullet
+   lists, blank-line paragraphs, `code`, **bold**, [text](url) *)
+let md_inline s =
+  let b = Buffer.create (String.length s + 32) in
+  let n = String.length s in
+  let rec scan i =
+    if i < n then begin
+      if s.[i] = '`' then begin
+        match String.index_from_opt s (i + 1) '`' with
+        | Some j ->
+          Buffer.add_string b "<code>";
+          Buffer.add_string b (esc (String.sub s (i + 1) (j - i - 1)));
+          Buffer.add_string b "</code>";
+          scan (j + 1)
+        | None -> Buffer.add_char b '`'; scan (i + 1)
+      end
+      else if i + 1 < n && s.[i] = '*' && s.[i + 1] = '*' then begin
+        match
+          (let rec find j =
+             if j + 1 >= n then None
+             else if s.[j] = '*' && s.[j + 1] = '*' then Some j
+             else find (j + 1)
+           in
+           find (i + 2))
+        with
+        | Some j ->
+          Buffer.add_string b "<b>";
+          Buffer.add_string b (esc (String.sub s (i + 2) (j - i - 2)));
+          Buffer.add_string b "</b>";
+          scan (j + 2)
+        | None -> Buffer.add_string b "**"; scan (i + 2)
+      end
+      else if s.[i] = '[' then begin
+        match String.index_from_opt s (i + 1) ']' with
+        | Some j when j + 1 < n && s.[j + 1] = '(' ->
+          (match String.index_from_opt s (j + 2) ')' with
+           | Some k ->
+             let label = String.sub s (i + 1) (j - i - 1) in
+             let url = String.sub s (j + 2) (k - j - 2) in
+             Buffer.add_string b (Printf.sprintf "<a href=\"%s\">%s</a>" (esc url) (esc label));
+             scan (k + 1)
+           | None -> Buffer.add_string b (esc (String.sub s i (j + 1 - i))); scan (j + 1))
+        | _ -> Buffer.add_char b '['; scan (i + 1)
+      end
+      else begin
+        Buffer.add_string b (esc (String.make 1 s.[i]));
+        scan (i + 1)
+      end
+    end
+  in
+  scan 0;
+  Buffer.contents b
+
+(* returns (title, html body) — title from the first '# ' line or the slug *)
+let md_render ~slug src =
+  let title = ref (String.capitalize_ascii slug) in
+  let b = Buffer.create (String.length src + 256) in
+  let lines = String.split_on_char '\n' src in
+  let in_code = ref false in
+  let in_list = ref false in
+  let close_list () = if !in_list then (Buffer.add_string b "</ul>"; in_list := false) in
+  List.iter
+    (fun ln ->
+      if String.starts_with ~prefix:"```" ln then begin
+        close_list ();
+        if !in_code then Buffer.add_string b "</code></pre>" else Buffer.add_string b "<pre><code>";
+        in_code := not !in_code
+      end
+      else if !in_code then Buffer.add_string b (esc ln ^ "\n")
+      else
+        let t = String.trim ln in
+        if t = "" then close_list ()
+        else if String.starts_with ~prefix:"- " t then begin
+          if not !in_list then (Buffer.add_string b "<ul>"; in_list := true);
+          Buffer.add_string b ("<li>" ^ md_inline (String.sub t 2 (String.length t - 2)) ^ "</li>")
+        end
+        else begin
+          close_list ();
+          let rec hashes i = if i < String.length t && t.[i] = '#' then hashes (i + 1) else i in
+          let h = hashes 0 in
+          if h > 0 && h <= 4 && String.length t > h + 1 && t.[h] = ' ' then begin
+            let txt = String.sub t (h + 1) (String.length t - h - 1) in
+            if h = 1 && !title = String.capitalize_ascii slug then title := txt;
+            Buffer.add_string b (Printf.sprintf "<h%d>%s</h%d>" h (md_inline txt) h)
+          end
+          else Buffer.add_string b ("<p>" ^ md_inline t ^ "</p>")
+        end)
+    lines;
+  close_list ();
+  if !in_code then Buffer.add_string b "</code></pre>";
+  (!title, Buffer.contents b)
+
 type dentry = {
   dname : string;
   dkind : string;            (* def | defvariant | extern-type | ffi *)
@@ -65,7 +158,45 @@ type dentry = {
   ddoc : string option;
 }
 
-let sig_of (sch : Typ.scheme) = "`" ^ Typ.string_of_lg_ty sch.Typ.sty ^ "`"
+(* normalize scheme tyvars 'aNNN -> 'a, 'b, ... in print order *)
+let norm_tvars s =
+  let tbl = Hashtbl.create 8 in
+  let next = ref 0 in
+  let b = Buffer.create (String.length s) in
+  let n = String.length s in
+  let is_id c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '_' || c = '?' || c = '-' in
+  let rec scan i =
+    if i < n then begin
+      if s.[i] = '\'' && i + 1 < n && is_id s.[i + 1] then begin
+        let j = ref (i + 1) in
+        while !j < n && is_id s.[!j] do incr j done;
+        let tok = String.sub s i (!j - i) in
+        (* only rewrite tyvar-looking tokens: 'xNNN with trailing digits *)
+        let is_tv =
+          let k = String.length tok in
+          k > 2 && tok.[k - 1] >= '0' && tok.[k - 1] <= '9'
+        in
+        if is_tv then begin
+          let nm =
+            match Hashtbl.find_opt tbl tok with
+            | Some v -> v
+            | None ->
+              let v = "'" ^ String.make 1 (Char.chr (Char.code 'a' + !next)) in
+              incr next; Hashtbl.replace tbl tok v; v
+          in
+          Buffer.add_string b nm
+        end else Buffer.add_string b tok;
+        scan !j
+      end else begin
+        Buffer.add_char b s.[i];
+        scan (i + 1)
+      end
+    end
+  in
+  scan 0;
+  Buffer.contents b
+
+let sig_of (sch : Typ.scheme) = norm_tvars (Typ.string_of_lg_ty sch.Typ.sty)
 
 (* tops indexed by name for docstring lookup *)
 let docs_of (m : Ast.modl) =
@@ -77,6 +208,8 @@ let docs_of (m : Ast.modl) =
       | _ -> ())
     m.Ast.tops;
   tbl
+
+let doc_ty t = norm_tvars (Typ.string_of_lg_ty t)
 
 let entries_of_tops (m : Ast.modl) : dentry list =
   List.filter_map
@@ -90,7 +223,7 @@ let entries_of_tops (m : Ast.modl) : dentry list =
           | [] -> Printf.sprintf "%s" cn
           | _ ->
             Printf.sprintf "(%s %s)" cn
-              (String.concat " " (List.map (fun (fnm, ft) -> "[" ^ fnm ^ " " ^ Typ.string_of_lg_ty ft ^ "]") flds))
+              (String.concat " " (List.map (fun (fnm, ft) -> "[" ^ fnm ^ " " ^ doc_ty ft ^ "]") flds))
         in
         Some { dname = n; dkind = "defvariant";
                dsig = "(defvariant (" ^ n ^ prm ^ ")\n  " ^ String.concat "\n  " (List.map ctor cs) ^ ")";
@@ -114,8 +247,11 @@ let entries_of_mod (m : Ast.modl) : dentry list =
     let find_doc n = match Hashtbl.find_opt docs n with Some d -> d | None -> None in
     List.filter_map
       (function
-        | Compiler.LDef (n, sch, _, _) ->
-          Some { dname = n; dkind = "def"; dsig = sig_of sch; ddoc = find_doc n }
+        | Compiler.LDef (n, sch, _, _, ldoc) ->
+          (* .lgi docstring wins (it documents macros, which have no .lg topdef);
+             otherwise fall back to the def's own docstring *)
+          let ddoc = match ldoc with Some _ -> ldoc | None -> find_doc n in
+          Some { dname = n; dkind = "def"; dsig = sig_of sch; ddoc }
         | Compiler.LExtern n ->
           Some { dname = n; dkind = "extern-type"; dsig = "(extern-type " ^ n ^ ")"; ddoc = find_doc n }
         | Compiler.LVariant (n, ps, cs) ->
@@ -124,11 +260,14 @@ let entries_of_mod (m : Ast.modl) : dentry list =
             match flds with
             | [] -> cn
             | _ -> Printf.sprintf "(%s %s)" cn
-                     (String.concat " " (List.map (fun (fnm, ft) -> "[" ^ fnm ^ " " ^ Typ.string_of_lg_ty ft ^ "]") flds))
+                     (String.concat " " (List.map (fun (fnm, ft) -> "[" ^ fnm ^ " " ^ doc_ty ft ^ "]") flds))
           in
           Some { dname = n; dkind = "defvariant";
                  dsig = "(defvariant (" ^ n ^ prm ^ ")\n  " ^ String.concat "\n  " (List.map ctor cs) ^ ")";
                  ddoc = find_doc n }
+        | Compiler.LMacro (n, sch, ldoc) ->
+          Some { dname = n; dkind = "macro"; dsig = sig_of sch;
+                 ddoc = (match ldoc with Some _ -> ldoc | None -> find_doc n) }
         | Compiler.LPrivate _ -> None)
       (Compiler.parse_lgi lgi)
   end else entries_of_tops m
@@ -157,8 +296,21 @@ dd pre { background:#f8f8f9; border:1px solid var(--line); border-radius:4px;
 dt:target { background:#fffbe8; }
 </style>|}
 
-let sidebar mods cur =
+let sort_mods mods =
+  List.sort (fun (a : Ast.modl) (b : Ast.modl) -> compare a.Ast.mname b.Ast.mname) mods
+
+let sidebar ~tutorials mods cur =
+  let mods = sort_mods mods in
   let b = Buffer.create 256 in
+  if tutorials <> [] then begin
+    Buffer.add_string b "<nav><h2>Tutorials</h2><ul>";
+    List.iter
+      (fun (slug, ttitle, _) ->
+        let c = if slug = cur then " class=\"cur\"" else "" in
+        Buffer.add_string b (Printf.sprintf "<li%s><a href=\"%s.html\">%s</a></li>" c (esc slug) (esc ttitle)))
+      tutorials;
+    Buffer.add_string b "</ul>"
+  end;
   Buffer.add_string b "<nav><h2>Modules</h2><ul>";
   List.iter
     (fun (m : Ast.modl) ->
@@ -169,15 +321,22 @@ let sidebar mods cur =
   Buffer.add_string b "</ul></nav>";
   Buffer.contents b
 
-let page ~title ~mods (m : Ast.modl) =
+(* strip the cwd prefix so headers show repo-relative paths *)
+let rel_path p =
+  let cwd = Sys.getcwd () ^ "/" in
+  if String.starts_with ~prefix:cwd p then
+    String.sub p (String.length cwd) (String.length p - String.length cwd)
+  else p
+
+let page ~title ~tutorials ~mods (m : Ast.modl) =
   let b = Buffer.create 2048 in
   Buffer.add_string b "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   Buffer.add_string b (Printf.sprintf "<title>%s — %s</title>" (esc m.Ast.mname) (esc title));
   Buffer.add_string b css; Buffer.add_string b "</head><body>";
-  Buffer.add_string b (sidebar mods m.Ast.mname);
+  Buffer.add_string b (sidebar ~tutorials mods m.Ast.mname);
   Buffer.add_string b "<main>";
   Buffer.add_string b (Printf.sprintf "<h1>%s</h1>" (esc m.mname));
-  Buffer.add_string b (Printf.sprintf "<div class=\"sub\">module <code>%s</code> — %s</div>" (esc m.mpath) (esc title));
+  Buffer.add_string b (Printf.sprintf "<div class=\"sub\">module <code>%s</code> — %s</div>" (esc (rel_path m.mpath)) (esc title));
   (match m.Ast.requires with
    | [] -> ()
    | rs ->
@@ -203,14 +362,24 @@ let page ~title ~mods (m : Ast.modl) =
   Buffer.add_string b "</dl></main></body></html>";
   Buffer.contents b
 
-let index ~title ~mods =
+let index ~title ~tutorials ~mods =
+  let mods = sort_mods mods in
   let b = Buffer.create 1024 in
   Buffer.add_string b "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
   Buffer.add_string b (Printf.sprintf "<title>%s</title>" (esc title));
   Buffer.add_string b css; Buffer.add_string b "</head><body>";
-  Buffer.add_string b (sidebar mods "");
+  Buffer.add_string b (sidebar ~tutorials mods "");
   Buffer.add_string b "<main>";
   Buffer.add_string b (Printf.sprintf "<h1>%s</h1><div class=\"sub\">API documentation</div>" (esc title));
+  if tutorials <> [] then begin
+    Buffer.add_string b "<h2>Tutorials</h2><dl class=\"entries\">";
+    List.iter
+      (fun (slug, ttitle, _) ->
+        Buffer.add_string b
+          (Printf.sprintf "<dt><a href=\"%s.html\"><code>%s</code></a></dt>" (esc slug) (esc ttitle)))
+      tutorials;
+    Buffer.add_string b "</dl><h2>Modules</h2>"
+  end;
   Buffer.add_string b "<dl class=\"entries\">";
   List.iter
     (fun (m : Ast.modl) ->
@@ -228,11 +397,25 @@ let rec mkdir_p path =
     Unix.mkdir path 0o755
   end
 
-let generate ~title ~out mods =
+let tut_slug (slug, _, _) = slug
+
+let tut_page ~title ~tutorials (slug, ttitle, body) =
+  let b = Buffer.create 2048 in
+  Buffer.add_string b "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
+  Buffer.add_string b (Printf.sprintf "<title>%s — %s</title>" (esc ttitle) (esc title));
+  Buffer.add_string b css; Buffer.add_string b "</head><body>";
+  Buffer.add_string b (sidebar ~tutorials [] slug);
+  Buffer.add_string b "<main>";
+  Buffer.add_string b body;
+  Buffer.add_string b "</main></body></html>";
+  Buffer.contents b
+
+let generate ~title ~out ~tutorials mods =
   mkdir_p out;
   let wr file s =
     let oc = open_out (Filename.concat out file) in
     output_string oc s; close_out oc
   in
-  wr "index.html" (index ~title ~mods);
-  List.iter (fun (m : Ast.modl) -> wr (m.Ast.mname ^ ".html") (page ~title ~mods m)) mods
+  wr "index.html" (index ~title ~tutorials ~mods);
+  List.iter (fun t -> wr (tut_slug t ^ ".html") (tut_page ~title ~tutorials t)) tutorials;
+  List.iter (fun (m : Ast.modl) -> wr (m.Ast.mname ^ ".html") (page ~title ~tutorials ~mods m)) mods

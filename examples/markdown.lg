@@ -1,0 +1,97 @@
+;; markdown-lite: .md -> .html renderer.
+;; Covers headings (#..######), - / * bullet lists, ``` code fences,
+;; and inline **bold** *em* `code` [text](url) — a real program
+;; exercising reader/regex/string/match/variant/io/implicit paths.
+(ns markdown)
+
+(defvariant block
+  (heading [level int] [text string])
+  (para [text string])
+  (code-block [text string])
+  (list-block [items (list string)]))
+
+;; ---------- line classification ----------
+
+(defn heading-level [line]
+  (let [m (re-matches "^#{1,6}" line)]
+    (match m
+      (Some hashes) (count hashes)
+      None 0)))
+
+(defn bullet? [line]
+  (or (starts-with? line "- ") (starts-with? line "* ")))
+
+(defn fence? [line]
+  (starts-with? line "```"))
+
+;; ---------- block grouping ----------
+
+;; walk the lines once; `acc` is a reversed list of blocks, `buf` the
+;; reversed lines of the open paragraph/list/code block.
+(defn flush [acc kind buf]
+  (match kind
+    "para" (conj acc (para (join " " (reverse buf))))
+    "list" (conj acc (list-block (reverse buf)))
+    "code" (conj acc (code-block (join "\n" (reverse buf))))
+    _ acc))
+
+(defn group [lines]
+  (let [recur (fn self [ls acc kind buf]
+                (if (empty? ls)
+                  (reverse (flush acc kind buf))
+                  (let [line (nth ls 0 "")
+                        more (rest ls)]
+                    (if (fence? line)
+                      (if (= kind "code")
+                        (self more (flush acc kind buf) "none" [])
+                        (self more (flush acc kind buf) "code" []))
+                      (if (= kind "code")
+                        (self more acc "code" (conj buf line))
+                        (let [lvl (heading-level line)]
+                          (cond
+                            (blank? line) (self more (flush acc kind buf) "none" [])
+                            (> lvl 0) (self more (conj (flush acc kind buf)
+                                                     (heading lvl (trim (subs line lvl)))) "none" [])
+                            (bullet? line) (self more acc "list" (conj buf (trim (subs line 2))))
+                            (= kind "para") (self more acc "para" (conj buf line))
+                            :else (self more (flush acc kind buf) "para" [line]))))))))]
+    (recur lines [] "none" [])))
+
+;; ---------- inline rendering ----------
+
+(defn escape-html [s]
+  (re-replace ">" "&gt;"
+    (re-replace "<" "&lt;"
+      (re-replace "&" "&amp;" s))))
+
+;; order matters: bold before em so `**` is consumed first
+(defn inline [s]
+  (re-replace "\\[([^]]+)\\]\\(([^)]+)\\)" "<a href=\"\\2\">\\1</a>"
+    (re-replace "`([^`]+)`" "<code>\\1</code>"
+      (re-replace "\\*\\*([^*]+)\\*\\*" "<strong>\\1</strong>"
+        (re-replace "\\*([^*]+)\\*" "<em>\\1</em>"
+          (escape-html s))))))
+
+;; ---------- block rendering ----------
+
+(defn render [b]
+  (match b
+    (heading l t) (str "<h" (str l) ">" (inline t) "</h" (str l) ">")
+    (para t) (str "<p>" (inline t) "</p>")
+    (code-block t) (str "<pre><code>" (escape-html t) "</code></pre>")
+    (list-block items)
+      (str "<ul>"
+           (join "" (map (fn [i] (str "<li>" (inline i) "</li>")) items))
+           "</ul>")))
+
+;; ---------- driver ----------
+
+(defn render-md [src]
+  (str "<!DOCTYPE html>\n<html><body>\n"
+       (join "\n" (map render (group (split "\n" src))))
+       "\n</body></html>"))
+
+(let [path (match (first (argv)) (Some p) p None "examples/markdown.md")]
+  (spit (str (re-replace "\\.md$" "" path) ".html")
+        (render-md (slurp path)))
+  (println (str "markdown: rendered " path)))

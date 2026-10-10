@@ -532,7 +532,15 @@ site (default `docs/api/`): index.html + one page per module —
 signatures, defvariant constructors with field types, docstrings
 (`(defn f "doc" [x] ..)` / `(def x "doc" v)` / `(defvariant t "doc" ..)`
 are captured by the reader), `ns/name` cross-links, and a sidebar
-module tree. An `.lgi` gates which entries render. `--format=md`
+module tree. An `.lgi` gates which entries render; `.lgi` entries
+also carry docstrings — `(def n sig "doc")` on any entry and
+`(macro n sig "doc")` for `defmacro` exports (macros are doc-only
+entries, never value exports, and `lg lgi --check` skips them while
+alpha-normalizing tyvars in its signature-drift compare). Rendering
+alpha-normalizes scheme tyvars ('a713 -> 'a). `--tutorials <dir>`
+renders `<dir>/*.md` files as tutorial pages (sidebar section +
+index listing, ordered by filename) via a dependency-free
+md-to-html renderer. `--format=md`
 keeps the old stdout markdown. `lg version` reports
 the embedded version. `tools/release.sh` + `.github/workflows/release.yml`
 build os/arch tarballs on `v*` tags.

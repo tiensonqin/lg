@@ -285,15 +285,18 @@ fi
 # lg doc: odoc-style HTML site — index + per-module pages with
 # signature/variant/anchor markup and cross-module links; an .lgi
 # gates which entries render.
-if "$LG" doc lib/qc.lg test/docd.lg examples/util.lg -I lib -I examples -I test -o .test-bin/apidoc --title "lg test" >/dev/null 2>&1 \
+if "$LG" doc lib/qc.lg lib/test.lg test/docd.lg examples/util.lg -I lib -I examples -I test -o .test-bin/apidoc --title "lg test" --tutorials docs/tutorials >/dev/null 2>&1 \
    && [ -f .test-bin/apidoc/index.html ] \
    && [ -f .test-bin/apidoc/qc.html ] \
    && [ -f .test-bin/apidoc/docd.html ] \
+   && [ -f .test-bin/apidoc/01-getting-started.html ] \
    && grep -q 'id="gen-int"' .test-bin/apidoc/qc.html \
    && grep -q '(fn \[int int\]' .test-bin/apidoc/qc.html \
    && grep -q 'href="qc.html#gen-int"' .test-bin/apidoc/docd.html \
    && grep -q 'LCG seed' .test-bin/apidoc/qc.html \
    && grep -q 'defvariant' .test-bin/apidoc/docd.html \
+   && grep -q '<h2>Tutorials</h2>' .test-bin/apidoc/index.html \
+   && grep -q '>macro<' .test-bin/apidoc/test.html \
    && ! grep -q 'id="internal-seed"' .test-bin/apidoc/util.html; then
   echo "ok doc"
 else

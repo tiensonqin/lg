@@ -1,0 +1,35 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Modules and interfaces — lg stdlib</title><style>
+:root { --fg:#222; --mut:#666; --bg:#fff; --side:#f7f7f7; --line:#ddd; --acc:#05c; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.55 -apple-system,Helvetica,Arial,sans-serif; color:var(--fg); }
+nav { position:fixed; top:0; left:0; bottom:0; width:230px; overflow:auto;
+      background:var(--side); border-right:1px solid var(--line); padding:14px 16px; }
+nav h2 { font-size:13px; text-transform:uppercase; color:var(--mut); margin:4px 0 8px; }
+nav ul { list-style:none; margin:0; padding:0; }
+nav a { color:var(--acc); text-decoration:none; }
+nav li { margin:3px 0; }
+nav li.cur a { font-weight:600; color:var(--fg); }
+main { margin-left:250px; max-width:860px; padding:24px 36px 60px; }
+h1 { font-size:1.6em; margin:0 0 4px; }
+.sub { color:var(--mut); font-size:.9em; margin-bottom:22px; }
+dl.entries { margin:0; }
+dt { border-top:1px solid var(--line); padding:10px 4px 4px; }
+dt code { background:#f2f2f4; padding:2px 6px; border-radius:4px; font-size:.92em; }
+dt .kind { color:var(--mut); font-size:.8em; margin-left:8px; }
+dd { margin:2px 4px 12px; padding-left:14px; }
+dd pre { background:#f8f8f9; border:1px solid var(--line); border-radius:4px;
+         padding:8px 10px; overflow:auto; font-size:.9em; }
+dt:target { background:#fffbe8; }
+</style></head><body><nav><h2>Tutorials</h2><ul><li><a href="01-getting-started.html">Getting started</a></li><li><a href="02-collections-and-errors.html">Collections and errors</a></li><li class="cur"><a href="03-modules-and-lgi.html">Modules and interfaces</a></li></ul><nav><h2>Modules</h2><ul></ul></nav><main><h1>Modules and interfaces</h1><p>Every <code>.lg</code> file is a module named by its <code>(ns name)</code> form. Modules</p><p>import each other with <code>:require</code>; an optional <code>.lgi</code> file next to the</p><p>source is its public interface.</p><h2>requires</h2><pre><code>(ns app
+  (:require [qc :as q]
+            [ocaml.List :as olist]))
+</code></pre><p><code>(:require [qc :as q])</code> pulls the <code>qc</code> module in and binds the <code>q</code></p><p>alias; references are <code>q/gen-int</code>. Bare <code>(:require [qc])</code> binds the</p><p>alias <code>qc</code>. <code>ocaml.*</code> requires bind OCaml library functions — their</p><p>types are read from the installed <code>.cmi</code> signatures.</p><h2>.lgi — the export gate</h2><p>When <code>foo.lgi</code> sits next to <code>foo.lg</code>, only the entries it lists are</p><p>visible to importers; everything else is private. The file is also the</p><p>documentation source — it carries signatures and docstrings:</p><pre><code>;; foo.lgi
+(def sum (fn [(list int)] int) :escapes [true]
+  &quot;Sum a list of ints.&quot;)
+(defvariant (tree a)
+  (leaf [v a])
+  (node [l (tree a)] [r (tree a)]))
+(macro measure (fn [any] unit)
+  &quot;(measure x) times an expression.&quot;)
+(private helper)
+</code></pre><ul><li><code>(def n sig)</code> exports a value or function with signature <code>sig</code></li><li><code>(defvariant ...)</code> exports a variant and its constructors</li><li><code>(macro n sig &quot;doc&quot;)</code> documents a <code>defmacro</code> — macros are not values</li><li><code>(private n)</code> explicitly hides a def (unlisted defs are already</li></ul><p>private; use it for the record)</p><ul><li><code>(extern-type n)</code> declares an opaque handle type</li></ul><p><code>lg lgi file.lg</code> regenerates a <code>.lgi</code> from the actual exports;</p><p><code>lg lgi --check</code> fails when the interface has drifted from the code —</p><p>run it in CI. <code>.lgi</code> docstrings (or a docstring on the <code>def</code>/<code>defn</code>/</p><p><code>defvariant</code> itself) feed <code>lg doc</code>.</p><h2>lg doc</h2><p><code>lg doc lib/*.lg --tutorials docs/tutorials -o docs/api</code> builds the</p><p>static API site: one page per module, cross-linked <code>ns/name</code> references</p><p>in docstrings, and this tutorial section.</p></main></body></html>

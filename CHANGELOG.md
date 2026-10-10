@@ -149,7 +149,19 @@ compiling to OCaml via `Clj_core` data structures.
   `"doc"` form after the name was previously parsed and dropped).
 - `--format=md` keeps the previous stdout markdown; `--format=html`
   is the default. `lg doc` accepts multiple entry files and merges
-  their require closures.
+  their require closures. `--tutorials <dir>` renders `<dir>/*.md`
+  files as tutorial pages (a sidebar section above the module tree
+  plus index links, ordered by filename) with a small dependency-free
+  markdown renderer.
+- `.lgi` entries carry docstrings: `(def n sig "doc")` on any entry,
+  `(macro n sig "doc")` documents a `defmacro` (doc-only, never a
+  value export; `lg lgi --check` ignores macro entries and
+  alpha-normalizes tyvars when comparing signatures). Rendered
+  signatures alpha-normalize tyvars ('a713 -> 'a).
+- Boxing a user `defvariant` value into `any`/dyn now emits a real
+  `Lg_rt.DVariant (name, fields)` via a per-ctor match — previously
+  any non-builtin TCon silently fell back to `DStr` and produced
+  ill-typed OCaml (compilable-by-construction violation).
 
 ## LSP completion + diagnostics (2026-10-10)
 

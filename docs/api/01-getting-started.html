@@ -1,0 +1,30 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Getting started — lg stdlib</title><style>
+:root { --fg:#222; --mut:#666; --bg:#fff; --side:#f7f7f7; --line:#ddd; --acc:#05c; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.55 -apple-system,Helvetica,Arial,sans-serif; color:var(--fg); }
+nav { position:fixed; top:0; left:0; bottom:0; width:230px; overflow:auto;
+      background:var(--side); border-right:1px solid var(--line); padding:14px 16px; }
+nav h2 { font-size:13px; text-transform:uppercase; color:var(--mut); margin:4px 0 8px; }
+nav ul { list-style:none; margin:0; padding:0; }
+nav a { color:var(--acc); text-decoration:none; }
+nav li { margin:3px 0; }
+nav li.cur a { font-weight:600; color:var(--fg); }
+main { margin-left:250px; max-width:860px; padding:24px 36px 60px; }
+h1 { font-size:1.6em; margin:0 0 4px; }
+.sub { color:var(--mut); font-size:.9em; margin-bottom:22px; }
+dl.entries { margin:0; }
+dt { border-top:1px solid var(--line); padding:10px 4px 4px; }
+dt code { background:#f2f2f4; padding:2px 6px; border-radius:4px; font-size:.92em; }
+dt .kind { color:var(--mut); font-size:.8em; margin-left:8px; }
+dd { margin:2px 4px 12px; padding-left:14px; }
+dd pre { background:#f8f8f9; border:1px solid var(--line); border-radius:4px;
+         padding:8px 10px; overflow:auto; font-size:.9em; }
+dt:target { background:#fffbe8; }
+</style></head><body><nav><h2>Tutorials</h2><ul><li class="cur"><a href="01-getting-started.html">Getting started</a></li><li><a href="02-collections-and-errors.html">Collections and errors</a></li><li><a href="03-modules-and-lgi.html">Modules and interfaces</a></li></ul><nav><h2>Modules</h2><ul></ul></nav><main><h1>Getting started</h1><p>lg is a small Lisp that compiles to OCaml. Programs are checked by a</p><p>Hindley-Milner inferencer and emitted as plain OCaml source, so a build</p><p>needs only ocamlfind plus the clj-core/rrbvec packages.</p><h2>Install and first program</h2><p>Build the compiler from source:</p><pre><code>dune build bin/lg.exe
+</code></pre><p>Write <code>hello.lg</code>:</p><pre><code>(ns hello)
+
+(println &quot;hello, lg&quot;)
+</code></pre><p>Check and run it:</p><pre><code>lg check hello.lg
+lg build hello.lg -o hello
+./hello
+</code></pre><p><code>lg repl</code> starts a session that compiles each line to bytecode (fast —</p><p>incremental, ~85ms per line). <code>lg emit hello.lg</code> prints the generated</p><p>OCaml for inspection, and <code>lg build --byte</code> gives a quick dev binary.</p><h2>Language tour</h2><ul><li><b>Calls</b> are <code>(fn arg...)</code> lists: <code>(+ 1 2)</code>, <code>(println (str &quot;n=&quot; n))</code>.</li><li><b>Bindings</b>: <code>let</code> for locals, <code>def</code>/<code>defn</code> for module-level values</li></ul><p>and functions. <code>defn</code> takes an optional docstring:</p><p><code>(defn greet &quot;Say hi.&quot; [name] (println (str &quot;hi &quot; name)))</code>.</p><ul><li><b>Collections</b>: vectors <code>[1 2 3]</code>, lists <code>'(1 2)</code>, maps <code>{:a 1}</code>,</li></ul><p>sets <code>#{1 2}</code>. Sequence functions (<code>map</code>, <code>filter</code>, <code>reverse</code>, ...)</p><p>return lazy <code>(seq t)</code>; realize with <code>vec</code>/<code>doall</code> at boundaries.</p><ul><li><b>Control</b>: <code>if</code>, <code>cond</code>, <code>match</code> for destructuring; <code>do</code> sequences</li></ul><p>expressions. Loops are written as recursion or <code>mapv</code>/<code>reduce</code>.</p><ul><li><b>Variants</b>: <code>(defvariant shape (circle [r float]) square)</code> defines</li></ul><p>a sum type; <code>match</code> dispatches on constructors.</p><ul><li><b>Errors</b>: there is no <code>nil</code>. Absence is <code>(option t)</code> with</li></ul><p><code>Some</code>/<code>None</code>; exceptions are <code>(try ... (catch e ...))</code> with</p><p><code>throw</code>/<code>exn-message</code>.</p><ul><li><b>Macros</b>: <code>defmacro</code> is hygienic and multi-arity, just like</li></ul><p><code>(defmacro m ([x] ...) ([x y] ...))</code>.</p></main></body></html>

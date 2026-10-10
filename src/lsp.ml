@@ -212,7 +212,7 @@ let dep_entries (m : Ast.modl) : string list =
   if Sys.file_exists lgi then
     List.concat_map
       (function
-        | Compiler.LDef (n, _, _, _) -> [ n ]
+        | Compiler.LDef (n, _, _, _, _) -> [ n ]
         | Compiler.LVariant (n, _, cs) -> n :: List.map fst cs
         | _ -> [])
       (Compiler.parse_lgi lgi)

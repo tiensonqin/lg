@@ -1,0 +1,31 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Collections and errors — lg stdlib</title><style>
+:root { --fg:#222; --mut:#666; --bg:#fff; --side:#f7f7f7; --line:#ddd; --acc:#05c; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.55 -apple-system,Helvetica,Arial,sans-serif; color:var(--fg); }
+nav { position:fixed; top:0; left:0; bottom:0; width:230px; overflow:auto;
+      background:var(--side); border-right:1px solid var(--line); padding:14px 16px; }
+nav h2 { font-size:13px; text-transform:uppercase; color:var(--mut); margin:4px 0 8px; }
+nav ul { list-style:none; margin:0; padding:0; }
+nav a { color:var(--acc); text-decoration:none; }
+nav li { margin:3px 0; }
+nav li.cur a { font-weight:600; color:var(--fg); }
+main { margin-left:250px; max-width:860px; padding:24px 36px 60px; }
+h1 { font-size:1.6em; margin:0 0 4px; }
+.sub { color:var(--mut); font-size:.9em; margin-bottom:22px; }
+dl.entries { margin:0; }
+dt { border-top:1px solid var(--line); padding:10px 4px 4px; }
+dt code { background:#f2f2f4; padding:2px 6px; border-radius:4px; font-size:.92em; }
+dt .kind { color:var(--mut); font-size:.8em; margin-left:8px; }
+dd { margin:2px 4px 12px; padding-left:14px; }
+dd pre { background:#f8f8f9; border:1px solid var(--line); border-radius:4px;
+         padding:8px 10px; overflow:auto; font-size:.9em; }
+dt:target { background:#fffbe8; }
+</style></head><body><nav><h2>Tutorials</h2><ul><li><a href="01-getting-started.html">Getting started</a></li><li class="cur"><a href="02-collections-and-errors.html">Collections and errors</a></li><li><a href="03-modules-and-lgi.html">Modules and interfaces</a></li></ul><nav><h2>Modules</h2><ul></ul></nav><main><h1>Collections and errors</h1><p>How lg models data and failure — the two places it intentionally differs</p><p>from Clojure.</p><h2>Collections</h2><p>Four persistent collection types, backed by clj-core:</p><ul><li><code>[1 2 3]</code> — <code>(vec t)</code> persistent vector; <code>conj</code> appends</li><li><code>'(1 2)</code> — <code>(list t)</code> linked list; <code>cons</code>/<code>first</code>/<code>rest</code></li><li><code>{:a 1 :b 2}</code> — <code>(map k v)</code> persistent map; <code>assoc</code>, <code>get</code>, <code>dissoc</code></li><li><code>#{1 2}</code> — <code>(set t)</code> persistent set; <code>conj</code>, <code>disj</code>, <code>contains?</code></li></ul><p>Sequence operations are <b>lazy</b>: <code>map</code>, <code>filter</code>, <code>reverse</code>,</p><p><code>distinct</code>, <code>interpose</code>, <code>take</code>, <code>drop</code>, <code>concat</code>, <code>mapcat</code> all return</p><p><code>(seq t)</code>. Realize at a boundary with <code>vec</code>, <code>set</code>, <code>doall</code>, <code>dorun</code>,</p><p>or by consuming with <code>reduce</code>/<code>str</code>/<code>println</code>.</p><pre><code>(map (fn [x] (* x x)) [1 2 3])        ; a lazy seq
+(vec (map (fn [x] (* x x)) [1 2 3]))  ; [1 4 9]
+</code></pre><h2>No nil — option types</h2><p>lg has no <code>nil</code> value. <code>()</code> is the unit value (like OCaml <code>()</code>), and</p><p>absence is always <code>(option t)</code>:</p><ul><li><code>(get {:a 1} :b)</code> returns <code>None</code>, <code>(get {:a 1} :a)</code> returns <code>Some 1</code></li><li>Destructure with <code>match</code>, <code>if-let</code>, or <code>or</code>:</li></ul><pre><code>(match (get m k)
+  (Some v) (println v)
+  None (println &quot;missing&quot;))
+</code></pre><p>An <code>option</code> never silently becomes a number: <code>(+ 1 (get m k))</code> is a</p><p>compile-time type error (E101), not a runtime crash.</p><h2>Exceptions</h2><p>For OCaml interop and truly exceptional paths there is</p><p><code>try</code>/<code>catch</code>/<code>finally</code>/<code>throw</code>:</p><pre><code>(try (list/find (fn [x] (= x 9)) [1])
+     (catch e (println (exn-message e)))
+     (finally (cleanup)))
+</code></pre><p><code>e</code> is an opaque <code>exn</code> handle; <code>exn-message</code> gives its string form and</p><p><code>(throw e)</code> re-raises. OCaml exceptions from <code>:require [ocaml.*]</code></p><p>bindings (e.g. <code>Not_found</code>) are caught the same way. Prefer <code>option</code></p><p>for expected absence — exceptions are for the exceptional.</p></main></body></html>

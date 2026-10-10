@@ -25,6 +25,7 @@ let () =
   let jobs = ref 4 in
   let doc_format = ref "html" in
   let doc_title = ref "lg API" in
+  let doc_tut_dir = ref None in
   let files = ref [] in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
@@ -44,7 +45,9 @@ let () =
     ; ("--format", Arg.Symbol ([ "html"; "md" ], (fun s -> doc_format := s)),
        "<html|md> lg doc output format (default html -> <out>/index.html)")
     ; ("--title", Arg.String (fun s -> doc_title := s),
-       "<name> lg doc: project title for the generated site") ]
+       "<name> lg doc: project title for the generated site")
+    ; ("--tutorials", Arg.String (fun d -> doc_tut_dir := Some d),
+       "<dir> lg doc: render <dir>/*.md as tutorial pages (sidebar + index)") ]
   in
   Arg.parse speclist
     (fun a ->
@@ -161,7 +164,23 @@ let () =
          mods
      | _ ->
        let outdir = match !out with Some o -> o | None -> "docs/api" in
-       Lgc.Doc.generate ~title:!doc_title ~out:outdir mods;
+       let tutorials =
+         match !doc_tut_dir with
+         | None -> []
+         | Some dir ->
+           (if not (Sys.file_exists dir && Sys.is_directory dir) then
+             (Printf.eprintf "doc: --tutorials: %s is not a directory\n" dir; exit 2));
+           Sys.readdir dir |> Array.to_list
+           |> List.filter (fun f -> Filename.check_suffix f ".md")
+           |> List.sort compare
+           |> List.map
+             (fun f ->
+               let slug = Filename.remove_extension f in
+               let src = Lgc.Compiler.read_file_text (Filename.concat dir f) in
+               let ttitle, body = Lgc.Doc.md_render ~slug src in
+               (slug, ttitle, body))
+       in
+       Lgc.Doc.generate ~title:!doc_title ~out:outdir ~tutorials mods;
        Printf.printf "doc: %d module%s -> %s/index.html
 " (List.length mods)
          (if List.length mods = 1 then "" else "s") outdir);
@@ -210,6 +229,7 @@ let () =
                   let p = Lgc.Compiler.lgi_path m.mpath in
                   if Sys.file_exists p then begin
                     let hand = Lgc.Compiler.parse_lgi p in
+                    let hand = List.filter (function Lgc.Compiler.LMacro _ -> false | _ -> true) hand in
                     let gen = Lgc.Compiler.lgi_entries_of_module m in
                     let same_name e = Lgc.Compiler.lgi_entry_name e in
                     List.iter
@@ -221,8 +241,8 @@ let () =
                           Printf.printf "%s: stale entry — %s is no longer defined\n  - %s\n" p hn
                             (Lgc.Compiler.lgi_entry_form h)
                         | Some g ->
-                          let hf = Lgc.Compiler.lgi_entry_form h
-                          and gf = Lgc.Compiler.lgi_entry_form g in
+                          let hf = Lgc.Compiler.lgi_form_canon (Lgc.Compiler.lgi_entry_form ~doc:false h)
+                          and gf = Lgc.Compiler.lgi_form_canon (Lgc.Compiler.lgi_entry_form ~doc:false g) in
                           if hf <> gf then begin
                             incr bad;
                             Printf.printf "%s: signature drift — %s\n  - %s\n  + %s\n" p hn hf gf

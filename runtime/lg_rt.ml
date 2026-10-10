@@ -76,6 +76,7 @@ type dyn =
   | DVec of dyn Clj_core.Vec.t
   | DMap of (dyn, dyn) Clj_core.Map.t
   | DSet of dyn Clj_core.Set.t
+  | DVariant of string * dyn list   (* boxed user defvariant value *)
 
 let rec str_dyn = function
   | DInt i -> string_of_int i
@@ -92,6 +93,8 @@ let rec str_dyn = function
   | DVec v -> str_vec str_dyn v
   | DMap m -> str_map str_dyn str_dyn m
   | DSet s -> str_set str_dyn s
+  | DVariant (n, []) -> "#" ^ n
+  | DVariant (n, fs) -> "#" ^ n ^ " (" ^ str_list str_dyn fs ^ ")"
 
 let as_int = function DInt i -> i | _ -> invalid_arg "dyn: expected int"
 let as_float = function DFloat x -> x | DInt i -> float_of_int i | _ -> invalid_arg "dyn: expected float"
