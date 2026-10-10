@@ -9,6 +9,13 @@
   transparent manifest aliases in cmis (`Stdlib__String.t = string`)
   expand with their `type_params` instantiated — `ocamlinterop` and
   `eiodemo` build+run identically on both toolchains.
+- `ocaml.*` honest foreign types: curried arrow chains flatten into
+  multi-param functions so lg multi-arg fns feed OCaml HOFs
+  (`Hashtbl.fold`); `result`/`array`/`ref`/`bytes` import as opaque
+  handles instead of lying as option/list/atom/string; builtin-name
+  matching is exact-path (no `M.list` collision); imported handle
+  params keep their type variables so OCaml weak-var inference pins
+  them per use (`(def h (ht/create 8))` then concrete ops).
 - `ocaml.*` deep-cmi semantics extended: optional `?x` params unwrap
   to `~x` semantics on both toolchains (cmi `T option` stripped in
   `decompose`); relative dotted type paths resolve parent-scope-first;

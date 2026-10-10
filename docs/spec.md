@@ -391,6 +391,10 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
 - **Calls**: `lookup` returns `(params, labels, result, is_ctor)`;
   trailing `:kw v` pairs match `OLbl`/`OOpt` params by name —
   unknown/duplicate labels and missing `~lbl`s are E100/E102.
+  A curried arrow chain flattens into one multi-param `TFun`, so
+  `(fn [k v acc] ...)` feeds OCaml's `'a -> 'b -> 'acc -> 'acc`
+  higher-order params (`Hashtbl.fold` and friends); a 1-ary lg
+  function is still required where the callee takes one arg.
   Optional params `?x:T` are *omittable by-value* arguments —
   identical to `~x`: omitting uses the OCaml-side default, and a
   supplied `:x v` emits `~x:v` with `v` unwrapped (the cmi stores
@@ -414,7 +418,20 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
   unit rather than the textual alias, keeping
   `Eio__core__Switch.t`/`Eio__Std.Switch.t` spellings on one
   type. `exn` maps to the opaque `Stdlib.exn` handle (not
-  `string`). Constructor *arguments* whose forms lg cannot
+  `string`). The builtin table binds on the exact primitive path
+  (`list`/`Stdlib.list`): `list`→`TList` and `option`→`TOption`
+  are the only mapped containers — `result`, `array`, `ref`,
+  `bytes` import as opaque named handles (`Stdlib.result`, …),
+  never silently as option/list/atom/string, because emitted code
+  must stay type-correct (a `Result.map` cannot see an option).
+  Cross the boundary explicitly (`Option.to_result`,
+  `Result.to_option`, `Array.of_list`, `Bytes.to_string`).
+  Handle params are not boxed on import: `(def h (ht/create 8))`
+  stores the generic `('a,'b) Hashtbl.t` scheme, and OCaml
+  weak-var inference pins one instantiation per use — a def that
+  is never used concretely (or only used generically) fails at
+  emit with OCaml's non-generalizable-variable diagnostic.
+  Constructor *arguments* whose forms lg cannot
   express — polymorphic-variant rows, objects, univars,
   first-class packages, row fields — become fresh type vars
   inside the enclosing `Tconstr`, so eio's
