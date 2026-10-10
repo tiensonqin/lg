@@ -73,8 +73,11 @@ In `let`, `fn`, `defn` params and `match` vector/map patterns:
   `:or` default unwraps it — the source of `if-let`'s usefulness
 - `^T` annotation on a pattern unifies with the rhs type — enforced
 
-Open: `:or` defaults apply only to `:keys`/`:strs`/symbol-key entries, not
-to `{:kw pat}` form — spec.
+Resolved: `:or` keys by the bound symbol across every entry form —
+`{s :kw}`, `{s "s"}`, `{:kw s}`, `{"s" s}` (previously the two sym-key
+forms looked the default up by the key's name, so `{s :kw} :or {s d}`
+silently missed). A non-symbol sub-pattern (`{:kw [a b]}`) defaults by
+the key's own name (`:or {q [..]}`).
 
 ### 1.3 Modules: `ns` / `:require`
 

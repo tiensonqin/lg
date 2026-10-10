@@ -43,3 +43,8 @@
     {:keys [id]} (if-let [v id] v -1)
     _ -1))
 (println (str "dynid " (dynid dm)))
+
+;; :or defaults on {s :kw} and {:kw s} forms — keyed by the bound symbol
+(let [{s :q, t :r, :or {s 7 t 8}} {:q 1}] (println (str s "," t)))
+(let [{:q u :or {u 9}} {}] (println (str u)))
+(let [{:q [x y] :or {q [3 4]}} {}] (println (str x "," y)))

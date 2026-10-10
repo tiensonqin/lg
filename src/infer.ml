@@ -1565,10 +1565,16 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
                      (Array.to_list syms))
               | Atom (_, Keyword "as"), Atom (sl, Symbol sn) -> bind_pattern ctx sl (Atom (sl, Symbol sn)) (mk ml rhs.ety (ELocal tmp))
               | Atom (_, Keyword "or"), Map _ -> []
-              | Atom (_, Symbol _), Atom (_, Keyword kw) -> bind_pattern ctx ml kf (kw_get kw (default_for kw))
-              | Atom (_, Symbol _), Atom (_, Str sk) -> bind_pattern ctx ml kf (str_get sk (default_for sk))
-              | Atom (_, Keyword kw), _ -> bind_pattern ctx ml pf (kw_get kw (default_for kw))
-              | Atom (_, Str sk), _ -> bind_pattern ctx ml pf (str_get sk (default_for sk))
+              | Atom (_, Symbol sn), Atom (_, Keyword kw) -> bind_pattern ctx ml kf (kw_get kw (default_for sn))
+              | Atom (_, Symbol sn), Atom (_, Str sk) -> bind_pattern ctx ml kf (str_get sk (default_for sn))
+              (* {pat :kw} / {pat "s"}: :or keys by the bound symbol; a
+                 non-symbol sub-pattern falls back to the key name *)
+              | Atom (_, Keyword kw), _ ->
+                let d = (match pf with Atom (_, Symbol sn) -> default_for sn | _ -> default_for kw) in
+                bind_pattern ctx ml pf (kw_get kw d)
+              | Atom (_, Str sk), _ ->
+                let d = (match pf with Atom (_, Symbol sn) -> default_for sn | _ -> default_for sk) in
+                bind_pattern ctx ml pf (str_get sk d)
               | _ -> type_error l "unsupported map destructuring entry")
             kvs)
   | _ -> type_error l "unsupported destructuring pattern"
