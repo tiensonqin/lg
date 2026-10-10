@@ -150,3 +150,13 @@ compiling to OCaml via `Clj_core` data structures.
 - `--format=md` keeps the previous stdout markdown; `--format=html`
   is the default. `lg doc` accepts multiple entry files and merges
   their require closures.
+
+## LSP completion + diagnostics (2026-10-10)
+
+- `lg lsp` now pushes `textDocument/publishDiagnostics` on
+  didOpen/didChange: the file is inferred and E1xx/E201 errors publish
+  with code + range; clean files clear the list.
+- `textDocument/completion` serves builtins, the module's own
+  topdefs/variant ctors/extern-types/ffi names, and require-alias
+  members (`alias/name`, .lgi-gated). A file with errors degrades to
+  builtin-only items instead of null.

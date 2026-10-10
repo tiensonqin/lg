@@ -283,6 +283,8 @@ let builtin_table : (string, unit -> ty) Hashtbl.t = Hashtbl.create 131
 
 let reg n t = Hashtbl.replace builtin_table n t
 
+let builtin_names () = Hashtbl.fold (fun n _ acc -> n :: acc) builtin_table []
+
 let () =
   let v () = fresh_var () in
   let f args ret = fn_t args ret in

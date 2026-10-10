@@ -50,8 +50,9 @@ re-printed, and `.cljc` `#?`/`#?@` blocks keep every branch.
 across inputs; expressions print their value. `:quit` exits.
 
 `lg lsp` — stdio JSON-RPC server: `initialize`, `textDocument/didOpen`,
-`didChange`, `hover` (type at position), `definition` (jump to top-level
-def), `shutdown`, `exit`.
+`didChange` (publishes E1xx/E201 diagnostics), `hover` (type at
+position), `definition` (jump to top-level def), `completion`
+(builtins + module tops + require-alias members), `shutdown`, `exit`.
 
 ## Errors
 

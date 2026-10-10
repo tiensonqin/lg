@@ -515,7 +515,10 @@ and evaluates expressions by appending `(println <expr>)` and rebuilding
 JSON-RPC server with a hand-rolled field extractor (no JSON dep):
 hover walks the typed IR (`tops` + `effects`) for the nearest expr on
 the line and shows `string_of_ty`; definition maps the token at point to
-top-level `tdef` locations.
+top-level `tdef` locations; didOpen/didChange publish E1xx/E201
+diagnostics; completion offers builtins, module tops, variant ctors,
+and require-alias members (degrading to builtins on a file with
+errors).
 
 
 ## 16. Packages, init, doc, release (M7)

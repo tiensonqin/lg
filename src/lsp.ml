@@ -162,6 +162,106 @@ let definition id uri line char =
      | None -> respond id "null")
   | _ -> respond id "null"
 
+(* ---- completion + diagnostics ---- *)
+
+let compile_full _path text : (Ast.modl list, Syntax.loc * string * string) result =
+  try
+    let tmp = Filename.temp_file "lsp" ".lg" in
+    let oc = open_out tmp in output_string oc text; close_out oc;
+    (try Ok (Compiler.compile_path ~roots:[ Filename.dirname tmp; "lib" ] tmp)
+     with
+     | Err.E (l, code, msg, _) -> Error (l, code, msg)
+     | Syntax.Read_error (l, msg) -> Error (l, "E201", msg)
+     | Failure msg -> Error (Syntax.no_loc, "E100", msg)
+     | e -> Error (Syntax.no_loc, "E100", Printexc.to_string e))
+  with e ->
+    (match e with
+     | Err.E (l, code, msg, _) -> Error (l, code, msg)
+     | Syntax.Read_error (l, msg) -> Error (l, "E201", msg)
+     | _ -> Error (Syntax.no_loc, "E100", Printexc.to_string e))
+
+let main_of mods tmp =
+  List.find_opt (fun (m : Ast.modl) -> m.Ast.mpath = tmp) mods
+
+let notify uri code l msg =
+  let range =
+    Printf.sprintf
+      {|{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}|}
+      (max 0 (l.Syntax.line - 1)) (max 0 (l.Syntax.col - 1))
+      (max 0 (l.Syntax.line - 1)) (max 0 (l.Syntax.col - 1) + 1)
+  in
+  send (Printf.sprintf
+    {|{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"%s","diagnostics":[{"range":%s,"severity":1,"code":"%s","source":"lg","message":"%s"}]}}|}
+    (jesc uri) range code (jesc msg))
+
+let clear_diags uri =
+  send (Printf.sprintf
+    {|{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"%s","diagnostics":[]}}|}
+    (jesc uri))
+
+let publish_diagnostics uri path text =
+  match compile_full path text with
+  | Ok _ -> clear_diags uri
+  | Error (l, code, msg) -> notify uri code l msg
+
+(* completion items: builtins + this module's topdefs + variant ctors +
+   require-alias members (alias/name). Requires resolve through the
+   compiled dep closure; a dep's .lgi gates its members. *)
+let dep_entries (m : Ast.modl) : string list =
+  let lgi = Compiler.lgi_path m.Ast.mpath in
+  if Sys.file_exists lgi then
+    List.concat_map
+      (function
+        | Compiler.LDef (n, _, _, _) -> [ n ]
+        | Compiler.LVariant (n, _, cs) -> n :: List.map fst cs
+        | _ -> [])
+      (Compiler.parse_lgi lgi)
+  else
+    List.concat_map
+      (function
+        | Ast.TDef d -> [ d.Ast.tname ]
+        | Ast.TVariant (_, n, _, cs, _) -> n :: List.map fst cs
+        | Ast.TExtern (_, n) -> [ n ]
+        | Ast.TFfi (_, n, _, _, _, _) -> [ n ]
+        | Ast.TEffect _ -> [])
+      m.Ast.tops
+
+let completion id _uri text =
+  (* compile errors degrade to builtin-only items — completion must
+     still serve a half-typed file *)
+  let mods = match compile_full "" text with Ok ms -> ms | Error _ -> [] in
+  let items = Buffer.create 8192 in
+  Buffer.add_char items '[';
+  let first = ref true in
+  let item label kind detail =
+    if not !first then Buffer.add_char items ',';
+    first := false;
+    Buffer.add_string items
+      (Printf.sprintf {|{"label":"%s","kind":%d,"detail":"%s"}|}
+         (jesc label) kind (jesc detail))
+  in
+  List.iter (fun n -> item n 3 "builtin") (Infer.builtin_names ());
+  (if mods <> [] then begin
+    let m = List.hd (List.rev mods) in
+    List.iter
+      (function
+        | Ast.TDef d -> item d.Ast.tname (if d.Ast.tis_fn then 3 else 6) (Typ.string_of_lg_ty d.Ast.tsch.Typ.sty)
+        | Ast.TVariant (_, n, _, cs, _) -> item n 7 "variant"; List.iter (fun (c, _) -> item c 4 n) cs
+        | Ast.TExtern (_, n) -> item n 7 "extern-type"
+        | Ast.TFfi (_, n, _, _, _, _) -> item n 3 "ffi"
+        | Ast.TEffect _ -> ())
+      m.Ast.tops;
+    (* require-alias members: alias/name from the dep's exported tops *)
+    List.iter
+      (fun (al, ns) ->
+        match List.find_opt (fun (d : Ast.modl) -> d.Ast.mname = ns) mods with
+        | Some dm -> List.iter (fun n -> item (al ^ "/" ^ n) 3 (ns ^ " (require)")) (dep_entries dm)
+        | None -> ())
+      m.Ast.requires;
+    end);
+  Buffer.add_char items ']';
+  respond id (Printf.sprintf {|{"isIncomplete":false,"items":%s}|} (Buffer.contents items))
+
 let rec run () =
   let buf = Buffer.create 4096 in
   (try
@@ -183,17 +283,27 @@ and handle body =
   | Some "initialize" ->
     (match jint "id" body with
      | Some id ->
-       respond id {|{"capabilities":{"textDocumentSync":1,"hoverProvider":true,"definitionProvider":true}}|}
+       respond id {|{"capabilities":{"textDocumentSync":1,"hoverProvider":true,"definitionProvider":true,"completionProvider":{"triggerCharacters":["/","("]}}}|}
      | None -> ())
-  | Some "textDocument/didOpen" ->
+  | Some "textDocument/didOpen" | Some "textDocument/didChange" ->
     (match jstr "uri" body, jstr "text" body with
-     | Some u, Some t -> Hashtbl.replace docs (uri_path u) { text = t }
-     | _ -> ())
-  | Some "textDocument/didChange" ->
-    (match jstr "uri" body, jstr "text" body with
-     | Some u, Some t -> Hashtbl.replace docs (uri_path u) { text = t }
+     | Some u, Some t ->
+       let p = uri_path u in
+       Hashtbl.replace docs p { text = t };
+       publish_diagnostics u p t
      | _ -> ())
   | Some "textDocument/didClose" -> ()
+  | Some "textDocument/completion" ->
+    (match jint "id" body, jstr "uri" body with
+     | Some id, Some u ->
+       let p = uri_path u in
+       (match Hashtbl.find_opt docs p with
+        | Some d -> completion id u d.text
+        | None ->
+          (try let ic = open_in p in let t = really_input_string ic (in_channel_length ic) in close_in ic;
+               completion id u t
+           with _ -> respond id "null"))
+     | _ -> ())
   | Some ("textDocument/hover" as m) | Some ("textDocument/definition" as m) ->
     (match jint "id" body, jstr "uri" body, jint "line" body, jint "character" body with
      | Some id, Some u, Some ln, Some ch ->
@@ -207,3 +317,4 @@ and handle body =
   | Some "shutdown" -> (match jint "id" body with Some id -> respond id "null" | None -> ())
   | Some "exit" -> exit 0
   | Some _ -> ()
+

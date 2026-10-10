@@ -274,6 +274,14 @@ else
   echo "ok lgi-drift-detected"
 fi
 
+# LSP: initialize caps, diagnostics push on didOpen/didChange,
+# completion (builtins + tops + require-alias members, degraded on errors)
+if python3 test/lsp_smoke.py "$LG"; then
+  :
+else
+  fail=1
+fi
+
 # lg doc: odoc-style HTML site — index + per-module pages with
 # signature/variant/anchor markup and cross-module links; an .lgi
 # gates which entries render.
