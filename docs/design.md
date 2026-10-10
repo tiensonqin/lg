@@ -468,7 +468,9 @@ Require forms in `(:require ...)`:
   package for its cmi dirs and add it to the `-package`/`-linkpkg` line.
   Required before requiring a package's modules when the package is not
   on the default cmi path (e.g. `[ocaml.pkg/eio]` then
-  `[ocaml.Eio.Fiber :as fiber]`).
+  `[ocaml.Eio.Fiber :as fiber]`). A module require that resolves through
+  a findlib package (`ocaml.Eio_main`) also adds that package to the
+  link line automatically.
 
 Cmi resolution (`cmi_candidates` + `find_cmi`) covers: flat `<path>.cmi`,
 `<last-seg>.cmi`, wrapped stdlib `stdlib__X.cmi`, findlib subdir
@@ -494,7 +496,10 @@ string/char/unit/list/option/array/seq/result/ref/tuple/fn/tvar).
 Unknown type constructors (`Str.regexp`, `Eio.Stdenv.t`) become opaque
 `TCon` handles: bare Pident names inside a cmi are qualified with the
 owning unit (`regexp` -> `Str.regexp`) so they unify by name and emit
-verbatim. Values may be held and passed back to the same library. Type
+verbatim. Dune-wrapped spellings are canonicalized to the flat unit —
+`Eio__core__.Switch.t` and `Eio__core__Switch.t` unify as one type, so
+a handle produced through an alias path feeds back into the same
+library. Values may be held and passed back to the same library. Type
 forms with no lg equivalent at all (objects, polymorphic variants,
 first-class modules) raise `Unsupported` -> `type not expressible in lg`.
 Mode analysis treats every `EOCamlCall` argument as escaping — cmi

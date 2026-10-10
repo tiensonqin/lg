@@ -1,0 +1,15 @@
+;; Direct OCaml interop: run an eio event loop and fork two fibers.
+;; `env`, `s` are opaque handles (abstract OCaml types) — they can only
+;; be passed back to the library that produced them.
+(ns eiodemo
+  (:require [ocaml.Eio_main :as em]
+            [ocaml.Eio.Switch :as sw]
+            [ocaml.Eio.Fiber :as fiber]))
+
+(em/run
+  (fn [env]
+    (sw/run
+      (fn [s]
+        (fiber/fork (fn [_] (println "fiber a")) :sw s)
+        (fiber/fork (fn [_] (println "fiber b")) :sw s)
+        (println "main fiber done")))))

@@ -131,13 +131,13 @@ let find_cmi modpath =
   match try_prefix !cmi_dirs nsegs with
   | Some r -> Some r
   | None ->
-    (* findlib fallback: treat the first segment as a package name *)
+    (* findlib fallback: treat the first segment as a package name; a
+       package resolved this way is also added to the link line *)
     let pkg = String.lowercase_ascii (List.hd segs) in
     (match run_lines (Printf.sprintf "ocamlfind query %s 2>/dev/null" pkg) with
-     | d :: _ ->
-       let d = String.trim d in
-       if not (List.mem d !cmi_dirs) then cmi_dirs := !cmi_dirs @ [d];
-       try_prefix [d] nsegs
+     | _ :: _ ->
+       add_package pkg;
+       try_prefix !cmi_dirs nsegs
      | [] -> None)
 
 let sig_cache : (string, Types.signature_item list * string * string list) Hashtbl.t =
@@ -176,9 +176,25 @@ let var_tbl : (int, tvar) Hashtbl.t = Hashtbl.create 7
    with the owning unit so opaque TCon names unify and emit correctly *)
 let cur_unit_path = ref ""
 
+(* dune-wrapped libraries spell one type two ways: `Eio__core__.Switch.t`
+   (module inside the hidden `Eio__core__` unit) and `Eio__core__Switch.t`
+   (the flat wrapped unit). Fold every `X__.Y` boundary into `X__Y` so
+   both spellings unify to the flat unit. *)
+let flat_path n =
+  let segs = String.split_on_char '.' n in
+  let rec go acc = function
+    | s1 :: s2 :: tl
+      when String.length s1 >= 2
+           && String.sub s1 (String.length s1 - 2) 2 = "__" ->
+      go acc ((s1 ^ s2) :: tl)
+    | s :: tl -> go (s :: acc) tl
+    | [] -> List.rev acc
+  in
+  String.concat "." (go [] segs)
+
 let qualify_tcon n =
-  if String.contains n '.' || !cur_unit_path = "" then n
-  else !cur_unit_path ^ "." ^ n
+  if String.contains n '.' || !cur_unit_path = "" then flat_path n
+  else flat_path (!cur_unit_path ^ "." ^ n)
 
 let rec ty_of_te te : ty =
   match Types.get_desc te with
@@ -242,9 +258,13 @@ let decompose te : (ty list) * ocaml_lbl list * ty =
   go [] [] te
 
 (* descend nested-module segments of a modpath through Sig_module decls
-   (Mty_signature), following Mty_alias through the aliased unit's cmi *)
-let rec walk_submodules items = function
-  | [] -> Some items
+   (Mty_signature), following Mty_alias through the aliased unit's cmi.
+   Naming tracks the actual unit read ("Eio__core__.Switch") rather than
+   the requested alias path ("Eio.Switch") so opaque TCon names match
+   the canonical paths other cmis use for the same type.
+   Returns (items, emit-visible naming path). *)
+let rec walk_submodules items (unit, acc) = function
+  | [] -> Some (items, String.concat "." (unit :: List.rev acc))
   | seg :: tl ->
     (match
        List.find_map
@@ -252,18 +272,28 @@ let rec walk_submodules items = function
            match it with
            | Types.Sig_module (id, _, md, _, _) when Ident.name id = seg ->
              (match md.Types.md_type with
-              | Types.Mty_signature s -> Some (Some s)
+              | Types.Mty_signature s -> Some (`Nested s)
               | Types.Mty_alias p ->
                 (match find_cmi (Path.name p) with
-                 | Some (f, _) ->
+                 | Some (f, k) ->
                    let cmi = Cmi_format.read_cmi f in
-                   Some (Some cmi.Cmi_format.cmi_sign)
-                 | None -> Some None)
-              | _ -> Some None)
+                   let un =
+                     String.capitalize_ascii
+                       (Filename.chop_extension (Filename.basename f))
+                   in
+                   (* the alias's own remaining segments are nested
+                      modules inside the aliased unit's signature *)
+                   let asegs = String.split_on_char '.' (Path.name p) in
+                   let arest = List.filteri (fun i _ -> i >= k) asegs in
+                   Some (`Alias (cmi.Cmi_format.cmi_sign, un, arest))
+                 | None -> Some `Missing)
+              | _ -> Some `Missing)
            | _ -> None)
          items
      with
-     | Some (Some inner) -> walk_submodules inner tl
+     | Some (`Nested inner) -> walk_submodules inner (unit, seg :: acc) tl
+     | Some (`Alias (inner, un, arest)) ->
+       walk_submodules inner (un, []) (arest @ tl)
      | _ -> None)
 
 (* look up `name` in modpath's signature: either a value or a variant
@@ -273,10 +303,10 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
   match signature_of modpath with
   | None -> None
   | Some (items, unit, rest) ->
-    (match walk_submodules items rest with
+    (match walk_submodules items (unit, []) rest with
      | None -> None
-     | Some items ->
-    cur_unit_path := String.concat "." (unit :: rest);
+     | Some (items, naming) ->
+    cur_unit_path := flat_path naming;
     let rec find = function
       | [] -> None
       | Types.Sig_value (id, vd, _) :: tl ->
@@ -296,7 +326,7 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
               (match cd.Types.cd_args with
                | Types.Cstr_tuple ts ->
                  let rt =
-                   let emod = String.concat "." (unit :: rest) in
+                   let emod = flat_path naming in
                    match td.Types.type_manifest with
                    | Some m ->
                      (try ty_of_te m
