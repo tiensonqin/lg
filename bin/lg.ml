@@ -21,6 +21,7 @@ let () =
   let backend = ref "ocaml" in
   let all_mods = ref false in
   let byte = ref false in
+  let lgi_check = ref false in
   let jobs = ref 4 in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
@@ -34,7 +35,9 @@ let () =
     ; ("--strict", Arg.Set Lgc.Infer.strict,
        " heterogeneous literals require an explicit ^any annotation")
     ; ("-j", Arg.Set_int jobs,
-       "<n> lg build: parallel unit compiles per dependency level (default 4)") ]
+       "<n> lg build: parallel unit compiles per dependency level (default 4)")
+    ; ("--check", Arg.Set lgi_check,
+       " lg lgi --check: fail when a .lgi drifts from its .lg exports") ]
   in
   Arg.parse speclist
     (fun a ->
@@ -166,13 +169,51 @@ let () =
             if !all_mods then List.filter (fun (m : Lgc.Ast.modl) -> not m.iface_only) mods
             else [ List.hd (List.rev mods) ]
           in
-          List.iter
-            (fun (m : Lgc.Ast.modl) ->
-              if m.iface_only then ()
-              else (Lgc.Compiler.write_lgi m;
-                    Printf.printf "wrote %s
+          if !lgi_check then begin
+            (* drift gate: an existing .lgi must agree with the module's
+               exports — a listed def whose signature changed, or an entry
+               naming a def that no longer exists, is drift (exit 1).
+               Unlisted defs are private-by-omission, not drift. *)
+            let bad = ref 0 in
+            List.iter
+              (fun (m : Lgc.Ast.modl) ->
+                if m.iface_only then ()
+                else begin
+                  let p = Lgc.Compiler.lgi_path m.mpath in
+                  if Sys.file_exists p then begin
+                    let hand = Lgc.Compiler.parse_lgi p in
+                    let gen = Lgc.Compiler.lgi_entries_of_module m in
+                    let same_name e = Lgc.Compiler.lgi_entry_name e in
+                    List.iter
+                      (fun h ->
+                        let hn = same_name h in
+                        match List.find_opt (fun g -> same_name g = hn) gen with
+                        | None ->
+                          incr bad;
+                          Printf.printf "%s: stale entry — %s is no longer defined\n  - %s\n" p hn
+                            (Lgc.Compiler.lgi_entry_form h)
+                        | Some g ->
+                          let hf = Lgc.Compiler.lgi_entry_form h
+                          and gf = Lgc.Compiler.lgi_entry_form g in
+                          if hf <> gf then begin
+                            incr bad;
+                            Printf.printf "%s: signature drift — %s\n  - %s\n  + %s\n" p hn hf gf
+                          end)
+                      hand
+                  end else Printf.printf "%s: no .lgi (all defs exported)\n" p
+                end)
+              targets;
+            if !bad > 0 then (Printf.eprintf "lgi --check: %d drifted entr%s\n" !bad (if !bad = 1 then "y" else "ies"); exit 1)
+            else Printf.printf "ok lgi --check\n"
+          end
+          else
+            List.iter
+              (fun (m : Lgc.Ast.modl) ->
+                if m.iface_only then ()
+                else (Lgc.Compiler.write_lgi m;
+                      Printf.printf "wrote %s
 " (Lgc.Compiler.lgi_path m.mpath)))
-            targets
+              targets
         | Some "modes" ->
           let l, o, s = Lgc.Compiler.mode_stats mods in
           let total = l + o + s in

@@ -259,6 +259,21 @@ else
   echo "FAIL(repl)"; fail=1
 fi
 
+# .lgi drift gate: checked-in interfaces must match .lg exports —
+# a signature change or a stale entry fails; a drifted copy is caught.
+if "$LG" lgi --check --all test/lgi.lg -I lib -I test >/dev/null 2>&1; then
+  echo "ok lgi-check"
+else
+  echo "FAIL(lgi-check)"; fail=1
+fi
+cp test/_lib.lg .test-bin/_lib.lg
+sed 's/int\] int/int] string/' test/_lib.lgi > .test-bin/_lib.lgi
+if "$LG" lgi --check .test-bin/_lib.lg >/dev/null 2>&1; then
+  echo "FAIL(lgi-drift-missed)"; fail=1
+else
+  echo "ok lgi-drift-detected"
+fi
+
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
    && grep -q '@ local\|local_\|unique_\|stack_' .test-bin/oxcaml.ml; then

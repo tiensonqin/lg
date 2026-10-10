@@ -11,6 +11,11 @@
   `nil?` builtin is renamed `unit?` (it no longer answers `true`
   for `None` — that is `none?`). All corpus uses are rewritten;
   printed representations moved from `nil` to `()`/`None`.
+- `lg lgi --check [--all]`: drift gate — an existing `.lgi` must
+  agree with its `.lg` exports: a listed def whose signature changed,
+  or an entry for a def that no longer exists, is reported and exits 1.
+  Unlisted defs are private-by-omission, not drift. Two test.sh lanes
+  pin the gate (clean pass + drifted copy caught).
 - REPL latency: each line now reuses ONE stable session file plus
   `--byte` (ocamlc) builds — a fresh temp name per line used to defeat
   `.lg-obj` caching entirely. ~85ms per simple line (was ~1s native).
