@@ -19,7 +19,7 @@ let atom_str = function
   | Str s -> Printf.sprintf "%S" s
   | Keyword k -> ":" ^ k
   | Symbol s -> s
-  | Nil -> "nil"
+  | Nil -> "()"
 
 let width = 90
 

@@ -272,7 +272,7 @@ let rec eval_builtin_apply l name args =
       | Atom (_, Str s) -> s | Atom (_, Symbol s) -> s | Atom (_, Keyword k) -> ":" ^ k
       | Atom (_, Int i) -> string_of_int i
       | Atom (_, Bool b) -> string_of_bool b
-      | Atom (_, Nil) -> "nil"
+      | Atom (_, Nil) -> "()"
       | f -> form_to_string f
     in
     MForm (Atom (loc, Str (String.concat "" (List.map bare arg_forms))))
@@ -301,7 +301,7 @@ and form_to_string (f : form) : string =
      | Str s -> Printf.sprintf "%S" s
      | Keyword k -> ":" ^ k
      | Symbol s -> s
-     | Nil -> "nil")
+     | Nil -> "()")
   (* preserve-mode pseudo-nodes from the reader print back to reader
      syntax so a printed form re-parses to an equal form *)
   | List (_, Atom (_, Symbol "#_") :: [ d ]) ->

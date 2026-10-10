@@ -13,7 +13,7 @@ or `./test.sh` for the whole suite).
 language manipulates.
 
 - **Scalars**: integers (`42`, `0x2A`, `-7`), floats (`1.5`),
-  booleans (`true`/`false`), `nil`, characters (`\a`, `\n`,
+  booleans (`true`/`false`), unit `()`, characters (`\a`, `\n`,
   `\space`, `\newline`, `\tab`, `\return`, `\backspace`,
   `\formfeed`; `\uXXXX` up to byte range — `read_char` rejects
   code points > 255).
@@ -93,10 +93,10 @@ mutual recursion), `test/_privdep.lg`+`.lgi` (private surface).
 | `fn` | `(fn [params] body…)` or `(fn name [params] …)` | lambda; a named fn is self-recursive (`let rec`) |
 | `&` rest | `[x y & rest]` in params/binding vectors | extra args collected as a list; a call with exactly the fixed count binds rest to `[]`; `[p… & r]` destructuring binds `r` to `(drop n v)` as `(seq el)` |
 | `let` | `(let [b1 e1 b2 e2 …] body…)` | sequential bindings; supports vector/map destructuring (§4) |
-| `if` | `(if c t [e])` | missing `else` reads as `nil`; `any` conditions use dyn truthiness |
-| `do` | `(do e…)` | sequencing; value of last; empty `(do)` is `nil` |
-| `when` | `(when c e…)` | `(if c (do e…) nil)` |
-| `and`/`or` | short-circuit | `nil`/`false` falsy, everything else truthy |
+| `if` | `(if c t [e])` | missing `else` reads as `()`; `any` conditions use dyn truthiness |
+| `do` | `(do e…)` | sequencing; value of last; empty `(do)` is `()` |
+| `when` | `(when c e…)` | `(if c (do e…) ())` |
+| `and`/`or` | short-circuit | `false` falsy, non-`()` truthy; a literal `()` operand is E101 |
 | `cond` | `(cond c1 e1 c2 e2 … (:else en))` | nested `if`; `:else` keyword terminates |
 | `try` | `(try body… (catch e h…) (finally f…))` | OCaml exceptions; `e` binds an opaque `exn` handle; result = join(body, handler); finally's value is discarded |
 | `quote` | `'form` | literal data |
@@ -104,7 +104,7 @@ mutual recursion), `test/_privdep.lg`+`.lgi` (private surface).
 | `match` | `(match s pat1 e1 pat2 e2 …)` | §4 patterns |
 | `case` | `(case s lit1 e1 lit2 e2 … default)` | literal dispatch — last clause is the default; literals become `match` patterns |
 | `if-let` | `(if-let [b src] then [else])` | `Some` destructuring over `(option t)` |
-| `when-let` | `(when-let [b src] e…)` | `if-let` + `do`, else `nil` |
+| `when-let` | `(when-let [b src] e…)` | `if-let` + `do`, else `()` |
 | `->`/`->>` | threading | rewrite to nested calls (first/last arg position) |
 | `defmacro` | `(defmacro m ([x] …) ([x y] …))` | §5 |
 | `defvariant` | `(defvariant name (ctor [f T]…) …)` | §4 |
@@ -155,7 +155,7 @@ required. `^T` is an assertion: it must agree with inference
 definition.
 
 **Type grammar** (`^T` positions): `int float bool char string
-keyword symbol unit nil any`, `(vec T) (list T) (seq T) (map K V)
+keyword symbol unit any`, `(vec T) (list T) (seq T) (map K V)
 (set T) (atom T) (option T) (tuple T…)`, `(fn [argtys…] ret)`, a
 `defvariant`/`extern-type`/`defrecord` name, and type variables —
 a bare one-character symbol or a `'`-prefixed symbol (`'a`, `x`).
@@ -191,14 +191,14 @@ convert args/results against the callee's stored scheme.
 `unit` against a concrete `t` widens to `(option t)` with
 `Some`/`None` emitted per arm; `any` wins and non-`any` arms are
 `EBox`-boxed to `dyn`; equal types pass through. `(if c x)` is
-`(option <x>)`. The `nil` literal has type `unit` (not `any`), so
-`(let [x (cond … :else nil)])` really does produce an option the
+`(option <x>)`. There is no `nil` literal: `()` is `unit` and
+`None` is the absent option — `(let [x (cond … :else ())])` produces an option the
 type checker tracks — `(+ x 1)` on it is a static E101, and a
 unit value in a condition reads as falsy (still evaluated for
 order).
 
 **`match` patterns.** Literal atoms (int/float/bool/char/string/
-keyword/`nil`), `_`/symbol (bind), `[p…]` vectors (count-guard +
+keyword/`()`), `_`/symbol (bind), `[p…]` vectors (count-guard +
 destructure), `{…}` map patterns, `(Some p)`/`None` on options,
 variant ctor patterns `(ctor p…)` and bare 0-field ctors —
 including `ns/ctor` qualification. **Edge**: variant pattern
@@ -279,7 +279,7 @@ Builtins are grouped by domain; names and argument order follow
   (`Clj_core.Vec.equal`/`Map.equal`/`Set.equal`, `dyn_eq` for
   `dyn`, `=` for scalars).
 - **Predicates**: tag predicates `int? float? bool? char? string?
-  keyword? symbol? number? coll? nil? some? none? fn? map? vec?
+  keyword? symbol? number? coll? unit? some? none? fn? map? vec?
   list? set? seq?` dispatch on the `dyn` tag for `any` scrutinees
   and constant-fold statically (`fn?` is always `false` —
   functions are never boxed). Numeric `zero? pos? neg? even? odd?`
@@ -290,7 +290,7 @@ Builtins are grouped by domain; names and argument order follow
   into` — see the dispatch matrix below and `test/parity.lg` for
   Clojure-parity edge rules (`get-in` 2-ary `None` on missing
   path, 3-ary default; `update-in` 3-ary on missing key *fails
-  loudly* — no `nil` exists to feed the callback; `(update m k f
+  loudly* — no nil-equivalent exists to feed the callback; `(update m k f
   d)` inserts `d`; `nth` 2-ary raises out-of-bounds, 3-ary
   default; `assoc-in` creates intermediates persistently).
 - **Seq API (lazy, §8)**: `map filter filterv mapv map-indexed
@@ -598,6 +598,12 @@ Explicit exclusions — each is a documented design position
   `float` is IEEE double.
 - **No `loop`/`recur`, `set!`** — named `fn` + native TCO, and
   atoms as the sole mutable cell (§3).
+- **No `nil`** — a deliberate deviation from Clojure: `()` is
+  `unit` (printed `()`), `None`/`option` covers absent values, and
+  an empty collection is `[]`/`(list)`. `nil` is a deprecated
+  reader warning now and a hard E100 next; `nil?` is renamed to
+  `unit?`; `none?` stays. A `()` value in `if`/`and`/`or` position
+  is a static E101 — unit is not a truthiness operand.
 - **Nominal `TCon` record types** are deferred — `defrecord`
   stays map-backed.
 - **`unique_` lowering** is deferred — no expression syntax in

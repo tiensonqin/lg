@@ -1,6 +1,6 @@
 ;; defmacro hygiene: syntax-quote renamed binders, ~ / ~@, gensym, nested macros
-(defmacro my-when [c & body] `(if ~c (do ~@body) nil))
-(defmacro my-unless [c & body] `(if ~c nil (do ~@body)))
+(defmacro my-when [c & body] `(if ~c (do ~@body) ()))
+(defmacro my-unless [c & body] `(if ~c () (do ~@body)))
 (defmacro swap-inc [a] `(swap! ~a inc))
 
 ;; hygiene: the macro's internal `tmp` must not capture the caller's `tmp`

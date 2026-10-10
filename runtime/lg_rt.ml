@@ -13,7 +13,7 @@ let str_char = String.make 1
 let str_string s = s
 let str_kw (k : Clj_core.Keyword.t) = Clj_core.Keyword.to_string k
 let str_sym (s : Clj_core.Symbol.t) = Clj_core.Symbol.to_string s
-let str_unit () = "nil"
+let str_unit () = "()"
 
 let str_list pr xs =
   "(" ^ String.concat " " (List.map pr xs) ^ ")"
@@ -30,7 +30,7 @@ let str_map kpr vpr m =
 let str_set pr s =
   "#{" ^ String.concat " " (List.map pr (Clj_core.Set.to_list s)) ^ "}"
 
-let str_opt pr = function Some x -> pr x | None -> "nil"
+let str_opt pr = function Some x -> pr x | None -> "None"
 
 (* seq on a dynamic collection — used for `seq` where the static type is
    known per call site; these are the fallbacks *)
@@ -85,9 +85,9 @@ let rec str_dyn = function
   | DStr s -> s
   | DKw k -> Clj_core.Keyword.to_string k
   | DSym s -> Clj_core.Symbol.to_string s
-  | DUnit -> "nil"
+  | DUnit -> "()"
   | DOpt (Some d) -> str_dyn d
-  | DOpt None -> "nil"
+  | DOpt None -> "None"
   | DList xs -> str_list str_dyn xs
   | DVec v -> str_vec str_dyn v
   | DMap m -> str_map str_dyn str_dyn m

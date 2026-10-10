@@ -5,12 +5,12 @@
 ;; binder's return var that callers share.
 (declare go)
 
-;; `(go n)` recurses through a dyn join: `true nil` arm is `any`, the
+;; `(go n)` recurses through a dyn join: `true ()` arm is `any`, the
 ;; `false` arm's inner match joins unit (println) against the recursive
 ;; call's then-open return var.
 (defn go [^int n]
   (match (<= n 0)
-    true nil
+    true ()
     false (match n
             1 (println "one")
             _ (go (- n 1)))))

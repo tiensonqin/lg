@@ -16,7 +16,7 @@ built from the same literals the language manipulates.
 Supported forms:
 
 - **Scalars**: integers, floats, strings, booleans (`true`/`false`),
-  `nil`, characters.
+  `()`, characters.
 - **Symbols**: `name`, `ns/name`, `alias/fn`.
 - **Keywords**: `:name`, `:ns/name` — self-evaluating.
 - **Lists** `( … )`: calls and special forms.
@@ -418,7 +418,7 @@ global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
   element-wise), `[k v]` pairs from any seqable — vec, list, seq or
   `any` — destructured at runtime, or a whole map (`conj m m2` merges,
   key/value types unify with the destination's).
-- **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
+- **Predicates.** Tag predicates (`int?` … `coll?`, `unit?`, `some?`,
   `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
   and constant-fold statically. `fn?` is always `false` — functions are
   never boxed. Numeric preds (`zero?` … `odd?`) unbox `any` via
@@ -472,7 +472,7 @@ Sequence-producing builtins return `(seq T)` = `'a Clj_core.Seq.t` and
 transform lazily; realization happens at `vec`/`set`/`into`/`doall`/
 `dorun`/`count`/`reduce`/`first`/`next`/`rest`/`nth`/`str`/`println`.
 `cons` accepts any collection and returns `seq`. `(seq c)` returns
-`option` — `nil` on empty, matching Clojure. Element types cross the
+`option` — `None` on empty, matching Clojure. Element types cross the
 `any` boundary with `Clj_core.Seq.map` box/unbox adapters at emit time.
 
 

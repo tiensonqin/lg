@@ -29,7 +29,7 @@
 (println (seq (range 3)))
 (println (seq []))
 (def fibs (lazy-seq (cons 0 (cons 1 [2 3 4]))))
-(println (into () (range 3)))
+(println (into (list) (range 3)))
 (println (into [] (range 3)))
 (println (doall (cons 0 [1 2])))
 (println (doall (drop-last 2 (range 5))))

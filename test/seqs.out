@@ -8,4 +8,4 @@ true true
 2 5 (1 2 3 4) (2 3 4 5)
 {:a 1, :b 2} {a 2, b 1} {false (2 4), true (1 3 5)}
 (1 2 3 5 8 9) (3 2 1)
-3 7 (5 3 8 1 9 2) true false nil
+3 7 (5 3 8 1 9 2) true false None

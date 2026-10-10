@@ -436,7 +436,7 @@ let () =
      type the answer is constant-folded at emit *)
   List.iter (fun p -> reg p (fun () -> f [ v () ] TBool))
     [ "int?"; "float?"; "bool?"; "char?"; "string?"; "keyword?"; "symbol?";
-      "nil?"; "list?"; "vec?"; "set?"; "coll?"; "seq?"; "number?"; "fn?" ];
+      "unit?"; "list?"; "vec?"; "set?"; "coll?"; "seq?"; "number?"; "fn?" ];
   List.iter (fun p -> reg p (fun () -> f [ TInt ] TBool))
     [ "zero?"; "pos?"; "neg?"; "even?"; "odd?" ];
   ()
@@ -461,7 +461,7 @@ let is_special_builtin = function
   | "partition" | "partition-all" | "nthrest" | "drop-last" | "take-last"
   | "split-at" | "split-with" | "reductions" | "dedupe" | "remove" | "not-empty"
   | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
-  | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
+  | "unit?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
   | "zero?" | "pos?" | "neg?" | "even?" | "odd?" -> true
   | _ -> false
 
@@ -479,7 +479,7 @@ let value_builtin_ok = function
   | "frequencies" | "group-by" | "identity" | "inc" | "includes?" | "int?" | "interleave"
   | "interpose" | "iterate" | "juxt" | "keep" | "keys" | "keyword?" | "list?"
   | "lower-case" | "map" | "map-indexed" | "map?" | "mapcat" | "max" | "min" | "mod"
-  | "neg?" | "next" | "nil?" | "none?" | "not" | "not=" | "nth" | "nthrest" | "number?"
+  | "neg?" | "next" | "unit?" | "none?" | "not" | "not=" | "nth" | "nthrest" | "number?"
   | "odd?" | "pos?" | "pr-str" | "print" | "println" | "reduce" | "reductions" | "remove"
   | "repeat" | "replace" | "reset!" | "rest" | "reverse" | "second" | "seq" | "seq?"
   | "set?" | "slurp" | "some" | "some?" | "sort" | "sort-by" | "split" | "split-at"
@@ -1391,7 +1391,7 @@ and infer_call ctx l items : expr =
     | _ -> items
   in
   match items with
-  | [] -> mk l (TList (fresh_var ())) (EListLit [])
+  | [] -> mk l TUnit ENil (* `()` is unit; the empty list is `(list)`/`'()` *)
   | Atom (_, Symbol "if") :: [ c; t; e ] -> infer_if ctx l c t e
   | Atom (_, Symbol "if") :: [ c; t ] -> infer_if ctx l c t (Atom (l, Nil))
   | Atom (_, Symbol "do") :: body -> infer_do ctx l body
@@ -1467,6 +1467,8 @@ and infer_if ctx l c t e =
   (* `any` conditions use dyn truthiness (emit wraps in dyn_truthy);
      any other concrete type is statically truthy; unbound vars get bool *)
   (match repr ce.ety with TAny -> () | TVar _ -> unify ce.loc ce.ety TBool
+   | TUnit ->
+     type_error ce.loc "unit is not a valid condition — use a bool, or match on (option T)"
    | _ -> ());
   let te = infer_expr ctx t and ee = infer_expr ctx e in
   let ret, te, ee = join_branches l te ee in
@@ -2806,7 +2808,7 @@ and infer_special ctx l name ce arg_es =
     List.iter (fun t -> unify l t TInt) ty_args;
     mk l (TSeq TInt) (ECall (ce, arg_es))
   | ("int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
-    | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"), [ _ ] ->
+    | "unit?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"), [ _ ] ->
     mk l TBool (ECall (ce, arg_es))
   | ("zero?" | "pos?" | "neg?" | "even?" | "odd?"), [ x ] ->
     unify l x TInt;

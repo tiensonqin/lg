@@ -424,7 +424,7 @@
   (list? 5)
   (quote (a b 3))
   (if (< 1 2) \"yes\" \"no\")
-  (if nil 1 2)
+  (if false 1 2)
   (+ 1 2 3)
   no-such-name
   (car 5)")

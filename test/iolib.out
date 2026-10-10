@@ -2,8 +2,8 @@ hello lg
 line2
 true
 false
-nil
-nil
+None
+None
 ()
 ello
 el
@@ -24,9 +24,9 @@ true
 true
 a+b+c
 123
-nil
+None
 abc
-nil
+None
 (1 22 333)
 (a b c)
 a#b#

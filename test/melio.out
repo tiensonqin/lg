@@ -2,14 +2,14 @@ melange io
 
 true
 false
-nil
+None
 ()
 hi
 
 true
 123
 abc
-nil
+None
 (1 22)
 (a b c)
 a#b

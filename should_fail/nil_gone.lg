@@ -1,0 +1,2 @@
+;; nil? is removed along with nil — use unit?/none?
+(println (nil? ()))

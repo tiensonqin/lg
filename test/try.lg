@@ -27,7 +27,7 @@
 (try (safe-f 9) (catch e (println (str "rethrown: " (exn-message e)))))
 
 ;; body without catch: value passes through, finally still runs
-(println (str "nofinally=" (str (try (+ 1 2) (finally nil)))))
+(println (str "nofinally=" (str (try (+ 1 2) (finally ())))))
 
 ;; try inside fn
 (defn div-may [x] (try (/ 10 x) (catch e -1)))

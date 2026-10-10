@@ -1,5 +1,5 @@
 ;; nested-map + nth boundary semantics vs Clojure
-;; get-in missing path -> nil(opt); assoc-in creates intermediates and
+;; get-in missing path -> None; assoc-in creates intermediates and
 ;; overwrites leaf intermediates; dissoc on missing key -> unchanged;
 ;; nth 3-ary default on OOB; update-in missing key uses 4-arg default.
 (def m {:a {:b 1}})

@@ -21,7 +21,7 @@
 
 (defn pass []
   (do (swap! checks inc)
-      nil))
+      ()))
 
 (defn ctx-str []
   (if (empty? (deref contexts))
@@ -33,7 +33,7 @@
       (println (str "FAIL " (deref current) (ctx-str) ": " form))))
 
 (defmacro deftest [name & body]
-  `(do (def ~name (fn [] ~@body nil))
+  `(do (def ~name (fn [] ~@body ()))
        (reset! test/test-order (conj (deref test/test-order) (symbol ~(str name))))
        (reset! test/tests (assoc (deref test/tests) (symbol ~(str name)) ~name))))
 
@@ -44,7 +44,7 @@
   `(do (reset! test/contexts (conj (deref test/contexts) ~msg))
        ~@body
        (reset! test/contexts (pop (deref test/contexts)))
-       nil))
+       ()))
 
 (defmacro are [argv expr & args]
   ;; (are [x y] (= x y) 1 1 2 2) -> (do (is (let [x 1 y 1] (= x y))) ...)
@@ -66,7 +66,7 @@
     (do
       (mapv (fn [k] (do (reset! current k)
                         (reset! contexts [])
-                        (if-let [f (get ts k)] (f) nil)))
+                        (if-let [f (get ts k)] (f) ())))
             order)
       (println (str (deref checks) " checks, " (deref failures) " failures"))
       (deref failures))))

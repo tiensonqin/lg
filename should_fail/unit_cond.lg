@@ -1,0 +1,2 @@
+;; () is unit, not a truthy/falsy value — a unit condition is E101
+(println (if () 1 2))

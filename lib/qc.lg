@@ -44,8 +44,8 @@
   (gen
     (fn [s]
       (let [s2 (rng-next s)]
-        (tuple (nth xs (mod s2 (count xs)) (nth xs 0 (nth xs 0 nil))) (rng-next s2))))
-    (fn [v] (concat [(nth xs 0 nil)] []))))
+        (tuple (nth xs (mod s2 (count xs)) (nth xs 0 (nth xs 0 ()))) (rng-next s2))))
+    (fn [v] (concat [(nth xs 0 ())] []))))
 
 ;; character-based strings over a small alphabet
 (def qc-alpha ["a" "b" "c" "x" "y" "0" "1"])
@@ -67,7 +67,7 @@
       (let [go (fn go [i s acc]
                  (if (= i 0) (tuple acc s)
                    (let [r (sample g s)
-                         v (nth r 0 nil) s2 (nth r 1 0)]
+                         v (nth r 0 ()) s2 (nth r 1 0)]
                      (go (- i 1) s2 (conj acc v)))))]
         (go n s [])))
     (fn [^(vec a) v]
@@ -80,9 +80,9 @@
   (gen
     (fn [s]
       (let [r (sample (gen-vec g n) s)]
-        (tuple (into '() (nth r 0 nil)) (nth r 1 0))))
+        (tuple (into (list) (nth r 0 ())) (nth r 1 0))))
     (fn [^(list a) v]
-      (map (fn [x] (into '() x)) (shrinks (gen-vec g n) (vec v))))))
+      (map (fn [x] (into (list) x)) (shrinks (gen-vec g n) (vec v))))))
 
 (defn gen-map [kg vg n]
   (gen
@@ -90,9 +90,9 @@
       (let [go (fn go [i s acc]
                  (if (= i 0) (tuple acc s)
                    (let [rk (sample kg s)
-                         k (nth rk 0 nil) s2 (nth rk 1 0)
+                         k (nth rk 0 ()) s2 (nth rk 1 0)
                          rv (sample vg s2)
-                         v (nth rv 0 nil) s3 (nth rv 1 0)]
+                         v (nth rv 0 ()) s3 (nth rv 1 0)]
                      (go (- i 1) s3 (assoc acc k v)))))]
         (go n s {})))
     (fn [v] (concat [{}] []))))
@@ -114,7 +114,7 @@
              (if (= i 0)
                (do (println "qc: " n " trials passed") true)
                (let [r (sample g s)
-                     v (nth r 0 nil) s2 (nth r 1 0)]
+                     v (nth r 0 ()) s2 (nth r 1 0)]
                  (if (prop v)
                    (go (- i 1) s2)
                    (do
@@ -131,9 +131,9 @@
     (gen
       (fn [s]
         (let [r1 (sample g1 s) r2 (sample g2 (nth r1 1 0))]
-          (tuple (tuple (nth r1 0 nil) (nth r2 0 nil)) (nth r2 1 0))))
+          (tuple (tuple (nth r1 0 ()) (nth r2 0 ())) (nth r2 1 0))))
       (fn [^(tuple a b) vs]
         (concat
-          (map (fn [x] (tuple x (nth vs 1 nil))) (shrinks g1 (nth vs 0 nil)))
-          (map (fn [x] (tuple (nth vs 0 nil) x)) (shrinks g2 (nth vs 1 nil))))))
-    (fn [^(tuple a b) vs] (prop (nth vs 0 nil) (nth vs 1 nil)))))
+          (map (fn [x] (tuple x (nth vs 1 ()))) (shrinks g1 (nth vs 0 ())))
+          (map (fn [x] (tuple (nth vs 0 ()) x)) (shrinks g2 (nth vs 1 ()))))))
+    (fn [^(tuple a b) vs] (prop (nth vs 0 ()) (nth vs 1 ())))))

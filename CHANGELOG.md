@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `nil` is deleted from the language (first step: deprecated).
+  `()` is now *the* unit literal — it prints `()`, binds `unit?`,
+  and is a static E101 in `if`/`when`/`and`/`or` condition
+  position (unit is not a truthiness operand). `None`/`option`
+  covers absent values; an empty list is `(list)`/`[]`, never `()`.
+  `nil` still parses but warns W403 with the replacement hint; the
+  `nil?` builtin is renamed `unit?` (it no longer answers `true`
+  for `None` — that is `none?`). All corpus uses are rewritten;
+  printed representations moved from `nil` to `()`/`None`.
 - `try`/`catch`/`finally` + `throw`: `(try body… (catch e h…)
   (finally f…))` compiles to a real OCaml `try…with` wrapped in
   `Fun.protect`; `e` binds an opaque `exn` handle with `exn-message`

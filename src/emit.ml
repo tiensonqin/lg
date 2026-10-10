@@ -250,13 +250,11 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
     (match repr c.ety with
      | TAny -> buf_add b "(if (Lg_rt.dyn_truthy "
      | TBool -> buf_add b "(if "
-     | TUnit -> buf_add b "(if (let __ = "
      | _ -> buf_add b "(if (let __ = ");
     emit_expr b c;
     (match repr c.ety with
      | TAny -> buf_add b ")"
      | TBool -> ()
-     | TUnit -> buf_add b " in false)"
      | _ -> buf_add b " in true)");
     buf_add b " then ";
     buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t));
@@ -1643,7 +1641,7 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         | _ -> buf_add b ("(Clj_core.Seq.fold_left (fun acc x -> Clj_core.Seq.cons x acc) " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
       | `Str -> buf_add b "(failwith \"into string\")")
    | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
-   | "nil?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?" ->
+   | "unit?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?" ->
      (* tag check on dyn; constant-folded when the static type already
         answers the question *)
      let tags =
@@ -1657,8 +1655,8 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      in
      (match repr (t 0) with
       | TAny ->
-        if name = "nil?" then
-          buf_add b ("(match " ^ a 0 ^ " with Lg_rt.DUnit | Lg_rt.DOpt None -> true | _ -> false)")
+        if name = "unit?" then
+          buf_add b ("(match " ^ a 0 ^ " with Lg_rt.DUnit -> true | _ -> false)")
         else if name = "fn?" then buf_add b "false"  (* fns are never boxed *)
         else buf_add b ("(match " ^ a 0 ^ " with "
                         ^ String.concat " | " (List.map (fun tg -> "Lg_rt." ^ tg ^ " _") tags)
@@ -1666,9 +1664,8 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | rep ->
         let answer =
           match name, rep with
-          | "nil?", TOption _ -> None
-          | "nil?", TUnit -> Some true
-          | "nil?", _ -> Some false
+          | "unit?", TUnit -> Some true
+          | "unit?", _ -> Some false
           | "fn?", TFun _ -> Some true
           | "fn?", _ -> Some false
           | "coll?", (TVec _ | TList _ | TMap _ | TSet _) -> Some true
@@ -2047,7 +2044,7 @@ and emit_builtin_value name ty =
   | "seq?" -> "(fun x -> match x with Lg_rt.DList _ -> true | _ -> false)"
   | "coll?" -> "(fun x -> match x with Lg_rt.DVec _ | Lg_rt.DList _ | Lg_rt.DMap _ | Lg_rt.DSet _ -> true | _ -> false)"
   | "number?" -> "(fun x -> match x with Lg_rt.DInt _ | Lg_rt.DFloat _ -> true | _ -> false)"
-  | "nil?" -> "(fun x -> match x with Lg_rt.DUnit | Lg_rt.DOpt None -> true | _ -> false)"
+  | "unit?" -> "(fun x -> match x with Lg_rt.DUnit -> true | _ -> false)"
   | "some?" -> "(fun x -> match x with Some _ -> true | _ -> false)"
   | "none?" -> "(fun x -> match x with None -> true | _ -> false)"
   | "fn?" -> "(fun _ -> false)"

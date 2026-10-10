@@ -127,7 +127,9 @@ let read_char r =
   else Atom (l, Char (named_char tok))
 
 let atom_of_token l tok : form =
-  if tok = "nil" then Atom (l, Nil)
+  if tok = "nil" then (
+    Err.warn l "W403" "nil is deprecated: use () for unit, None for option";
+    Atom (l, Nil))
   else if tok = "true" then Atom (l, Bool true)
   else if tok = "false" then Atom (l, Bool false)
   else if String.length tok > 0 && tok.[0] = ':' then Atom (l, Keyword (String.sub tok 1 (String.length tok - 1)))

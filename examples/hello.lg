@@ -14,7 +14,7 @@
 ;; a hygienic macro: it introduces `tmp` — that name can never capture a
 ;; caller's `tmp` because syntax-quote renames it (see `swap!` style macros)
 (defmacro unless [c body]
-  `(if ~c nil ~body))
+  `(if ~c () ~body))
 
 ;; println join via str
 (println "hello" (:name person) (add 20 22))
