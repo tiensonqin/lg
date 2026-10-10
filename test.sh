@@ -274,6 +274,24 @@ else
   echo "ok lgi-drift-detected"
 fi
 
+# lg doc: odoc-style HTML site — index + per-module pages with
+# signature/variant/anchor markup and cross-module links; an .lgi
+# gates which entries render.
+if "$LG" doc lib/qc.lg test/docd.lg examples/util.lg -I lib -I examples -I test -o .test-bin/apidoc --title "lg test" >/dev/null 2>&1 \
+   && [ -f .test-bin/apidoc/index.html ] \
+   && [ -f .test-bin/apidoc/qc.html ] \
+   && [ -f .test-bin/apidoc/docd.html ] \
+   && grep -q 'id="gen-int"' .test-bin/apidoc/qc.html \
+   && grep -q '(fn \[int int\]' .test-bin/apidoc/qc.html \
+   && grep -q 'href="qc.html#gen-int"' .test-bin/apidoc/docd.html \
+   && grep -q 'LCG seed' .test-bin/apidoc/qc.html \
+   && grep -q 'defvariant' .test-bin/apidoc/docd.html \
+   && ! grep -q 'id="internal-seed"' .test-bin/apidoc/util.html; then
+  echo "ok doc"
+else
+  echo "FAIL(doc)"; fail=1
+fi
+
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
    && grep -q '@ local\|local_\|unique_\|stack_' .test-bin/oxcaml.ml; then

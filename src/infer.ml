@@ -585,7 +585,12 @@ and infer_top ctx f =
     in
     Hashtbl.replace ctx.declared n ty;
     register_global ctx n (mono ty) false
-  | List (l, Atom (_, Symbol "defvariant") :: namef :: ctors) ->
+  | List (l, Atom (_, Symbol "defvariant") :: namef :: ctors0) ->
+    let vdoc, ctors =
+      match ctors0 with
+      | Atom (_, Str d) :: cs -> (Some d, cs)
+      | _ -> (None, ctors0)
+    in
     let vname, params =
       match namef with
       | Atom (_, Symbol n) -> (n, [])
@@ -625,7 +630,7 @@ and infer_top ctx f =
     Hashtbl.replace ctx.vtypes vname cnames;
     Hashtbl.replace all_vtypes vname cnames;
     Hashtbl.replace all_type_mods vname ctx.modl.ocaml_name;
-    ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed) ]
+    ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed, vdoc) ]
   | List (l, Atom (_, Symbol "ffi") :: _) ->
     ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]
   | List (l, Atom (_, Symbol "defrecord") :: Atom (_, Symbol name) :: Vector (_, fields) :: _) ->
@@ -795,9 +800,9 @@ and infer_def ctx f =
         (n, mh, ta, rest, implicit_ann mf)
       | _ -> type_error l "def requires a name"
     in
-    let e = match rest with
-      | [ e ] -> e
-      | [ Atom (_, Str _); e ] -> e  (* docstring *)
+    let doc, e = match rest with
+      | [ e ] -> (None, e)
+      | [ Atom (_, Str d); e ] -> (Some d, e)  (* docstring *)
       | _ -> type_error l "malformed def"
     in
     let texpr = infer_expr ctx e in
@@ -805,7 +810,7 @@ and infer_def ctx f =
     (match imp with Some (Some t) -> unify texpr.loc texpr.ety t | _ -> ());
     let keep = ann_vars ty_ann @ (match imp with Some (Some t) -> free_tvars t [] | _ -> []) in
     let sch = generalize [] (canon_free keep texpr.ety) in
-    let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
+    let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None; tdoc = doc } in
     (* `(def f (fn [x & xs] ...))` keeps the fn's variadic flag so callers
        see the same `&` semantics as `defn` *)
     let variadic = match texpr.desc with EFun fn -> fn.variadic <> None | _ -> false in
@@ -826,7 +831,11 @@ and infer_defn ctx f =
         (n, mh, ta, implicit_ann mf)
       | _ -> type_error l "defn requires a name"
     in
-    let rest = match rest with Atom (_, Str _) :: r -> r | r -> r in
+    let doc, rest =
+      match rest with
+      | Atom (_, Str d) :: r -> (Some d, r)
+      | r -> (None, r)
+    in
     (* `defn f ^(fn [..] r) [args] body` — meta on the param vector *)
     let rest, ty_ann =
       match rest with
@@ -894,7 +903,7 @@ and infer_defn ctx f =
        let keep = ann_vars ty_ann @ (match imp with Some (Some t) -> free_tvars t [] | _ -> []) in
        let sch = generalize [] (canon_free keep sch_ty) in
        let variadic = match fe.desc with EFun fn -> fn.variadic <> None | _ -> false in
-       let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
+       let top = { tname = name; tloc = l; tsch = sch; texpr = fe; tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None; tdoc = doc } in
        register_global ctx name sch variadic;
        register_implicit ctx l name imp top;
        top
@@ -926,7 +935,7 @@ and infer_defn ctx f =
            (fun (al, ps, body, an, ph) ->
              let fe = infer_fn ctx al (Some an) ps body in
              unify al ph fe.ety;
-             { tname = an; tloc = al; tsch = generalize [] (canon_free [] fe.ety); texpr = fe;
+             { tname = an; tloc = al; tsch = generalize [] (canon_free [] fe.ety); texpr = fe; tdoc = doc;
                tis_fn = true; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None })
            infos
        in
@@ -937,7 +946,7 @@ and infer_defn ctx f =
        Hashtbl.replace ctx.multi_arity (ctx.modl.mname ^ "/" ^ name) ();
        let first = List.hd tops in
        let alias_e = mk l first.texpr.ety (EGlobal (ctx.modl.ocaml_name, munge first.tname, first.tname)) in
-       let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared; timplicit = None } in
+       let alias = { tname = name; tloc = l; tsch = first.tsch; texpr = alias_e; tis_fn = false; tmode = Shared; timplicit = None; tdoc = doc } in
        register_global ctx name alias.tsch false;
        ctx.modl.tops <- ctx.modl.tops @ (List.map (fun t -> TDef t) tops);
        alias

@@ -23,6 +23,9 @@ let () =
   let byte = ref false in
   let lgi_check = ref false in
   let jobs = ref 4 in
+  let doc_format = ref "html" in
+  let doc_title = ref "lg API" in
+  let files = ref [] in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
@@ -37,13 +40,18 @@ let () =
     ; ("-j", Arg.Set_int jobs,
        "<n> lg build: parallel unit compiles per dependency level (default 4)")
     ; ("--check", Arg.Set lgi_check,
-       " lg lgi --check: fail when a .lgi drifts from its .lg exports") ]
+       " lg lgi --check: fail when a .lgi drifts from its .lg exports")
+    ; ("--format", Arg.Symbol ([ "html"; "md" ], (fun s -> doc_format := s)),
+       "<html|md> lg doc output format (default html -> <out>/index.html)")
+    ; ("--title", Arg.String (fun s -> doc_title := s),
+       "<name> lg doc: project title for the generated site") ]
   in
   Arg.parse speclist
     (fun a ->
       match !cmd with
       | None when List.mem a [ "check"; "emit"; "modes"; "lgi"; "build"; "fmt"; "repl"; "lsp"; "deps"; "doc"; "init"; "version"; "--version"; "-version" ] -> cmd := Some a
       | None -> cmd := Some "emit"; file := Some a
+      | Some "doc" -> files := !files @ [ a ]   (* lg doc takes many entry files *)
       | Some _ -> (match !file with None -> file := Some a | Some _ -> raise (Exit 2)))
     usage;
   (match !cmd with
@@ -119,9 +127,47 @@ let () =
       with End_of_file | Exit _ -> ());
      exit 0
    | _ -> ());
-  match !file with
-  | None -> Arg.usage speclist usage
-  | Some file ->
+  match !files, !file with
+  | _ :: _, _ when !cmd = Some "doc" ->
+    (* lg doc: compile each entry file's require closure, dedup by mname *)
+    let roots = Lgc.Pkg.roots_with_manifest !roots (List.hd !files) in
+    let seen = Hashtbl.create 17 in
+    let mods =
+      List.concat_map
+        (fun f -> Lgc.Compiler.compile_path ~roots ~target:Lgc.Reader.TNative f)
+        (List.rev !files)
+      |> List.filter
+           (fun (m : Lgc.Ast.modl) ->
+             if Hashtbl.mem seen m.mname then false
+             else begin Hashtbl.add seen m.mname (); true end)
+    in
+    (match !doc_format with
+     | "md" ->
+       List.iter
+         (fun (m : Lgc.Ast.modl) ->
+           Printf.printf "# %s
+
+" m.mname;
+           List.iter
+             (function
+               | Lgc.Ast.TDef d -> Printf.printf "- `%s` : `%s`
+" d.tname (Lgc.Typ.string_of_lg_ty d.tsch.sty)
+               | Lgc.Ast.TExtern (_, n) -> Printf.printf "- `(extern-type %s)`
+" n
+               | Lgc.Ast.TVariant (_, n, _, _, _) -> Printf.printf "- `(defvariant %s)`
+" n
+               | _ -> ())
+             m.tops)
+         mods
+     | _ ->
+       let outdir = match !out with Some o -> o | None -> "docs/api" in
+       Lgc.Doc.generate ~title:!doc_title ~out:outdir mods;
+       Printf.printf "doc: %d module%s -> %s/index.html
+" (List.length mods)
+         (if List.length mods = 1 then "" else "s") outdir);
+    exit 0
+  | _, None -> Arg.usage speclist usage
+  | _, Some file ->
     (try
        if !backend = "oxcaml" then Lgc.Emit.oxcaml := true;
        if !backend = "melange" then Lgc.Emit.melange := true;
@@ -143,24 +189,6 @@ let () =
        let roots = if !backend = "melange" then !roots else Lgc.Pkg.roots_with_manifest !roots file in
        let mods = Lgc.Compiler.compile_path ~roots ~target file in
        (match !cmd with
-        | Some "doc" ->
-          List.iter
-            (fun (m : Lgc.Ast.modl) ->
-              Printf.printf "# %s
-
-" m.mname;
-              List.iter
-                (function
-                  | Lgc.Ast.TDef d -> Printf.printf "- `%s` : `%s`
-" d.tname (Lgc.Typ.string_of_lg_ty d.tsch.sty)
-                  | Lgc.Ast.TExtern (_, n) -> Printf.printf "- `(extern-type %s)`
-" n
-                  | Lgc.Ast.TVariant (_, n, _, _) -> Printf.printf "- `(defvariant %s)`
-" n
-                  | _ -> ())
-                m.tops)
-            mods;
-          exit 0
         | Some "check" ->
           Printf.printf "ok (%d module%s)\n" (List.length mods)
             (if List.length mods = 1 then "" else "s")

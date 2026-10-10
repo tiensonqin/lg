@@ -524,8 +524,13 @@ top-level `tdef` locations.
 walks up from the source file; `:path` deps add the dir as a module
 root, `:git` deps clone to `.lg/deps/<name>` with optional `:sha`
 checkout; `lg deps` resolves and writes `lg.lock`. `lg init` scaffolds a
-project. `lg doc` prints each top's inferred scheme as markdown —
-`.lgi`-gated defs keep their exported signature. `lg version` reports
+project. `lg doc files...` generates an odoc-style static HTML API
+site (default `docs/api/`): index.html + one page per module —
+signatures, defvariant constructors with field types, docstrings
+(`(defn f "doc" [x] ..)` / `(def x "doc" v)` / `(defvariant t "doc" ..)`
+are captured by the reader), `ns/name` cross-links, and a sidebar
+module tree. An `.lgi` gates which entries render. `--format=md`
+keeps the old stdout markdown. `lg version` reports
 the embedded version. `tools/release.sh` + `.github/workflows/release.yml`
 build os/arch tarballs on `v*` tags.
 

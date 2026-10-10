@@ -29,8 +29,12 @@ deps clone into `.lg/deps/<name>`; `lg deps` resolves and writes
 `lg.lock` (`name url sha` per line).
 
 `lg init <name>` scaffolds `src/main.lg` + `lg.edn` + `.gitignore`.
-`lg doc file.lg` prints the module's public API as markdown from
-inferred signatures. `lg version` prints the version.
+`lg doc files...` generates an odoc-style static HTML API site
+(`docs/api/` by default, `-o <dir>`): one page per module with
+inferred signatures, defvariant constructors, docstrings, and
+cross-module links; a module's `.lgi` gates which entries render.
+`--format=md` prints the old markdown to stdout. `--title` names the
+site. `lg version` prints the version.
 `tools/release.sh [ver]` builds `dist/lg-<ver>-<os>-<arch>.tar.gz`;
 push a `v*` tag and CI builds ubuntu+macos tarballs.
 

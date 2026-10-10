@@ -1,0 +1,9 @@
+(ns docd (:require [qc]))
+
+(defn greet "Say hello. See qc/gen-int for sampling." [n] (str "hi" n))
+
+(defvariant shape "A shape."
+  (Circle [r float])
+  Square)
+
+(println (greet 1))

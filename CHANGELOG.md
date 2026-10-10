@@ -138,3 +138,15 @@ compiling to OCaml via `Clj_core` data structures.
   all. Roots may be literals or once-used concrete collection locals
   (the builder copies the root once, so persistent semantics hold).
   Escaping collections still take the persistent path. Oxcaml unchanged.
+
+## lg doc HTML site (2026-10-10)
+
+- `lg doc` now emits an odoc-style static site: `docs/api/index.html`
+  + one page per module — inferred signatures, defvariant constructors
+  with field types, docstrings, `ns/name` cross-links, sidebar module
+  tree, pure CSS. `.lgi` files gate which entries render.
+- Docstrings captured on `defn`, `def`, and `defvariant` (the
+  `"doc"` form after the name was previously parsed and dropped).
+- `--format=md` keeps the previous stdout markdown; `--format=html`
+  is the default. `lg doc` accepts multiple entry files and merges
+  their require closures.

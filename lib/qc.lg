@@ -7,24 +7,27 @@
 ;; counterexample and reports it.
 (ns qc)
 
-;; splittable LCG over non-negative ints
-(defn rng-next [s] (mod (+ (* s 1103515245) 12345) 2147483648))
+(defn rng-next "Advance the splittable LCG seed (non-negative ints only)." [s] (mod (+ (* s 1103515245) 12345) 2147483648))
 
-;; every generator shares this shape: a = generated value type
-(defn sample ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) int] (tuple a int))
+(defn sample
+  "Run a generator's sampler: seed s -> (tuple value next-seed). See qc/gen for the generator shape."
+  ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) int] (tuple a int))
   [g s]
   ((nth g 0) s))
+
+
 
 (defn shrinks ^(fn [(tuple (fn [int] (tuple a int)) (fn [a] (seq a))) a] (seq a))
   [g v]
   ((nth g 1) v))
 
-;; gen pair constructor
-(defn gen ^(fn [(fn [int] (tuple a int)) (fn [a] (seq a))] (tuple (fn [int] (tuple a int)) (fn [a] (seq a))))
+(defn gen
+  "Build a generator from a sampler and a shrinker."
+  ^(fn [(fn [int] (tuple a int)) (fn [a] (seq a))] (tuple (fn [int] (tuple a int)) (fn [a] (seq a))))
   [s sh]
   (tuple s sh))
 
-(defn gen-int [lo hi]
+(defn gen-int "Uniform int generator in [lo hi]." [lo hi]
   (gen
     (fn [s]
       (let [s2 (rng-next s)
@@ -35,12 +38,12 @@
         (take-while (fn [x] (> x lo)) (iterate (fn [x] (/ x 2)) (/ v 2)))
         (if (<= v lo) [] [lo])))))
 
-(defn gen-bool []
+(defn gen-bool "Boolean generator." []
   (gen
     (fn [s] (let [s2 (rng-next s)] (tuple (= 0 (mod s2 2)) s2)))
     (fn [v] (concat [] []))))
 
-(defn gen-elem [xs]
+(defn gen-elem "Pick a random element of xs." [xs]
   (gen
     (fn [s]
       (let [s2 (rng-next s)]

@@ -5,3 +5,4 @@
 
 (defn sum ^(fn [(vec int)] int) [xs]
   (reduce (fn [acc x] (+ acc x)) 0 xs))
+(def internal-seed "not in util.lgi - stays out of the docs" 12345)

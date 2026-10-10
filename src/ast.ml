@@ -99,6 +99,7 @@ type topdef = {
   tis_fn : bool;
   mutable tmode : mode;
   mutable timplicit : ty option;  (* ^{implicit T} on the def name *)
+  tdoc : string option;           (* "doc" form after the name *)
 }
 
 (* FFI selector: OCaml `external` stub, ctypes dynamic symbol, or
@@ -120,7 +121,7 @@ type top =
   | TExtern of loc * string  (* (extern-type name) — opaque handle type *)
   | TFfi of loc * string * ty list * ty * ffi_sel * string option
     (* (ffi name [args] ret {selector [:library path]}) *)
-  | TVariant of loc * string * ty list * (string * (string * ty) list) list
+  | TVariant of loc * string * ty list * (string * (string * ty) list) list * string option
   | TEffect of expr                         (* non-def top form, run in source order *)
     (* (defvariant (name params...) (ctor [f ty]...) ...) — ty params are
        shared TVar instances across all ctor field types *)

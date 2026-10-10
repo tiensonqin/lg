@@ -2466,7 +2466,7 @@ let emit_module_body b (m : modl) =
       in
       groups (List.rev_append gs acc) rest'
     | TDef d :: rest -> groups ([ `Nonrec d ] :: acc) rest
-    | TVariant (_l, n, ps, cs) :: rest -> groups ([ `Variant (_l, n, ps, cs) ] :: acc) rest
+    | TVariant (_l, n, ps, cs, _) :: rest -> groups ([ `Variant (_l, n, ps, cs) ] :: acc) rest
     | TExtern (_l, n) :: rest -> groups ([ `Extern (_l, n) ] :: acc) rest
     | TFfi (_l, n, a, r, sel, lib) :: rest -> groups ([ `Ffi (_l, n, a, r, sel, lib) ] :: acc) rest
     | TEffect e :: rest -> groups ([ `Eff e ] :: acc) rest
