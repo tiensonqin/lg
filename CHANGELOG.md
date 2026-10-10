@@ -9,6 +9,16 @@
   transparent manifest aliases in cmis (`Stdlib__String.t = string`)
   expand with their `type_params` instantiated — `ocamlinterop` and
   `eiodemo` build+run identically on both toolchains.
+- `ocaml.*` deep-cmi semantics extended: optional `?x` params unwrap
+  to `~x` semantics on both toolchains (cmi `T option` stripped in
+  `decompose`); relative dotted type paths resolve parent-scope-first;
+  manifest-alias expansion binds names against the manifest's own
+  unit; abstract types keep canonical-unit names; row types/objects/
+  univars/packages inside constructor args import as fresh type vars;
+  `exn` maps to the opaque `Stdlib.exn` handle. New dogfood lane:
+  `examples/eioecho.lg` — a self-terminating TCP echo over
+  `Net.listen`/`accept_fork`/`Fiber.fork`/`Flow.single_read`
+  (verified on both switches; run lane in test.sh).
 - `lg fmt` escapes char literals (`\newline`, `\space`, …) instead of
   emitting raw control bytes; whole-corpus fmt fidelity lanes assert
   form-level equivalence, idempotence, and comment preservation.

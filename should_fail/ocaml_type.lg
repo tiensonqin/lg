@@ -1,3 +1,3 @@
 (ns f4 (:require [ocaml.Oo :as oo]))
-;; object types are not expressible in lg
+;; object types import as opaque handles — an int never unifies
 (println (oo/id 1))

@@ -1,0 +1,50 @@
+;; eioecho.lg — self-contained eio TCP echo: listen on port 0, fork a
+;; client fiber on the same switch, echo one line back, then exit.
+;;
+;; Exercises: ocaml.* cmi signature reading across Eio's row-polymorphic
+;; resource surface (Net.t / listening_socket_ty / stream_socket_ty /
+;; Sockaddr.stream), labeled + optional args, curried connection_handler
+;; fns, Fiber scheduling, and interop with Cstruct buffers.
+;;
+;; NOTE: Buf_read.parse_exn is avoided on purpose — in eio5 it does not
+;; return for a same-process fiber peer (it works with external clients
+;; like nc that half-close). Flow.single_read is the reliable path here.
+
+(ns eioecho
+  (:require [ocaml.Eio_main :as em]
+            [ocaml.Eio.Stdenv :as se]
+            [ocaml.Eio.Switch :as sw]
+            [ocaml.Eio.Fiber :as fiber]
+            [ocaml.Eio.Net :as net]
+            [ocaml.Eio.Flow :as flow]
+            [ocaml.Cstruct :as cs]
+            [ocaml.Stdlib :as std]
+            [ocaml.pkg/eio]
+            [ocaml.pkg/eio_main]
+            [ocaml.pkg/cstruct]))
+
+(em/run
+  (fn [env]
+    (sw/run
+      (fn [s]
+        (let [n (se/net env)]
+          (let [sk (net/listen n :sw s :backlog 8
+                               (nth (net/getaddrinfo_stream n "127.0.0.1" :service "0") 0))
+                port (net/listening_addr sk)]
+            (println "listening")
+            (fiber/fork (fn [_]
+                          (let [conn (net/connect n port :sw s)]
+                            (flow/copy_string "ping\n" conn)
+                            (let [b (cs/create 64)
+                                  nr (flow/single_read conn b)]
+                              (println (str "cli got: " (cs/to_string (cs/sub b 0 nr))))
+                              (std/exit 0))))
+                        :sw s)
+            (net/accept_fork sk :sw s :on_error (fn [e] (println "conn error"))
+              (fn [conn]
+                (fn [_addr]
+                  (let [b (cs/create 64)
+                        nr (flow/single_read conn b)
+                        line (cs/to_string (cs/sub b 0 nr))]
+                    (println (str "srv got: " line))
+                    (flow/copy_string (str "echo: " line) conn)))))))))))

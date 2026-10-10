@@ -206,6 +206,20 @@ let qualify_tcon n =
   if String.contains n '.' || !cur_unit_path = "" then flat_path n
   else flat_path (!cur_unit_path ^ "." ^ n)
 
+(* relative dotted names inside a cmi bind against the enclosing unit's
+   parent scope first: `Net.t` inside `Eio.Stdenv`'s signature means
+   `Eio.Net.t` (a sibling submodule), not a top-level `Net` unit.
+   Paths already starting `X__` are absolute wrapped-unit spellings. *)
+let qualify_rel_tcon n =
+  let abs = match String.index_opt n '.' with
+    | Some i -> i >= 2 && String.sub n (i - 2) 2 = "__"
+    | None -> false
+  in
+  match String.rindex_opt !cur_unit_path '.' with
+  | Some i when String.contains n '.' && not abs ->
+    flat_path (String.sub !cur_unit_path 0 i ^ "." ^ n)
+  | _ -> qualify_tcon n
+
 (* descend nested-module segments of a modpath through Sig_module decls
    (Mty_signature), following Mty_alias through the aliased unit's cmi.
    Naming tracks the actual unit read ("Eio__core__.Switch") rather than
@@ -263,22 +277,24 @@ let manifest_decl path =
      | Some (items, unit, rest) ->
        (match walk_submodules items (unit, []) rest with
         | None -> None
-        | Some (items, _) ->
-          List.find_map
-            (fun it ->
-              (match it with
-               | Types.Sig_type (id, td, _, _) when Ident.name id = tname ->
-                 Some td
-               | _ -> None))
-            items))
+        | Some (items, naming) ->
+          Option.map
+            (fun td -> (td, naming))
+            (List.find_map
+               (fun it ->
+                 (match it with
+                  | Types.Sig_type (id, td, _, _)
+                    when Ident.name id = tname -> Some td
+                  | _ -> None))
+               items)))
 
-let rec ty_of_te ?(depth = 0) ?(subst = []) te : ty =
+let rec ty_of_te ?(depth = 0) ?(subst = []) ?(nested = false) te : ty =
   match Types.get_desc te with
   | Types.Tarrow (_, a, r, _) ->
     TFun ([ ty_of_te ~depth ~subst a ], ty_of_te ~depth ~subst r)
   | Types.Ttuple ts ->
     TTuple (List.map (fun (_, t) -> ty_of_te ~depth ~subst t) ts)
-  | Types.Tlink t | Types.Tsubst (t, _) -> ty_of_te ~depth ~subst t
+  | Types.Tlink t | Types.Tsubst (t, _) -> ty_of_te ~depth ~subst ~nested t
   | Types.Tvar _ ->
     let id = Types.get_id te in
     (match List.assoc_opt id subst with
@@ -308,42 +324,108 @@ let rec ty_of_te ?(depth = 0) ?(subst = []) te : ty =
      | "char", [] -> TChar
      | "unit", [] -> TUnit
      | "bytes", [] -> TString
-     | "exn", [] -> TString
-     | "list", [ a ] -> TList (ty_of_te ~depth ~subst a)
-     | "option", [ a ] -> TOption (ty_of_te ~depth ~subst a)
-     | "array", [ a ] -> TList (ty_of_te ~depth ~subst a)
-     | "seq", [ a ] -> TSeq (ty_of_te ~depth ~subst a)
-     | "result", [ o; _ ] -> TOption (ty_of_te ~depth ~subst o)
-     | "ref", [ a ] -> TAtom (ty_of_te ~depth ~subst a)
+     | "exn", [] -> TCon ("Stdlib.exn", []) (* opaque handle — not a string *)
+     | "list", [ a ] -> TList (ty_of_te ~depth ~subst ~nested:true a)
+     | "option", [ a ] -> TOption (ty_of_te ~depth ~subst ~nested:true a)
+     | "array", [ a ] -> TList (ty_of_te ~depth ~subst ~nested:true a)
+     | "seq", [ a ] -> TSeq (ty_of_te ~depth ~subst ~nested:true a)
+     | "result", [ o; _ ] -> TOption (ty_of_te ~depth ~subst ~nested:true o)
+     | "ref", [ a ] -> TAtom (ty_of_te ~depth ~subst ~nested:true a)
      (* expand a transparent manifest alias (Stdlib__String.t = string);
         on failure fall through to an opaque handle *)
      | _ when depth < 8 ->
-       (match manifest_decl (qualify_tcon n) with
-        | Some { Types.type_manifest = Some m; type_params = ps; _ } ->
+       let q = qualify_tcon n and qr = qualify_rel_tcon n in
+       let qn, decl =
+         if qr <> q then
+           match manifest_decl qr with
+           | Some _ as d -> (qr, d)
+           | None -> (q, manifest_decl q)
+         else (q, manifest_decl q)
+       in
+       (match decl with
+        | Some ({ Types.type_manifest = Some m; type_params = ps; _ },
+                naming) ->
           (try
              let subst' =
                try
                  List.map2
-                   (fun pe a -> (Types.get_id pe, ty_of_te ~depth ~subst a))
+                   (fun pe a ->
+                     (Types.get_id pe, ty_of_te ~depth ~subst ~nested:true a))
                    ps args
                with Invalid_argument _ -> subst
              in
-             ty_of_te ~depth:(depth + 1) ~subst:subst' m
+             (* names inside the manifest bind against ITS unit, not
+                the signature currently being read *)
+             let saved = !cur_unit_path in
+             cur_unit_path := naming;
+             let r =
+               try ty_of_te ~depth:(depth + 1) ~subst:subst' m
+               with e -> cur_unit_path := saved; raise e
+             in
+             cur_unit_path := saved;
+             r
            with Unsupported _ ->
              (* an inexpressible manifest is no better than the handle —
                 keep the opaque TCon *)
-             TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
-        | _ -> TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
+             TCon (qn, List.map (ty_of_te ~depth ~subst ~nested:true) args))
+        (* abstract type — name it by the resolved unit so alias
+           spellings (Eio.Std.Switch.t) unify with the canonical unit
+           spelling (Eio__core__Switch.t) *)
+        | Some (_, naming) ->
+          (match String.rindex_opt qn '.' with
+           | Some i ->
+             let tname =
+               String.sub qn (i + 1) (String.length qn - i - 1)
+             in
+             TCon (naming ^ "." ^ tname,
+                   List.map (ty_of_te ~depth ~subst ~nested:true) args)
+           | None ->
+             TCon (qn, List.map (ty_of_te ~depth ~subst ~nested:true) args))
+        | _ -> TCon (qn, List.map (ty_of_te ~depth ~subst ~nested:true) args))
      (* abstract/unknown type constructors become opaque handles: they can
         be held and passed back to the library that produced them, never
         constructed from lg directly *)
-     | _ -> TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
+     | _ ->
+       TCon (qualify_tcon n,
+             List.map (ty_of_te ~depth ~subst ~nested:true) args))
+  (* Row types, objects, univars, first-class modules and empty rows have
+     no lg surface. They appear inside library signatures wrapped in a
+     constraining constructor — e.g. eio's `[> 'tag ty] r` resources —
+     so a fresh variable keeps the enclosing Tconstr shape checkable
+     while the row tag itself is left for the OCaml backend to check.
+     At the TOP level of a signature (a bare `< .. >` parameter such as
+     `Oo.id`) they become opaque handles named by kind — an object or
+     package value can flow through a call (`Eio_main.run`'s env) but
+     never be constructed or confused with an lg type. *)
+  | Types.Tvariant _ | Types.Tobject _ | Types.Tunivar _
+  | Types.Tpackage _ | Types.Tfield _ | Types.Tnil ->
+    if nested then Typ.fresh_var ()
+    else
+      let k =
+        match Types.get_desc te with
+        | Types.Tvariant _ -> "variant" | Types.Tobject _ -> "object"
+        | Types.Tunivar _ -> "univar" | Types.Tpackage _ -> "package"
+        | _ -> "row"
+      in
+      TCon ("OCaml." ^ k, [])
   | _ -> raise (Unsupported "type form")
 
 (* decompose a value's type into positional/labeled params + result *)
 let decompose te : (ty list) * ocaml_lbl list * ty =
+  (* `?x:T` stores the arg as `T option` in the cmi (both toolchains);
+     callers see the value type — the lg surface treats `?x` like `~x`,
+     omittable and supplied by value (`~x:v` at emit) *)
+  let rec strip t =
+    match Types.get_desc t with
+    | Types.Tlink u | Types.Tsubst (u, _) | Types.Tpoly (u, _) -> strip u
+    | Types.Tconstr (p, [ inner ], _)
+      when Path.name p = "option" || Path.name p = "Stdlib.option" ->
+      inner
+    | _ -> t
+  in
   let rec go ps ls t =
     match Osig_shim.split_arrow t with
+    | Some (OOpt _ as l, a, r) -> go (ps @ [ ty_of_te (strip a) ]) (ls @ [ l ]) r
     | Some (l, a, r) -> go (ps @ [ ty_of_te a ]) (ls @ [ l ]) r
     | None ->
       (match Types.get_desc t with

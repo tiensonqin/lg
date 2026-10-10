@@ -21,14 +21,10 @@ type ocaml_lbl = ONo | OLbl of string | OOpt of string
 let split_arrow (t : Types.type_expr) =
   match Types.get_desc t with
   | Types.Tarrow ((l, _, _), a, r, _) ->
-    let l =
-      match l with
-      | Types.Nolabel -> ONo
-      | Types.Labelled s -> OLbl s
-      | Types.Optional s -> OOpt s
-      | Types.Position s -> OOpt s
-    in
-    Some (l, a, r)
+    (match l with
+     | Types.Nolabel -> Some (ONo, a, r)
+     | Types.Labelled s -> Some (OLbl s, a, r)
+     | Types.Optional s | Types.Position s -> Some (OOpt s, a, r))
   | _ -> None
 
 let variant_ctors (td : Types.type_declaration) =

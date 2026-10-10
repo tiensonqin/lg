@@ -391,29 +391,45 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
 - **Calls**: `lookup` returns `(params, labels, result, is_ctor)`;
   trailing `:kw v` pairs match `OLbl`/`OOpt` params by name —
   unknown/duplicate labels and missing `~lbl`s are E100/E102.
-  Positional args arity-check; a trailing `unit` param
-  synthesizes `()`; under-application returns the remaining
-  `TFun`. Constructors emit `Mod.Ctor` calls with exact field
-  count.
+  Optional params `?x:T` are *omittable by-value* arguments —
+  identical to `~x`: omitting uses the OCaml-side default, and a
+  supplied `:x v` emits `~x:v` with `v` unwrapped (the cmi stores
+  `T option`; the option is stripped in the shared `decompose`,
+  so `?` and `~` behave the same on both toolchains). Positional
+  args arity-check; a trailing `unit` param synthesizes `()`;
+  under-application returns the remaining `TFun`. Constructors
+  emit `Mod.Ctor` calls with exact field count.
 - **Types**: `ty_of_te` maps cmi `type_expr`s onto lg types.
   A constructor path whose declaration carries a *transparent
   manifest* (`type t = string`, `type 'a t = 'a list`) expands
   through its own cmi — OxCaml cmis spell `string` as
   `Stdlib__String.t` where upstream writes the primitive —
   with the declaration's `type_params` instantiated by the
-  constructor args, bounded at depth 8. Unresolved or
-  inexpressible manifests become opaque `TCon` handles
-  qualified by owning unit (dune-wrapped spellings
-  canonicalize to the flat unit); unexpressible types
-  (objects, polymorphic variants, first-class modules) raise
-  `type not expressible in lg`. The compiler-libs ABI surface
-  (`Cmi_format`, `Types`, arg labels, constructor payloads)
-  is normalized by `src/osig_shim*.ml` — dune selects the
-  upstream or OxCaml implementation by `%{ocaml_version}`, so
-  `dune build` works under either switch and an ox-built lg
-  reads ox cmis natively. cmi files remain toolchain-bound —
-  a `.cmi` from a different OCaml toolchain is reported as
-  such, not misparsed.
+  constructor args, bounded at depth 8. Names inside the
+  manifest bind against the manifest's *own* unit, so
+  `type 'a t = 'a inner` expands `inner` under its home
+  module. A relative dotted path (`Net.t` inside `Eio.Stdenv`)
+  resolves parent-scope-first (`Eio.Net.t`), then absolute.
+  Abstract types name themselves by the resolved canonical
+  unit rather than the textual alias, keeping
+  `Eio__core__Switch.t`/`Eio__Std.Switch.t` spellings on one
+  type. `exn` maps to the opaque `Stdlib.exn` handle (not
+  `string`). Constructor *arguments* whose forms lg cannot
+  express — polymorphic-variant rows, objects, univars,
+  first-class packages, row fields — become fresh type vars
+  inside the enclosing `Tconstr`, so eio's
+  `[> 'tag ty] r`/`[< 'tag] connection_handler` row bounds
+  import as open handles. Unresolved or inexpressible
+  *top-level* manifests become opaque `TCon` handles qualified
+  by owning unit (dune-wrapped spellings canonicalize to the
+  flat unit). The compiler-libs ABI surface (`Cmi_format`,
+  `Types`, arg labels, constructor payloads) is normalized by
+  `src/osig_shim*.ml` — dune selects the upstream or OxCaml
+  implementation by `%{ocaml_version}`, so `dune build` works
+  under either switch and an ox-built lg reads ox cmis
+  natively. cmi files remain toolchain-bound — a `.cmi` from
+  a different OCaml toolchain is reported as such, not
+  misparsed.
 - **Mode analysis** treats every `EOCamlCall` argument as
   escaping (cmi carries no borrow metadata).
 
@@ -428,8 +444,10 @@ handle type for `rettype`/arg positions.
 
 **Anchors**: `test/ocamlinterop.lg`, `test/ffi.lg`,
 `test/ffimod.lg`, `test/_ffilib.lg`, `examples/eiodemo.lg`
-(eio + fiber + socket via `ocaml.*`), `test/melio.lg` (melange
-io).
+(eio + fiber + socket via `ocaml.*`), `examples/eioecho.lg`
+(self-terminating TCP echo: `Net.listen`/`accept_fork` +
+`Fiber.fork` client + `Flow.single_read` + `Cstruct`),
+`test/melio.lg` (melange io).
 
 ## 10. Compilation, performance, and incremental semantics
 

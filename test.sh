@@ -83,14 +83,16 @@ done
 
 # examples/: every example must build and run green (no .out diff —
 # several print timings or read input files)
-for name in hello features csv json jsonp util stopwatch eiodemo; do
+for name in hello features csv json jsonp util stopwatch eiodemo eioecho; do
   src="examples/$name.lg"
   [ -e "$src" ] || continue
   if ! "$LG" build "$src" -I lib -I examples -o ".test-bin/ex_$name" >/dev/null 2>&1; then
     echo "FAIL(example-build) $name"
     fail=1; continue
   fi
-  if ! ".test-bin/ex_$name" >/dev/null 2>&1; then
+  # eioecho self-terminates (its client fiber exits the process); the
+  # timeout guard keeps a networking regression from hanging the suite.
+  if ! timeout 30 ".test-bin/ex_$name" >/dev/null 2>&1; then
     echo "FAIL(example-run) $name"
     fail=1; continue
   fi
