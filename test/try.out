@@ -5,3 +5,7 @@ Failure("boom")
 rethrown: Not_found
 nofinally=3
 div=5 -1
+pat-not-found
+pat-failure=kaboom
+pat-join=x
+pat-wildcard

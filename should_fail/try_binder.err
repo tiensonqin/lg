@@ -1,1 +1,1 @@
-catch binds a plain symbol
+catch binds a symbol or a constructor pattern

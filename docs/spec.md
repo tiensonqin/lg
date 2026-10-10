@@ -98,7 +98,7 @@ mutual recursion), `test/_privdep.lg`+`.lgi` (private surface).
 | `when` | `(when c e…)` | `(if c (do e…) ())` |
 | `and`/`or` | short-circuit | `false` falsy, non-`()` truthy; a literal `()` operand is E101 |
 | `cond` | `(cond c1 e1 c2 e2 … (:else en))` | nested `if`; `:else` keyword terminates |
-| `try` | `(try body… (catch e h…) (finally f…))` | OCaml exceptions; `e` binds an opaque `exn` handle; result = join(body, handler); finally's value is discarded |
+| `try` | `(try body… (catch e h…) (catch (Ctor a…) h…) (finally f…))` | OCaml exceptions; symbol `e` binds an opaque `exn` handle, a `(Ctor a…)` pattern is an OCaml `with` match (non-match re-raises); result = join(body, handler); finally's value is discarded |
 | `quote` | `'form` | literal data |
 | `syntax-quote` | `` `form `` | template for macros (§5) |
 | `match` | `(match s pat1 e1 pat2 e2 …)` | §4 patterns |
@@ -136,9 +136,14 @@ caught exactly like native ones. `e` binds an opaque `exn` handle:
 handle. The try's value joins body and handler per §4 — a
 difference is E101; finally always runs and its value is dropped.
 A unit branch collapsing to `None` still evaluates its side
-effects first (`EDo [branch; None]`).
+effects first (`EDo [branch; None]`). A constructor-pattern
+catch `(catch (Ctor a…) h…)` emits an OCaml `with` pattern:
+`Failure`/`Invalid_argument`/`Sys_error` args bind `string`,
+other ctors' args bind `any`, `_` wildcards allowed, and a
+non-matching exception re-raises automatically.
 **Anchor**: `test/try.lg` (a real `Not_found` from `ocaml.List`
-`List.find`), `should_fail/try_{join,binder,throw_type}`.
+`List.find`, plus `(catch (Not_found) …)`/`(catch (Failure m) …)`
+patterns), `should_fail/try_{join,binder,throw_type,pat}`.
 
 **Anchors**: `test/core.lg`, `test/control.lg`,
 `test/loopcase.lg` (case/named fn), `test/destructure.lg`,

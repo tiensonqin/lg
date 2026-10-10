@@ -1,0 +1,2 @@
+;; catch pattern must be a capitalized OCaml exception constructor
+(def x (try 1 (catch (lowercase m) m)))

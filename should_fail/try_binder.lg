@@ -1,2 +1,2 @@
-;; catch binds a plain symbol only
+;; catch binds a symbol or a constructor pattern
 (try 42 (catch 7 "h"))

@@ -32,3 +32,10 @@
 ;; try inside fn
 (defn div-may [x] (try (/ 10 x) (catch e -1)))
 (println (str "div=" (str (div-may 2)) " " (str (div-may 0))))
+
+;; constructor-pattern catch: OCaml `with` pattern, non-match re-raises
+(try (olist/find (fn [x] (= x 9)) '(1 2)) (catch (Not_found) (println "pat-not-found")))
+(try (throw (exn "kaboom")) (catch (Failure m) (println (str "pat-failure=" m))))
+(println (str "pat-join=" (str (try (throw (exn "x")) (catch (Failure m) m)))))
+;; wildcard arg position
+(try (throw (exn "wild")) (catch (Failure _) (println "pat-wildcard")))

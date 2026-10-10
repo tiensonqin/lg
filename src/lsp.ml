@@ -98,7 +98,9 @@ let expr_types m : (int * int, string) Hashtbl.t =
     | Ast.EMatchOpt (s, _, a, b) | Ast.EVariant (s, _, _, a, b) | Ast.EDynVec (s, _, a, b) | Ast.EDynMap (s, _, a, b) -> walk s; walk a; walk b
     | Ast.ETry (b', c, f) ->
       walk b';
-      (match c with Some (_, h) -> walk h | None -> ());
+      (match c with
+       | Some (Ast.CatchAll (_, h) | Ast.CatchPat (_, _, h)) -> walk h
+       | None -> ());
       (match f with Some fe -> walk fe | None -> ())
     | Ast.EUnbox (x, _) | Ast.EUnboxOpt (x, _) | Ast.EBox x -> walk x
     | Ast.EOpt (Some x) -> walk x

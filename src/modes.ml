@@ -39,7 +39,9 @@ let rec occurs_anywhere p e =
     occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p e
   | ETry (b', c, f) ->
     List.exists (occurs_anywhere p)
-      (b' :: (match c with Some (_, h) -> [ h ] | None -> [])
+      (b' :: (match c with
+              | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> [ h ]
+              | None -> [])
          @ (match f with Some fe -> [ fe ] | None -> []))
   | _ -> false
 
@@ -55,7 +57,9 @@ let rec occurs_in_result p e =
   | EDynVec (_, _, t, _) | EDynMap (_, _, t, _) -> occurs_in_result p t
   | ETry (b', c, _) ->
     occurs_in_result p b'
-    || (match c with Some (_, h) -> occurs_in_result p h | None -> false)
+    || (match c with
+        | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> occurs_in_result p h
+        | None -> false)
   | _ -> occurs_anywhere p e
 
 (* A binder escapes when it is used inside a nested EFun (captured) or
@@ -81,7 +85,9 @@ let is_escaping_use b es : bool =
       go false s; go in_closure t; go in_closure x
     | ETry (b', c, f) ->
       go false b';
-      (match c with Some (_, h) -> go in_closure h | None -> ());
+      (match c with
+       | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> go in_closure h
+       | None -> ());
       (match f with Some fe -> go false fe | None -> ())
     | EOpt (Some e) -> go in_closure e
     | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> go false e
@@ -512,8 +518,11 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
    | ETry (b', c, f) ->
      analyze_expr ~region_ret:region_ret b';
      (match c with
-      | Some (bd, h) ->
+      | Some (CatchAll (bd, h)) ->
         bd.Ast.bmode <- Ast.Shared;
+        analyze_expr ~region_ret h
+      | Some (CatchPat (_, bs, h)) ->
+        List.iter (fun (bd : Ast.binder) -> bd.Ast.bmode <- Ast.Shared) bs;
         analyze_expr ~region_ret h
       | None -> ());
      (match f with Some fe -> analyze_expr ~region_ret:false fe | None -> ())
@@ -574,7 +583,9 @@ let rec collect_value_refs e =
   | EVariant (s, _, _, t, x) -> collect_value_refs s; collect_value_refs t; collect_value_refs x
   | ETry (b', c, f) ->
     collect_value_refs b';
-    (match c with Some (_, h) -> collect_value_refs h | None -> ());
+    (match c with
+     | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> collect_value_refs h
+     | None -> ());
     (match f with Some fe -> collect_value_refs fe | None -> ())
   | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> collect_value_refs e
   | EOpt (Some e) -> collect_value_refs e
@@ -656,7 +667,9 @@ let count_modes m =
      | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) -> walk s; walk t; walk x
      | ETry (b', c, f) ->
        walk b';
-       (match c with Some (_, h) -> walk h | None -> ());
+       (match c with
+        | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> walk h
+        | None -> ());
        (match f with Some fe -> walk fe | None -> ())
      | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
      | _ -> ())

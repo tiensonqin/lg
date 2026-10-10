@@ -565,7 +565,9 @@ and check_builtin_values m =
     | EMatchOpt (s, _, t, x) -> walk s; walk t; walk x
     | ETry (b', c, f) ->
       walk b';
-      (match c with Some (_, h) -> walk h | None -> ());
+      (match c with
+       | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> walk h
+       | None -> ());
       (match f with Some fe -> walk fe | None -> ())
     | EVariant (s, _, _, t, x) -> walk s; walk t; walk x
     | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) -> walk s; walk t; walk x
@@ -1784,35 +1786,69 @@ and infer_try ctx l forms =
     | [ e ] -> e
     | es -> mk l (last es).ety (EDo es)
   in
+  (* known OCaml exception payloads bind precisely; everything else is
+     an opaque `any` value on the handler side *)
+  let exn_payload_ty = function
+    | "Failure" | "Invalid_argument" | "Sys_error" -> TString
+    | _ -> TAny
+  in
   let parse_clause catch finally = function
-    | List (cl, Atom (_, Symbol "catch") :: Atom (_, Symbol s) :: hs) ->
+    | List (cl, Atom (_, Symbol "catch") :: pat :: hs) ->
       if catch <> None then type_error cl "try takes a single catch clause";
       if hs = [] then type_error cl "catch requires a handler body";
-      let b = fresh_binder s in
-      b.bty <- TCon ("exn", []);
       let saved = ctx.env in
-      ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+      let finish =
+        match pat with
+        | Atom (_, Symbol s) ->
+          let b = fresh_binder s in
+          b.bty <- TCon ("exn", []);
+          ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+          fun he -> CatchAll (b, he)
+        | List (_, Atom (_, Symbol ctor) :: pargs) ->
+          if String.length ctor = 0 || ctor.[0] <> Char.uppercase_ascii ctor.[0] then
+            type_error cl "catch pattern must be an OCaml exception constructor (capitalized)";
+          let binders =
+            List.map
+              (fun a ->
+                match a with
+                | Atom (_, Symbol s) ->
+                  let b = fresh_binder s in
+                  let t = exn_payload_ty ctor in
+                  b.bty <- t;
+                  if s <> "_" then
+                    ctx.env <- (s, { vscheme = mono t; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+                  b
+                | _ -> type_error cl "catch pattern args must be symbols or _")
+              pargs
+          in
+          fun he -> CatchPat (ctor, binders, he)
+        | _ -> type_error cl "catch binds a symbol or a constructor pattern"
+      in
       let hes = List.map (infer_expr ctx) hs in
       ctx.env <- saved;
       let he = (match hes with [ e ] -> e | es -> mk cl (last es).ety (EDo es)) in
-      (Some (b, he), finally)
+      (Some (finish he), finally)
     | List (cl, Atom (_, Symbol "finally") :: fs) ->
       if finally <> None then type_error cl "try takes a single finally clause";
       if fs = [] then type_error cl "finally requires a body";
       let fes = List.map (infer_expr ctx) fs in
       let fe = (match fes with [ e ] -> e | es -> mk cl (last es).ety (EDo es)) in
       (catch, Some fe)
-    | List (cl, Atom (_, Symbol "catch") :: _) ->
-      type_error cl "catch binds a plain symbol: (catch e body…)"
-    | List (cl, _) -> type_error cl "try clauses must be (catch e body…) or (finally body…)"
-    | _ -> type_error l "try clauses must be (catch e body…) or (finally body…)"
+    | List (cl, _) -> type_error cl "try clauses must be (catch e body…) | (catch (Ctor a…) body…) | (finally body…)"
+    | _ -> type_error l "try clauses must be (catch e body…) | (catch (Ctor a…) body…) | (finally body…)"
   in
   let catch, finally = List.fold_left (fun (c, f) cl -> parse_clause c f cl) (None, None) clauses in
   let ret, body_e, catch =
     match catch with
-    | Some (b, he) ->
-      let r, b2, h2 = join_branches l body_e he in
-      (r, b2, Some (b, h2))
+    | Some c ->
+      let h = (match c with CatchAll (_, h) -> h | CatchPat (_, _, h) -> h) in
+      let r, b2, h2 = join_branches l body_e h in
+      let c2 =
+        (match c with
+         | CatchAll (b, _) -> CatchAll (b, h2)
+         | CatchPat (t, bs, _) -> CatchPat (t, bs, h2))
+      in
+      (r, b2, Some c2)
     | None -> (body_e.ety, body_e, None)
   in
   mk l ret (ETry (body_e, catch, finally))

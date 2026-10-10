@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Constructor-pattern catch**: `(catch (Ctor a…) h…)` emits a
+  real OCaml `with` pattern alongside `(catch e h…)` —
+  `(catch (Not_found) h)` catches `ocaml.*` exceptions by
+  constructor, `Failure`/`Invalid_argument`/`Sys_error` payload
+  args bind `string`, other ctors' args bind `any`, `_`
+  wildcards allowed, and a non-matching exception re-raises
+  automatically (true `with` semantics — no catch-all wrapper).
 - **Global content-addressed build cache** (`~/.lg/cache`). Unit
   objects and linked binaries are keyed by
   `hash(emitted source + dep hashes + toolchain + compiler mode)`

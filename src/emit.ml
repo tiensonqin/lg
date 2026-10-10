@@ -348,11 +348,24 @@ and emit_try b b' catch fin =
      is a plain try..with; finally wraps the whole thing. *)
   let with_catch () =
     (match catch with
-     | Some (bd, h) ->
+     | Some (Ast.CatchAll (bd, h)) ->
        buf_add b "(try ";
        emit_expr b b';
        buf_add b " with ";
        buf_add b (sanitize bd.Ast.bname ^ "__" ^ string_of_int bd.Ast.bid);
+       buf_add b " -> ";
+       emit_expr b h;
+       buf_add b ")"
+     | Some (Ast.CatchPat (ctor, bs, h)) ->
+       buf_add b "(try ";
+       emit_expr b b';
+       buf_add b " with ";
+       buf_add b ctor;
+       List.iter
+         (fun (bd : Ast.binder) ->
+           buf_add b " ";
+           buf_add b (sanitize bd.Ast.bname ^ "__" ^ string_of_int bd.Ast.bid))
+         bs;
        buf_add b " -> ";
        emit_expr b h;
        buf_add b ")"
@@ -1176,7 +1189,9 @@ and occurs_bid bid e =
   | EVariant (a, _, _, x, y) -> List.exists (occurs_bid bid) [ a; x; y ]
   | ETry (b', c, f) ->
     List.exists (occurs_bid bid)
-      (b' :: (match c with Some (_, h) -> [ h ] | None -> [])
+      (b' :: (match c with
+              | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> [ h ]
+              | None -> [])
          @ (match f with Some fe -> [ fe ] | None -> []))
   | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a -> occurs_bid bid a
   | EOpt None -> false
@@ -2465,7 +2480,11 @@ let rec refs_in acc e =
   | EVariant (a, _, _, x, y) -> refs_in (refs_in (refs_in acc a) x) y
   | ETry (b', c, f) ->
     let acc = refs_in acc b' in
-    let acc = (match c with Some (_, h) -> refs_in acc h | None -> acc) in
+    let acc =
+      (match c with
+       | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> refs_in acc h
+       | None -> acc)
+    in
     (match f with Some fe -> refs_in acc fe | None -> acc)
 
 (* Split a run of fn defs into binding groups: only defs that reach each
