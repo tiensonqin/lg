@@ -254,7 +254,14 @@ let canon_free keep t =
     | TImplicit a -> TImplicit (deep a)
     | TMap (k, v) -> TMap (deep k, deep v)
     | TTuple ts -> TTuple (List.map deep ts)
-    | TCon (n, ts) -> TCon (n, List.map deep ts)
+    (* TCon parameters are NOT canonicalized: they parameterize opaque
+       handles (foreign types like `('a,'b) Hashtbl.t`, variant ctors
+       like `('a,'b) either`) whose instantiations live on the OCaml
+       side, where weak-var inference pins them per use. Boxing them to
+       `any` here would make the declared type `(dyn,dyn) t` clash with
+       every concrete use — the coll boxing rule only applies to lg
+       collection constructors, which are handled above. *)
+    | TCon (n, ts) -> TCon (n, ts)
     | TFun (ts, r) -> TFun (List.map deep ts, deep r)
     | u -> u
   in

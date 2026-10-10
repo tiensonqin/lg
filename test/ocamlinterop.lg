@@ -5,6 +5,13 @@
             [ocaml.Unix :as unix]
             [ocaml.String :refer [uppercase_ascii]]
             [ocaml.Str :as ostr]
+            [ocaml.Hashtbl :as ht]
+            [ocaml.Option :as opt]
+            [ocaml.Result :as res]
+            [ocaml.Buffer :as buf]
+            [ocaml.Seq :as oseq]
+            [ocaml.Array :as arr]
+            [ocaml.Random.State :as rnd]
             [ocaml.pkg/eio]))
 
 (println (std/abs -42))
@@ -21,3 +28,40 @@
 (def re (ostr/regexp "a+"))
 (println (ostr/string_match re "aaa" 0))
 (println (ostr/string_match re "bbb" 0))
+
+;; --- deeper alias/optional/abstract coverage ---
+;; ('a,'b) Hashtbl.t is a 2-param abstract handle; `?random` is an
+;; omittable optional arg (cmi stores `bool option`, lg sees `bool`).
+(def h (ht/create 8))
+(ht/replace h "a" 1)
+(ht/replace h "b" 2)
+(println (ht/length h))
+(println (opt/value (ht/find_opt h "a") :default 0))
+(println (opt/value (ht/find_opt h "z") :default 0))
+(println (ht/fold (fn [_k v acc] (+ acc v)) h 0))
+(def h2 (ht/create 8 :random true))
+(ht/replace h2 "c" 3)
+(println (ht/length h2))
+;; `('a,'e) result` is an opaque 2-param handle — convert at the
+;; boundary via Option.to_result / Result.to_option.
+(def r (opt/to_result (ht/find_opt h "a") :none "miss"))
+(println (res/get_ok (res/map (fn [y] (* y 10)) r)))
+(def re2 (opt/to_result (ht/find_opt h "z") :none "miss"))
+(println (res/get_error re2))
+(println (opt/value (res/to_option r) :default 0))
+;; Buffer.t opaque handle roundtrip.
+(def b (buf/create 16))
+(buf/add_string b "ab")
+(buf/add_string b "cd")
+(println (buf/contents b))
+(println (buf/length b))
+;; Seq.t's manifest (`unit -> 'a node`) expands; seqs still flow
+;; end-to-end between to_seq/map/take/of_seq.
+(println (olist/of_seq
+           (oseq/take 3 (oseq/map (fn [x] (* x x))
+                                  (olist/to_seq '(1 2 3 4 5))))))
+;; `int array` is an opaque handle — Array.of_list converts at the
+;; boundary; Random.State.t stays an opaque 0-param handle.
+(def rs (rnd/make (arr/of_list '(1 2 3))))
+(println (rnd/int rs 100))
+(println (rnd/int rs 100))

@@ -290,8 +290,22 @@ let manifest_decl path =
 
 let rec ty_of_te ?(depth = 0) ?(subst = []) ?(nested = false) te : ty =
   match Types.get_desc te with
+  (* An OCaml arrow chain `a -> b -> r` is the same function as lg's
+     (fn [a b] r) — curried application at the OCaml backend is
+     syntactically identical — so flatten consecutive arrows into one
+     multi-param TFun. This is what lets an lg (fn [k v acc] ...) feed
+     an OCaml ('a -> 'b -> 'acc -> 'acc) parameter (Hashtbl.fold etc.);
+     without flattening only 1-ary fns were passable to foreign HOFs. *)
   | Types.Tarrow (_, a, r, _) ->
-    TFun ([ ty_of_te ~depth ~subst a ], ty_of_te ~depth ~subst r)
+    let rec flat acc t =
+      match Types.get_desc t with
+      | Types.Tarrow (_, x, y, _) ->
+        flat (ty_of_te ~depth ~subst x :: acc) y
+      | Types.Tlink u | Types.Tsubst (u, _) -> flat acc u
+      | _ -> (List.rev acc, ty_of_te ~depth ~subst t)
+    in
+    let args, ret = flat [ ty_of_te ~depth ~subst a ] r in
+    TFun (args, ret)
   | Types.Ttuple ts ->
     TTuple (List.map (fun (_, t) -> ty_of_te ~depth ~subst t) ts)
   | Types.Tlink t | Types.Tsubst (t, _) -> ty_of_te ~depth ~subst ~nested t
@@ -316,21 +330,42 @@ let rec ty_of_te ?(depth = 0) ?(subst = []) ?(nested = false) te : ty =
       | b :: _ -> b
       | [] -> n
     in
-    (match base, args with
+    (* primitive paths only: a user-defined `M.list` must not map to the
+       lg list builtin — the base-name match binds only when the path is
+       literally `list` or `Stdlib.list`, i.e. the primitive itself *)
+    let builtin = if n = base || n = "Stdlib." ^ base then base else "" in
+    (match builtin, args with
      | "int", [] -> TInt
      | "float", [] -> TFloat
      | "bool", [] -> TBool
      | "string", [] -> TString
      | "char", [] -> TChar
      | "unit", [] -> TUnit
-     | "bytes", [] -> TString
+     | "bytes", [] -> TCon ("Stdlib.bytes", [])
+       (* opaque handle — lg strings are immutable; convert via
+          Bytes.to_string / Bytes.of_string *)
      | "exn", [] -> TCon ("Stdlib.exn", []) (* opaque handle — not a string *)
      | "list", [ a ] -> TList (ty_of_te ~depth ~subst ~nested:true a)
      | "option", [ a ] -> TOption (ty_of_te ~depth ~subst ~nested:true a)
-     | "array", [ a ] -> TList (ty_of_te ~depth ~subst ~nested:true a)
-     | "seq", [ a ] -> TSeq (ty_of_te ~depth ~subst ~nested:true a)
-     | "result", [ o; _ ] -> TOption (ty_of_te ~depth ~subst ~nested:true o)
-     | "ref", [ a ] -> TAtom (ty_of_te ~depth ~subst ~nested:true a)
+     | "array", [ a ] ->
+       (* OCaml arrays are not lg lists — mapping `int array` to
+          (list int) let a list literal emit where ocamlopt demands an
+          [| |] array. Opaque handle; convert via Array.of_list /
+          Array.to_list. *)
+       TCon ("Stdlib.array", [ ty_of_te ~depth ~subst ~nested:true a ])
+     | "result", [ o; e ] ->
+       (* (`ok`,`err`) result is NOT lg's option: collapsing it to
+          TOption let an `option` value flow into `Result.map` and
+          emitted OCaml that cannot typecheck. Keep it a 2-param
+          opaque handle — conversion happens at the boundary through
+          `Option.to_result`/`Result.to_option`. *)
+       TCon ("Stdlib.result",
+             [ ty_of_te ~depth ~subst ~nested:true o
+             ; ty_of_te ~depth ~subst ~nested:true e ])
+     | "ref", [ a ] ->
+       (* `Stdlib.ref` is a mutable record, not a clj Atom — same lie
+          class as array/result. *)
+       TCon ("Stdlib.ref", [ ty_of_te ~depth ~subst ~nested:true a ])
      (* expand a transparent manifest alias (Stdlib__String.t = string);
         on failure fall through to an opaque handle *)
      | _ when depth < 8 ->
