@@ -284,6 +284,14 @@ let () =
              let opt = Sys.command "ocamlfind ocamlopt -version >/dev/null 2>&1" = 0 in
              let comp = if !byte || not opt then "ocamlc" else "ocamlopt" in
              let obj_ext = if !byte || not opt then ".cmo" else ".cmx" in
+             (* toolchain version participates in staleness: a .cmi/.cmx
+                built by OCaml X.Y is unreadable by OCaml X.Z, so the stamp
+                binds both source+dep content and the active compiler *)
+             let ocaml_ver =
+               let ic = Unix.open_process_in ("ocamlfind " ^ comp ^ " -version 2>/dev/null") in
+               let v = try input_line ic with End_of_file -> "unknown" in
+               close_in ic; String.trim v
+             in
              let read_file p =
                try
                  let ic = open_in_bin p in
@@ -309,7 +317,7 @@ let () =
                  Hashtbl.replace uhashes fname uh;
                  let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
                  let obj = Filename.concat objdir (fname ^ obj_ext) in
-                 if String.trim (read_file stamp) <> uh || not (Sys.file_exists obj) then begin
+                 if String.trim (read_file stamp) <> (uh ^ " " ^ ocaml_ver) || not (Sys.file_exists obj) then begin
                    let mlp = Filename.concat objdir (fname ^ ".ml") in
                    if read_file mlp <> src then begin
                      let oc = open_out mlp in
@@ -395,7 +403,7 @@ let () =
                (fun (fname, uh) ->
                  let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
                  let oc = open_out stamp in
-                 output_string oc (uh ^ "\n"); close_out oc)
+                 output_string oc (uh ^ " " ^ ocaml_ver ^ "\n"); close_out oc)
                !stale;
              let objs =
                String.concat " "

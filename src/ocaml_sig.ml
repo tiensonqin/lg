@@ -152,7 +152,17 @@ let signature_of modpath =
     (match find_cmi modpath with
      | None -> None
      | Some (file, k) ->
-       let cmi = Cmi_format.read_cmi file in
+       let cmi =
+         try Cmi_format.read_cmi file
+         with Cmi_format.Error _ ->
+           (* .cmi layout/magic is toolchain-bound: a cmi written by a
+              different OCaml family (e.g. OxCaml vs upstream) cannot be
+              read — report which side produced the file *)
+           failwith
+             (Printf.sprintf
+                "ocaml.%s: %s was compiled by a different OCaml toolchain (lg reads OCaml %s interfaces)"
+                modpath file Sys.ocaml_version)
+       in
        let unit =
          String.capitalize_ascii
            (Filename.chop_extension (Filename.basename file))
