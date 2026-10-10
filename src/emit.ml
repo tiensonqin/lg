@@ -812,8 +812,12 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         buf_add b ("(" ^ unbox (List.nth args 0) ^ " " ^ op ^ " " ^ unbox (List.nth args 1) ^ ")"))
    | "<" | "<=" | ">" | ">=" | "<." | "<=." | ">." | ">=." ->
      let op = if name.[String.length name - 1] = '.' then String.sub name 0 (String.length name - 1) else name in
-     let unbox e = if is_any e.ety then "(Lg_rt.as_int " ^ arg_str e ^ ")" else arg_str e in
-     buf_add b ("(" ^ unbox (List.nth args 0) ^ " " ^ op ^ " " ^ unbox (List.nth args 1) ^ ")")
+     if is_any (t 0) || is_any (t 1) then
+       (* dyn ordering: dyn_cmp handles int/float mixes and fails loudly
+          on non-comparable payloads *)
+       buf_add b ("(Lg_rt.dyn_cmp " ^ conv TAny (t 0) (a 0) ^ " " ^ conv TAny (t 1) (a 1) ^ " " ^ op ^ " 0)")
+     else
+       buf_add b ("(" ^ a 0 ^ " " ^ op ^ " " ^ a 1 ^ ")")
    | "=" | "not=" ->
      (* structural equality: clj maps/sets carry a compare fn inside, so
         polymorphic compare crashes on them — go through the clj-core

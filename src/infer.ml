@@ -375,7 +375,7 @@ let is_cmp_op = function "<" | "<=" | ">" | ">=" -> true | _ -> false
 let is_special_builtin = function
   | "first" | "next" | "rest" | "seq" | "get" | "nth" | "conj" | "assoc"
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
-  | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range"
+  | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range" | "int" | "float" | "name"
   | "take" | "drop" | "cons" | "tuple"
   | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
   | "str" | "println" | "print" | "pr-str" | "swap!"
@@ -2140,6 +2140,18 @@ and infer_special ctx l name ce arg_es =
   | "empty?", [ c ] ->
     let _ = with_coll c (fun _ -> TBool) (fun _ -> TBool) (fun _ -> TBool) (fun _ _ -> TBool) (fun _ -> TBool) in
     mk l TBool (ECall (ce, arg_es))
+  | ("int" | "float"), [ x ] ->
+    (* conversions are only defined on numeric/char/string/any inputs;
+       anything else would emit an identity that claims the wrong type *)
+    (match repr x with
+     | TInt | TFloat | TChar | TString | TAny | TVar _ -> ()
+     | t -> type_error l (Printf.sprintf "%s not supported on %s" name (string_of_ty t)));
+    mk l (if name = "int" then TInt else TFloat) (ECall (ce, arg_es))
+  | "name", [ x ] ->
+    (match repr x with
+     | TKeyword | TSymbol | TString | TAny | TVar _ -> ()
+     | t -> type_error l (Printf.sprintf "name not supported on %s" (string_of_ty t)));
+    mk l TString (ECall (ce, arg_es))
   | "contains?", [ c; x ] ->
     let ok = with_coll c (fun a -> unify l x a; true) (fun a -> unify l x a; true) (fun a -> unify l x a; true) (fun k _v -> unify l x k; true) (fun _ -> false) in
     if not ok then type_error l "contains? not supported on this type";
