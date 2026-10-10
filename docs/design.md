@@ -281,6 +281,28 @@ All of docs/v2.md landed (detail lives there):
   clj-core/rrbvec `ox` branches (`@ local` params on non-retaining
   readers + `Seq.*_local` twins); `test/oxlocal.lg` exercises the full
   chain.
+
+  Measured (bench/stacklit.lg — 1M-iteration loop allocating a 3-element
+  vec literal and strict-reading it via `count`/`reduce`, plus an FBIP
+  conj-chain probe in bench/fbip_ocaml.ml; minor-GC counts via
+  OCAMLRUNPARAM/Gc.quick_stat, wall = best-of-3):
+
+  | scenario | ocaml 5.5 | oxcaml 5.4 | OCaml baseline | delta |
+  |---|---|---|---|---|
+  | minor words allocated | 54.0M | 37.0M | 54.0M | **−31%** |
+  | minor collections | 206 | 35 | 206 | **−83%** |
+  | wall time | 0.040s | 0.044s | 0.038s | +10% |
+  | conj chain, 5M (s) | — | — | persistent 0.128 / builder 0.075 | **1.7x headroom** |
+
+  Honest reading: `stack_`/`@ local` cuts minor-heap allocation by a
+  third on the literal-heavy path (~17 words/iter: cons spine + vec
+  header stay on the region) and minor collections drop 6x, but wall
+  time is flat-to-slightly-worse — the win is GC pressure, not speed.
+  The remaining 37M words are the per-iteration callback closure,
+  which must stay global (clj-core `_local` signatures take global
+  callbacks so ordinary fns like `(+)` keep working). FBIP/transient
+  builders have ~1.7x headroom on pure conj chains — already exploited
+  by the owned-spine lowering; `unique_` would add nothing there.
 - **`--strict`** — heterogeneous literals require `^any`-family
   annotation; every `any` in a program is one the author wrote.
 - **Named `fn` self-recursion, `case`, `defrecord` (map-backed ctor +

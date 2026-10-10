@@ -1,0 +1,10 @@
+(ns stacklit)
+;; hot loop: per-iteration short-lived vec literal + strict scalar reads.
+;; (nth reads elements that escape -> would force the vec global; count
+;; and reduce return scalars, so the whole vec can stay stack-allocated.)
+(defn spin ^(fn [int int] int) [n acc]
+  (if (= n 0) acc
+      (let [v [n (+ n 1) (+ n 2)]
+            m (reduce (fn [a b] (+ a b)) 0 v)]
+        (spin (- n 1) (+ acc (count v) m)))))
+(println (spin 1000000 0))

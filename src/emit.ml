@@ -318,7 +318,14 @@ and emit_call b (e : expr) ce args =
            let p = if i < List.length pts then List.nth pts i else TAny in
            (* a converted (boxed/unboxed) arg cannot be stack_-allocated *)
            let ident = conv p a.ety "x" = "x" in
-           buf_add c (conv p a.ety (arg_str ~local:(ident && arg_local a) a)))
+           (* stack_ an arg only when the callee borrows it: the
+              callee's `(p @ local)` list, when recorded *)
+           let pborrows =
+             match Hashtbl.find_opt Modes.global_local_params (m ^ "." ^ munge n) with
+             | Some ps -> i < List.length ps && List.nth ps i
+             | None -> false
+           in
+           buf_add c (conv p a.ety (arg_str ~local:(ident && pborrows && arg_local a) a)))
          args;
        buf_add c ")";
        buf_add b (conv ret sret (Buffer.contents c))
@@ -331,8 +338,9 @@ and emit_call b (e : expr) ce args =
          (fun i a ->
            buf_add b " ";
            let p = if i < List.length pts then List.nth pts i else TAny in
-           let ident = conv p a.ety "x" = "x" in
-           buf_add b (conv p a.ety (arg_str ~local:(ident && arg_local a) a)))
+           (* non-defn callees (vars, fields, closures) take global
+              params — never stack_ an argument *)
+           buf_add b (conv p a.ety (arg_str ~local:false a)))
          args;
        buf_add b ")");
 
@@ -784,7 +792,6 @@ and emit_sbuilder b root el ops =
 
 and emit_builtin_call ?(call_local = false) b ret name args =
   if not (emit_owned_chain b name args) then begin
-  let a n = arg_str (List.nth args n) in
   let t n = (List.nth args n).ety in
   let call_local = call_local && !oxcaml in
   (* strict seq readers take `xs @ local` in the ox build; lazy seq
@@ -796,6 +803,14 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         | Ast.ELocal b -> b.bmode = Ast.Local
         | Ast.EGlobal _ -> false
         | _ -> a.emode = Ast.Local)
+  in
+  (* an arg may only be stack_-allocated when the callee borrows that
+     position. The clj-core `_local` signatures borrow only collection
+     args — callback params are global, so fn (or fn-carrying) args must
+     never be marked local even when their own emode is Local. *)
+  let a n =
+    let e = List.nth args n in
+    arg_str ~local:(sloc n && (match repr (t n) with TVec _ | TList _ | TSet _ | TMap _ | TSeq _ | TString -> true | _ -> false)) e
   in
   let sconsi i g l = if sloc i then l else g in
   let sfn n = "Clj_core.Seq." ^ munge n in
