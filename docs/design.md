@@ -552,3 +552,31 @@ forms with no lg equivalent at all (objects, polymorphic variants,
 first-class modules) raise `Unsupported` -> `type not expressible in lg`.
 Mode analysis treats every `EOCamlCall` argument as escaping — cmi
 signatures carry no borrow metadata.
+
+## 18. Incremental compilation
+
+`lg build` caches per-module OCaml artifacts so unchanged sources are
+never recompiled.
+
+- **Granularity.** One OCaml compilation unit per lg module (plus the
+  `Lg_rt` runtime unit). Object files land in `<exe-dir>/.lg-obj/` —
+  scoped to the executable's output directory, so different build
+  destinations keep independent caches.
+- **Invalidation.** Each unit has a stamp file recording a content
+  hash: `Digest(emitted source + hashes of its lg :require deps)`.
+  A unit is rebuilt only when its own emitted source or any direct
+  dep's hash changed — mtimes and comment-only edits do not rebuild.
+  Dep changes propagate: rebuilding module M restamps M and its
+  downstream units get recompiled on the next build.
+- **Toolchain split.** Stamps are per (unit, toolchain):
+  `<unit>.ocamlc.stamp` vs `<unit>.ocamlopt.stamp`, so `--byte` and
+  native artifacts never mask each other's staleness (a shared stamp
+  previously let a byte build link a stale .cmo written by an earlier
+  native-source revision).
+- **Speed.** Single-module cold builds are dominated by the OCaml
+  toolchain (lg frontend <10ms on `test/` programs); warm rebuilds
+  with no source change are a hash check + relink (~0.1s). `--byte`
+  compiles units with ocamlc — ~3x faster cold, ~5x faster relink —
+  for the dev loop; ocamlopt stays the default for shipped binaries.
+  `test.sh`'s bench lane asserts cold/warm build times stay within
+  order-of-magnitude bounds (`LG_BENCH_*_MS`).

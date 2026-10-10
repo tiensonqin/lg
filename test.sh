@@ -178,4 +178,33 @@ else
   fail=1
 fi
 
+# compile-speed regression line (bench): cold builds a single module and a
+# two-module chain into a dedicated .lg-obj, plus a no-op warm relink.
+# Thresholds are order-of-magnitude guards (measured cold ~0.26s, warm
+# ~0.10s on an M-series); override via LG_BENCH_*_MS for slower machines.
+now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
+LG_BENCH_COLD_MS=${LG_BENCH_COLD_MS:-5000}
+LG_BENCH_DEPS_MS=${LG_BENCH_DEPS_MS:-8000}
+LG_BENCH_WARM_MS=${LG_BENCH_WARM_MS:-3000}
+BDIR=.test-bin/bench
+rm -rf "$BDIR" && mkdir -p "$BDIR"
+
+t0=$(now_ms)
+"$LG" build test/core.lg -I lib -o "$BDIR/core" >/dev/null 2>&1
+cold=$(( $(now_ms) - t0 ))
+echo "bench cold-core ${cold}ms (limit ${LG_BENCH_COLD_MS}ms)"
+[ "$cold" -lt "$LG_BENCH_COLD_MS" ] || { echo "FAIL(bench-cold)"; fail=1; }
+
+t0=$(now_ms)
+"$LG" build test/lgi.lg -I lib -o "$BDIR/lgi" >/dev/null 2>&1
+deps=$(( $(now_ms) - t0 ))
+echo "bench cold-deps ${deps}ms (limit ${LG_BENCH_DEPS_MS}ms)"
+[ "$deps" -lt "$LG_BENCH_DEPS_MS" ] || { echo "FAIL(bench-deps)"; fail=1; }
+
+t0=$(now_ms)
+"$LG" build test/core.lg -I lib -o "$BDIR/core" >/dev/null 2>&1
+warm=$(( $(now_ms) - t0 ))
+echo "bench warm-relink ${warm}ms (limit ${LG_BENCH_WARM_MS}ms)"
+[ "$warm" -lt "$LG_BENCH_WARM_MS" ] || { echo "FAIL(bench-warm)"; fail=1; }
+
 exit $fail
