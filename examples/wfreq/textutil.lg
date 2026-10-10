@@ -1,8 +1,9 @@
+(:require [lg.str :as str])
 (ns textutil)
 
 ;; tokenizer: lowercase, split on non-alpha, drop empties
 (defn tokenize [s]
-  (filter (fn [w] (not (blank? w))) (re-split "[^a-z]+" (lower-case s))))
+  (filter (fn [w] (not (str/blank? w))) (str/re-split "[^a-z]+" (str/lower-case s))))
 
 ;; top-k by count desc then word asc; key = (tuple -count word)
 (defn top-k ^(fn [int (map string int)] (seq (tuple string int))) [k counts]

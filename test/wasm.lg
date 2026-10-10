@@ -1,6 +1,7 @@
 ;; wasm backend golden: pure language + collections over wasm_of_ocaml.
 ;; io/system builtins have degraded wasm stubs (now-ms, argv, re-*): keep
 ;; this test to verified-working constructs so CI and local runs agree.
+(:require [lg.io :as io])
 (println (str "arith: " (+ 1 2) " " (* 3 4) " " (mod 17 5)))
 (println (str "vec: " (mapv (fn [x] (* x x)) [1 2 3])))
 (println (str "seq: " (doall (filter (fn [x] (= (mod x 2) 0)) (range 10)))))
@@ -9,5 +10,5 @@
 (println (str "str: " (str "a" "b" 1 :k)))
 (let [f (fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))]
   (println (str "fib10: " (f 10))))
-(println (str "env: " (match (env "PATH") (Some p) (if (> (count p) 0) "yes" "empty") None "none")))
-(println (str "exists: " (file-exists? "/tmp")))
+(println (str "env: " (match (io/env "PATH") (Some p) (if (> (count p) 0) "yes" "empty") None "none")))
+(println (str "exists: " (io/file-exists? "/tmp")))

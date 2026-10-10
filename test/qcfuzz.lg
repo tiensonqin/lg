@@ -2,7 +2,7 @@
 ;; Uses qc's split-seed rng to emit random s-expr source files (fuzzed
 ;; into test/roundtrip.exe by test.sh) and small well-formed programs
 ;; (built and run by test.sh as an emit smoke layer).
-(ns qcfuzz (:require [qc]))
+(ns qcfuzz (:require [lg.str :as str] [lg.io :as io] [qc]))
 
 (def dir ".test-bin/qcfuzz.d")
 
@@ -41,7 +41,7 @@
         n0 (mod (qc/rng-next s) 5)
         n (match (= shape 2) true (* n0 2) _ n0)
         r (gen-items (qc/rng-next (qc/rng-next s)) depth n [])
-        body (join " " (nth r 0))
+        body (str/join " " (nth r 0))
         s3 (nth r 1)]
     (match shape
       0 (tuple (str "(" body ")") s3)
@@ -51,7 +51,7 @@
 
 (defn gen-sexpr-file [i]
   (let [r (gen-form (+ 1000 i) 4)]
-    (spit (str dir "/sexpr_" (str i) ".lg") (str (nth r 0) "\n"))))
+    (io/spit (str dir "/sexpr_" (str i) ".lg") (str (nth r 0) "\n"))))
 
 ;; ---------- program emit smoke ----------
 
@@ -68,7 +68,7 @@
 (defn gen-prog-file [i s]
   (let [a (- (mod (qc/rng-next s) 101) 50)
         b (- (mod (qc/rng-next (qc/rng-next s)) 101) 50)]
-    (spit (str dir "/prog_" (str i) ".lg") (prog-text (mod s 5) a b))))
+    (io/spit (str dir "/prog_" (str i) ".lg") (prog-text (mod s 5) a b))))
 
 ;; ---------- driver ----------
 

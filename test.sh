@@ -123,6 +123,7 @@ else
   fail=1
 fi
 
+
 # compat corpus: frozen v1 programs — add-only, must stay green forever
 for src in test/compat/*.lg; do
   [ -e "$src" ] || continue

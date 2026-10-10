@@ -273,6 +273,14 @@ own dogfood.
 Builtins are grouped by domain; names and argument order follow
 `clojure.core` unless noted.
 
+**Builtin namespaces.** Like Clojure, string/io/set helpers live in
+builtin namespaces — `lg.str`, `lg.io`, `lg.set` — reached only via
+`(:require [lg.str :as str] [lg.io :as io] [lg.set :as set])` (no `-I`
+needed; they are virtual modules, `lg.*` is reserved). Qualified
+calls are `str/join`, `io/slurp`, `set/union`; the fully-qualified
+`lg.str/join` also resolves without a require. The bare names are
+not in scope — `(join …)` is E102 with a `did you mean` hint.
+
 - **Arithmetic/comparison**: `+ - * / mod` (int), `+. -. *. /.`
   (float), `inc dec abs min max`, `= < <= > >=` — `=`/`not=` are
   *structural* and dispatch on the operand's static type
@@ -301,16 +309,18 @@ Builtins are grouped by domain; names and argument order follow
   frequencies partition partition-all distinct dedupe into doall
   dorun lazy-seq some every? juxt comp partial identity
   constantly apply`.
-- **Strings**: `str subs split join trim triml trimr upper-case
-  lower-case blank? includes? starts-with? ends-with? replace` —
-  `subs` is 2- or 3-ary; `str`/`pr-str` print per static type.
+- **lg.str** (`str/…`): `subs split join trim triml trimr
+  upper-case lower-case blank? includes? starts-with? ends-with?
+  replace` + regex-lite `re-find re-matches re-seq re-split
+  re-replace` (pattern first, subject second). `subs` is 2- or
+  3-ary; `join` is `(str/join coll)` or `(str/join sep coll)`.
+- **lg.io** (`io/…`): `slurp spit read-line argv env file-exists?
+  sh now-ms` — sh/read-line/now-ms are native-only.
+- **lg.set** (`set/…`): `union intersection difference subset?
+  superset? select` — clojure.set semantics.
 - **Atoms**: `atom deref @ reset! swap!`.
-- **IO/system** (native+melange): `slurp spit read-line argv env
-  file-exists? sh now-ms exit`.
-- **Regex-lite**: `re-find re-matches re-seq re-split re-replace`
-  — pattern first, subject second.
 - **Misc**: `tuple`, `int`/`float`/`str`/`name` coercions,
-  `println print pr-str`, `gensym` (macro context).
+  `println print pr-str`, `exit`, `gensym` (macro context).
 - **Exceptions**: `exn` (opaque handle type), `(exn s)`,
   `throw`, `exn-message` — see §3.
 - **Dispatch matrix.** The builtin × collection-kind table — which

@@ -1,6 +1,7 @@
 ;; perf baseline: run with `lg build test/perf.lg -o /tmp/perf && /tmp/perf`
+(:require [lg.str :as str] [lg.io :as io])
 (defn bench [name f]
-  (let [t0 (now-ms) r (f) t1 (now-ms)]
+  (let [t0 (io/now-ms) r (f) t1 (io/now-ms)]
     (println (str name ": " (- t1 t0) "ms -> " (str r)))))
 
 (let [n 200000
@@ -12,5 +13,5 @@
   (bench "atom+recur 1M" (fn []
     (let [f (fn g [i acc] (match (< i 1000000) true (g (+ i 1) (+ acc i)) false acc))]
       (f 0 0))))
-  (bench "str join 100k" (fn [] (count (join "," (map str (range 0 100000)))))
+  (bench "str join 100k" (fn [] (count (str/join "," (map str (range 0 100000)))))
   ))

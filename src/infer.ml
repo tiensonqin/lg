@@ -281,9 +281,25 @@ let ann_vars = function Some t -> free_tvars t [] | None -> []
    happens in the special handlers in infer_app. *)
 let builtin_table : (string, unit -> ty) Hashtbl.t = Hashtbl.create 131
 
+(* name -> builtin namespace: entries in lg.str/lg.io/lg.set resolve only
+   qualified (`alias/name` via :require, or the full `lg.str/name`). The
+   `lg.*` namespace family is reserved for builtin namespaces. *)
+let builtin_ns : (string, string) Hashtbl.t = Hashtbl.create 31
+
 let reg n t = Hashtbl.replace builtin_table n t
 
-let builtin_names () = Hashtbl.fold (fun n _ acc -> n :: acc) builtin_table []
+let reg_ns ns n t = reg n t; Hashtbl.replace builtin_ns n ns
+
+let builtin_ns_member ns n =
+  match Hashtbl.find_opt builtin_ns n with Some tns -> tns = ns | None -> false
+
+let builtin_names () =
+  Hashtbl.fold (fun n _ acc -> if Hashtbl.mem builtin_ns n then acc else n :: acc) builtin_table []
+
+let builtin_ns_names ns =
+  Hashtbl.fold (fun n tns acc -> if tns = ns then n :: acc else acc) builtin_ns []
+
+let builtin_namespaces = [ "lg.str"; "lg.io"; "lg.set" ]
 
 let () =
   let v () = fresh_var () in
@@ -326,7 +342,14 @@ let () =
   reg "pop" (fun () -> let a = v () in f [ TVec a ] (TVec a));
   reg "set" (fun () -> let a = v () in f [ TList a ] (TSet a));
   reg "disj" (fun () -> let a = v () in f [ TSet a; a ] (TSet a));
-  reg "union" (fun () -> let a = v () in f [ TSet a; TSet a ] (TSet a));
+  (* lg.set — clojure.set: qualified access only, e.g. set/union *)
+  List.iter
+    (fun n -> reg_ns "lg.set" n (fun () -> let a = v () in f [ TSet a; TSet a ] (TSet a)))
+    [ "union"; "intersection"; "difference" ];
+  List.iter
+    (fun n -> reg_ns "lg.set" n (fun () -> let a = v () in f [ TSet a; TSet a ] TBool))
+    [ "subset?"; "superset?" ];
+  reg_ns "lg.set" "select" (fun () -> let a = v () in f [ f [ a ] TBool; TSet a ] (TSet a));
   reg "atom" (fun () -> let a = v () in f [ a ] (TAtom a));
   reg "deref" (fun () -> let a = v () in f [ TAtom a ] a);
   reg "reset!" (fun () -> let a = v () in f [ TAtom a; a ] a);
@@ -380,36 +403,36 @@ let () =
   reg "sort-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (v ()));
   reg "group-by" (fun () -> let a = v () and k = v () in f [ f [ a ] k; v () ] (TMap (k, TList a)));
   reg "frequencies" (fun () -> let a = v () in f [ TList a ] (TMap (a, TInt)));
-  (* io / system: slurp/spit/argv/env/file-exists? work on every backend;
-     sh/read-line/now-ms/re-* emit Unix/Str code and are native-only *)
-  reg "slurp" (fun () -> f [ TString ] TString);
-  reg "spit" (fun () -> f [ TString; TString ] TUnit);
-  reg "env" (fun () -> f [ TString ] (TOption TString));
-  reg "file-exists?" (fun () -> f [ TString ] TBool);
-  reg "sh" (fun () -> f [ TString ] TString);
-  reg "split" (fun () -> f [ TString; TString ] (TList TString));
-  reg "trim" (fun () -> f [ TString ] TString);
-  reg "triml" (fun () -> f [ TString ] TString);
-  reg "trimr" (fun () -> f [ TString ] TString);
-  reg "upper-case" (fun () -> f [ TString ] TString);
-  reg "lower-case" (fun () -> f [ TString ] TString);
-  reg "blank?" (fun () -> f [ TString ] TBool);
-  reg "includes?" (fun () -> f [ TString; TString ] TBool);
-  reg "starts-with?" (fun () -> f [ TString; TString ] TBool);
-  reg "ends-with?" (fun () -> f [ TString; TString ] TBool);
-  reg "replace" (fun () -> f [ TString; TString; TString ] TString);
-  reg "re-find" (fun () -> f [ TString; TString ] (TOption TString));
-  reg "re-matches" (fun () -> f [ TString; TString ] (TOption TString));
-  reg "re-seq" (fun () -> f [ TString; TString ] (TList TString));
-  reg "re-split" (fun () -> f [ TString; TString ] (TList TString));
-  reg "re-replace" (fun () -> f [ TString; TString; TString ] TString);
+  (* lg.io — io/system builtins. slurp/spit/argv/env/file-exists? work on
+     every backend; sh/read-line/now-ms emit Unix code, native-only. *)
+  List.iter (fun n -> reg_ns "lg.io" n (fun () -> f [ TString ] TString)) [ "slurp"; "sh" ];
+  reg_ns "lg.io" "spit" (fun () -> f [ TString; TString ] TUnit);
+  reg_ns "lg.io" "env" (fun () -> f [ TString ] (TOption TString));
+  reg_ns "lg.io" "file-exists?" (fun () -> f [ TString ] TBool);
+  (* lg.str — clojure.string. re-* emit Str code, native-only. *)
+  List.iter
+    (fun n -> reg_ns "lg.str" n (fun () -> f [ TString ] TString))
+    [ "trim"; "triml"; "trimr"; "upper-case"; "lower-case" ];
+  List.iter
+    (fun n -> reg_ns "lg.str" n (fun () -> f [ TString; TString ] TBool))
+    [ "includes?"; "starts-with?"; "ends-with?" ];
+  reg_ns "lg.str" "blank?" (fun () -> f [ TString ] TBool);
+  reg_ns "lg.str" "split" (fun () -> f [ TString; TString ] (TList TString));
+  reg_ns "lg.str" "replace" (fun () -> f [ TString; TString; TString ] TString);
+  List.iter
+    (fun n -> reg_ns "lg.str" n (fun () -> f [ TString; TString ] (TOption TString)))
+    [ "re-find"; "re-matches" ];
+  List.iter
+    (fun n -> reg_ns "lg.str" n (fun () -> f [ TString; TString ] (TList TString)))
+    [ "re-seq"; "re-split" ];
+  reg_ns "lg.str" "re-replace" (fun () -> f [ TString; TString; TString ] TString);
   (* 0-arity: the reg scheme only names the builtin for resolution; the
      special arms below assign the real [] arity *)
-  reg "read-line" (fun () -> f [ TUnit ] (TOption TString));
-  reg "argv" (fun () -> f [ TUnit ] (TList TString));
-  reg "now-ms" (fun () -> f [ TUnit ] TInt);
-  reg "subs" (fun () -> f [ TString; TInt ] TString);
-  reg "join" (fun () -> f [ v () ] TString);
+  reg_ns "lg.io" "read-line" (fun () -> f [ TUnit ] (TOption TString));
+  reg_ns "lg.io" "argv" (fun () -> f [ TUnit ] (TList TString));
+  reg_ns "lg.io" "now-ms" (fun () -> f [ TUnit ] TInt);
+  reg_ns "lg.str" "subs" (fun () -> f [ TString; TInt ] TString);
+  reg_ns "lg.str" "join" (fun () -> f [ v () ] TString);
   (* lazy seq producers/realizers — special arms below assign exact types *)
   reg "lazy-seq" (fun () -> let a = v () in f [ TSeq a ] (TSeq a));
   reg "doall" (fun () -> let a = v () in f [ TSeq a ] (TList a));
@@ -485,6 +508,7 @@ let value_builtin_ok = function
   | "odd?" | "pos?" | "pr-str" | "print" | "println" | "reduce" | "reductions" | "remove"
   | "repeat" | "replace" | "reset!" | "rest" | "reverse" | "second" | "seq" | "seq?"
   | "set?" | "slurp" | "some" | "some?" | "sort" | "sort-by" | "split" | "split-at"
+  | "union" | "intersection" | "difference" | "subset?" | "superset?" | "select"
   | "split-with" | "str" | "string?" | "swap!" | "symbol?" | "take" | "take-nth"
   | "take-while" | "trim" | "triml" | "trimr" | "upper-case" | "vals" | "vec" | "vec?"
   | "zero?" | "zipmap" -> true
@@ -1290,6 +1314,9 @@ and resolve_unmarked ctx l s =
      | None ->
        let target = match List.assoc_opt ns ctx.modl.requires with Some full -> full | None -> ns in
        if target = ctx.modl.mname then infer_symbol ctx l n
+       else if builtin_ns_member target n then mk l (instantiate_builtin_ty n) (EBuiltin n)
+       else if List.mem target builtin_namespaces then
+         type_error l (Printf.sprintf "unresolved symbol %s (no such builtin in %s)" s target)
        else (
          match Hashtbl.find_opt ctx.globals target with
          | Some tbl ->
@@ -1318,10 +1345,16 @@ and resolve_unmarked ctx l s =
            | Some modpath -> resolve_ocaml_value ctx l s modpath s
            | None ->
              (match Hashtbl.find_opt builtin_table s with
-              | Some _ -> mk l (instantiate_builtin_ty s) (EBuiltin s)
-              | None -> unbound_err ctx l s))))
+              | Some _ when not (Hashtbl.mem builtin_ns s) ->
+                mk l (instantiate_builtin_ty s) (EBuiltin s)
+              | _ -> unbound_err ctx l s))))
 
 and unbound_err ctx l s =
+  (match Hashtbl.find_opt builtin_ns s with
+   | Some ns ->
+     Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s)
+       [ Printf.sprintf "did you mean `%s/%s`?" (String.sub ns 3 (String.length ns - 3)) s ]
+   | None ->
   let cand =
     List.fold_left (fun acc (k,_) -> k :: acc) [] ctx.env
     @ (match Hashtbl.find_opt ctx.globals ctx.modl.mname with
@@ -1332,7 +1365,7 @@ and unbound_err ctx l s =
   (match Err.did_you_mean s cand with
    | Some m -> Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s)
                  ["did you mean `" ^ m ^ "`?"]
-   | None -> Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s) [])
+   | None -> Err.err l "E102" (Printf.sprintf "unresolved symbol %s" s) []))
 
 and quote_to_expr _l f : expr =
   let rec go f : expr =

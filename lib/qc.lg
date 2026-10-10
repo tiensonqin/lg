@@ -5,6 +5,7 @@
 ;;   shrink : (fn [a] (seq a))          - smaller candidate values
 ;; for-all runs n deterministic trials; on failure it shrinks to a minimal
 ;; counterexample and reports it.
+(:require [lg.str :as str])
 (ns qc)
 
 (defn rng-next "Advance the splittable LCG seed (non-negative ints only)." [s] (mod (+ (* s 1103515245) 12345) 2147483648))
@@ -62,7 +63,7 @@
                          c (nth qc-alpha (mod s2 (count qc-alpha)) "a")]
                      (go (- i 1) s2 (str acc c)))))]
         (go n s "")))
-    (fn [^string v] (concat ["" (subs v 0 (max 0 (- (count v) 1)))] []))))
+    (fn [^string v] (concat ["" (str/subs v 0 (max 0 (- (count v) 1)))] []))))
 
 (defn gen-vec "vec generator: element generator g, n elements." [g n]
   (gen

@@ -256,7 +256,10 @@ let completion id _uri text =
       (fun (al, ns) ->
         match List.find_opt (fun (d : Ast.modl) -> d.Ast.mname = ns) mods with
         | Some dm -> List.iter (fun n -> item (al ^ "/" ^ n) 3 (ns ^ " (require)")) (dep_entries dm)
-        | None -> ())
+        | None ->
+          if List.mem ns Infer.builtin_namespaces then
+            List.iter (fun n -> item (al ^ "/" ^ n) 3 (ns ^ " (builtin)")) (Infer.builtin_ns_names ns)
+          else ())
       m.Ast.requires;
     end);
   Buffer.add_char items ']';

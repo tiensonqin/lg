@@ -387,6 +387,7 @@ let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : strin
       let roots' = dir :: roots in
       List.iter
         (fun rn ->
+          if not (List.mem rn Infer.builtin_namespaces) then
           match find_module_file ~roots:roots' rn with
           | Some f -> load f
           | None ->

@@ -1745,6 +1745,25 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      if is_any (t 0) || is_any (t 1) then
        buf_add b ("(Clj_core.Set.union " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
      else buf_add b ("(Clj_core.Set.union " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "intersection" ->
+     if is_any (t 0) || is_any (t 1) then
+       buf_add b ("(Clj_core.Set.intersection " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
+     else buf_add b ("(Clj_core.Set.intersection " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "difference" ->
+     if is_any (t 0) || is_any (t 1) then
+       buf_add b ("(Clj_core.Set.difference " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
+     else buf_add b ("(Clj_core.Set.difference " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "subset?" ->
+     if is_any (t 0) || is_any (t 1) then
+       buf_add b ("(Clj_core.Set.subset_ " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
+     else buf_add b ("(Clj_core.Set.subset_ " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "superset?" ->
+     if is_any (t 0) || is_any (t 1) then
+       buf_add b ("(Clj_core.Set.superset_ " ^ conv (TSet TAny) (t 0) (a 0) ^ " " ^ conv (TSet TAny) (t 1) (a 1) ^ ")")
+     else buf_add b ("(Clj_core.Set.superset_ " ^ a 0 ^ " " ^ a 1 ^ ")")
+   | "select" ->
+     let s1 = if is_any (t 1) then conv (TSet TAny) (t 1) (a 1) else a 1 in
+     buf_add b ("(Clj_core.Set.select " ^ a 0 ^ " " ^ s1 ^ ")")
    | "map" ->
      (* printer builtins passed as fns adapt to the element type *)
      let f = (match (List.nth args 0).desc, repr (t 1) with
@@ -2208,6 +2227,9 @@ and emit_builtin_value name ty =
   | "blank?" -> "Lg_rt.str_blank"
   | "split" -> "(fun s sep -> Lg_rt.split_on sep s)"
   | "includes?" -> "Lg_rt.str_contains" | "replace" -> "(fun s m r -> Lg_rt.str_replace_lit m r s)"
+  | "union" -> "Clj_core.Set.union" | "intersection" -> "Clj_core.Set.intersection"
+  | "difference" -> "Clj_core.Set.difference" | "subset?" -> "Clj_core.Set.subset_"
+  | "superset?" -> "Clj_core.Set.superset_" | "select" -> "Clj_core.Set.select"
   | "zero?" -> "(fun x -> x = 0)" | "pos?" -> "(fun x -> x > 0)" | "neg?" -> "(fun x -> x < 0)"
   | "even?" -> "(fun x -> x mod 2 = 0)" | "odd?" -> "(fun x -> x mod 2 <> 0)"
   | "int?" -> "(fun x -> match x with Lg_rt.DInt _ -> true | _ -> false)"

@@ -1,5 +1,6 @@
 ;; mini Lisp interpreter in lg: reader + eval with lexical envs and closures.
 ;; Values and parsed forms share the `v` variant — like a real Lisp's s-expr.
+(:require [lg.str :as str])
 (ns lispi-test)
 
 (defvariant lv
@@ -51,12 +52,12 @@
 (defn rd-atom [^string s ^int i]
   (let [n (count s)
         go (fn go [j]
-             (if (and (< j n) (not (delim? (subs s j (+ j 1)))))
+             (if (and (< j n) (not (delim? (str/subs s j (+ j 1)))))
                (go (+ j 1))
                j))
         j (go i)
-        tok (subs s i j)]
-    (match (re-matches "-?[0-9]+" tok)
+        tok (str/subs s i j)]
+    (match (str/re-matches "-?[0-9]+" tok)
       (Some n2) (vcons (vnum (int tok)) (vnum j))
       None
       (match tok
@@ -69,16 +70,16 @@
 (defn rd-string [^string s ^int i]
   (let [n (count s)
         go (fn go [j]
-             (if (and (< j n) (not (= (subs s j (+ j 1)) "\"")))
+             (if (and (< j n) (not (= (str/subs s j (+ j 1)) "\"")))
                (go (+ j 1))
                j))
         j (go i)]
-    (vcons (vstr (subs s i j)) (vnum (+ j 1)))))
+    (vcons (vstr (str/subs s i j)) (vnum (+ j 1)))))
 
 ;; skip whitespace, return next index
 (defn skip-ws [^string s ^int i]
   (let [n (count s)]
-    (let [go (fn go [j] (if (and (< j n) (wspace? (subs s j (+ j 1)))) (go (+ j 1)) j))]
+    (let [go (fn go [j] (if (and (< j n) (wspace? (str/subs s j (+ j 1)))) (go (+ j 1)) j))]
       (go i))))
 
 ;; read one form at i -> (vcons form (vnum i'))
@@ -87,7 +88,7 @@
     (match (>= i n)
       true (vcons (verr "eof") (vnum i))
       false
-      (match (subs s i (+ i 1))
+      (match (str/subs s i (+ i 1))
         "(" (rd-list s (+ i 1) vnil ")")
         "[" (rd-list s (+ i 1) vnil "]")
         "\"" (rd-string s (+ i 1))
@@ -102,7 +103,7 @@
     (match (>= i n)
       true (vcons (verr "unclosed list") (vnum i))
       false
-      (match (= (subs s i (+ i 1)) endc)
+      (match (= (str/subs s i (+ i 1)) endc)
         true (vcons (v-rev acc) (vnum (+ i 1)))
         false
         (let [q (rd-form s i)

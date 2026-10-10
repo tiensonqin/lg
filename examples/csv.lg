@@ -1,13 +1,14 @@
+(:require [lg.str :as str])
 (ns csvcli)
 
 ;; tiny CSV reader: file -> seq of maps keyed by the header row
 (defn parse-csv [text]
-  (let [ls (filter (fn [l] (not (blank? l))) (split text "\n"))]
+  (let [ls (filter (fn [l] (not (str/blank? l))) (str/split text "\n"))]
     (match ls
       [] []
-      _ (let [header (split (nth ls 0) ",")
+      _ (let [header (str/split (nth ls 0) ",")
               rows (rest ls)]
-          (mapv (fn [r] (into {} (zipmap header (split r ",")))) rows)))))
+          (mapv (fn [r] (into {} (zipmap header (str/split r ",")))) rows)))))
 
 ;; column lookup through the parsed maps + typed nth defaults
 (defn ages [rows]

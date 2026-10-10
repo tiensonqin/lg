@@ -424,12 +424,12 @@ let core_page ~title ~tutorials ~mods =
   Buffer.add_string b (sidebar ~tutorials mods "core");
   Buffer.add_string b "<main><h1><code>core</code></h1>";
   Buffer.add_string b "<div class=\"sub\">The lg core library — special forms and builtins available unqualified in every module.</div>";
-  let alpha entries name_of =
+  let alpha ?(label_of = fun n -> n) entries name_of =
     Buffer.add_string b "<p class=\"alpha\">";
     List.iteri
       (fun i (n, _, _) ->
         if i > 0 then Buffer.add_string b " \xc2\xb7 ";
-        Buffer.add_string b (Printf.sprintf "<a href=\"#%s\"><code>%s</code></a>" (esc (name_of n)) (esc n)))
+        Buffer.add_string b (Printf.sprintf "<a href=\"#%s\"><code>%s</code></a>" (esc (name_of n)) (esc (label_of n))))
       entries;
     Buffer.add_string b "</p>"
   in
@@ -457,7 +457,30 @@ let core_page ~title ~tutorials ~mods =
       Buffer.add_string b (Printf.sprintf "<dt id=\"%s\"><code>%s</code><span class=\"kind\">builtin</span></dt>" (esc n) (esc n));
       Buffer.add_string b (Printf.sprintf "<dd><pre>%s</pre><p>%s</p></dd>" (esc sig_) (esc doc)))
     Core_doc.builtins;
-  Buffer.add_string b "</dl></main></body></html>";
+  Buffer.add_string b "</dl>";
+  (* builtin namespaces: qualified-only entries, e.g. (:require [lg.str :as str]) *)
+  List.iter
+    (fun (ns, alias, entries) ->
+      Buffer.add_string b (Printf.sprintf "<h2><code>%s</code></h2>" (esc ns));
+      Buffer.add_string b (Printf.sprintf "<p class=\"sub\">(:require [%s :as %s]) — call as <code>%s/name</code>.</p>" (esc ns) (esc alias) (esc alias));
+      alpha ~label_of:(fun n -> alias ^ "/" ^ n) entries (fun n -> alias ^ "-" ^ n);
+      Buffer.add_string b "<dl class=\"entries\">";
+      List.iter
+        (fun (n, sig_opt, doc) ->
+          let sig_ =
+            match sig_opt with
+            | Some sg -> sg
+            | None ->
+              (try doc_ty (Infer.instantiate_builtin_ty n)
+               with Not_found -> "(builtin)")
+          in
+          Buffer.add_string b
+            (Printf.sprintf "<dt id=\"%s-%s\"><code>%s/%s</code><span class=\"kind\">builtin</span></dt>" (esc alias) (esc n) (esc alias) (esc n));
+          Buffer.add_string b (Printf.sprintf "<dd><pre>%s</pre><p>%s</p></dd>" (esc sig_) (esc doc)))
+        entries;
+      Buffer.add_string b "</dl>")
+    Core_doc.ns_builtins;
+  Buffer.add_string b "</main></body></html>";
   Buffer.contents b
 
 let generate ~title ~out ~tutorials mods =

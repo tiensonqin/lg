@@ -1,4 +1,4 @@
-(ns jsonp (:require [json :as j]))
+(ns jsonp (:require [lg.str :as str] [json :as j]))
 
 ;; recursive-descent JSON parser: text -> (j/json) via (tuple value pos).
 ;; state is threaded explicitly; errors return (tuple jnull -1) — the
@@ -11,17 +11,17 @@
 (defn wschar? [c]
   (or (= c " ") (or (= c "\t") (or (= c "\n") (= c "\r")))))
 
-(defn digit? [c] (includes? "0123456789" c))
+(defn digit? [c] (str/includes? "0123456789" c))
 
 (defn skip-ws ^(fn [string int] int) [s i]
-  (match (and (< i (count s)) (wschar? (subs s i (+ i 1))))
+  (match (and (< i (count s)) (wschar? (str/subs s i (+ i 1))))
     true (skip-ws s (+ i 1))
     false i))
 
 ;; scan [start, end) of s; end = first index failing pred, or len
 (defn scan-num ^(fn [string int] int) [s i]
   (match (and (< i (count s))
-              (includes? "0123456789+-.eE" (subs s i (+ i 1))))
+              (str/includes? "0123456789+-.eE" (str/subs s i (+ i 1))))
     true (scan-num s (+ i 1))
     false i))
 
@@ -31,24 +31,24 @@
         find-end (fn f [k]
                    (match (>= k (count s))
                      true -1
-                     false (match (= (subs s k (+ k 1)) "\"")
+                     false (match (= (str/subs s k (+ k 1)) "\"")
                              true k
                              false (f (+ k 1)))))
         e (find-end start)]
     (match (< e 0)
       true (perr "unterminated string" i)
-      false (pv (j/jstr (subs s start e)) (+ e 1)))))
+      false (pv (j/jstr (str/subs s start e)) (+ e 1)))))
 
 ;; literal keywords: true/false/null
 (defn parse-literal ^(fn [string int] pr) [s i]
   (match (>= (+ i 4) (count s))
     true (perr "unexpected eof" i)
     false
-    (match (includes? "true" (subs s i (+ i 4)))
+    (match (str/includes? "true" (str/subs s i (+ i 4)))
     true (pv (j/jbool true) (+ i 4))
-    false (match (includes? "false" (subs s i (+ i 5)))
+    false (match (str/includes? "false" (str/subs s i (+ i 5)))
             true (pv (j/jbool false) (+ i 5))
-            false (match (includes? "null" (subs s i (+ i 4)))
+            false (match (str/includes? "null" (str/subs s i (+ i 4)))
                     true (pv j/jnull (+ i 4))
                     false (perr "bad literal" i))))))
 
@@ -56,7 +56,7 @@
   (let [e (scan-num s i)]
     (match (= e i)
       true (perr "bad number" i)
-      false (pv (j/jnum (float (subs s i e))) e))))
+      false (pv (j/jnum (float (str/subs s i e))) e))))
 
 ;; forward: value parser dispatched on the next char
 (declare parse-value)
@@ -67,13 +67,13 @@
     (match (>= k (count s))
       true (perr "unexpected eof" k)
       false
-    (match (subs s k (+ k 1))
+    (match (str/subs s k (+ k 1))
       "]" (pv (j/jarr acc) (+ k 1))
       _ (match (parse-value s k)
           (perr m e) (perr m e)
           (pv v k2)
             (let [k3 (skip-ws s k2)]
-              (match (subs s k3 (+ k3 1))
+              (match (str/subs s k3 (+ k3 1))
                 "," (parse-arr-items s (+ k3 1) (conj acc v))
                 "]" (pv (j/jarr (conj acc v)) (+ k3 1))
                 _ (perr "expected , or ]" k3))))))))
@@ -84,20 +84,20 @@
     (match (>= k (count s))
       true (perr "unexpected eof" k)
       false
-    (match (subs s k (+ k 1))
+    (match (str/subs s k (+ k 1))
       "}" (pv (j/jobj acc) (+ k 1))
       "\"" (match (parse-string s k)
              (perr m e) (perr m e)
              (pv kvs k2)
                (let [kname (match kvs (j/jstr x) x _ "")
                      k3 (skip-ws s k2)]
-                 (match (subs s k3 (+ k3 1))
+                 (match (str/subs s k3 (+ k3 1))
                    ":" (match (parse-value s (skip-ws s (+ k3 1)))
                          (perr m e) (perr m e)
                          (pv vv k4)
                            (let [acc2 (assoc acc kname vv)
                                  k5 (skip-ws s k4)]
-                             (match (subs s k5 (+ k5 1))
+                             (match (str/subs s k5 (+ k5 1))
                                "," (parse-obj-items s (+ k5 1) acc2)
                                "}" (pv (j/jobj acc2) (+ k5 1))
                                _ (perr "expected , or }" k5))))
@@ -109,7 +109,7 @@
     (match (>= k (count s))
       true (perr "empty input" k)
       false
-        (let [c (subs s k (+ k 1))]
+        (let [c (str/subs s k (+ k 1))]
           (match c
             "{" (parse-obj-items s (+ k 1) {})
             "[" (parse-arr-items s (+ k 1) [])

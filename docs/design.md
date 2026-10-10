@@ -429,6 +429,15 @@ global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
   crash), `Lg_rt.dyn_eq` for `dyn` payloads, `=` for scalars.
 - **`juxt` returns `vec`.** Homogeneous when branch results unify,
   `vec<any>` otherwise (call-site emit boxes each branch result).
+- **Builtin namespaces.** `lg.str`, `lg.io`, `lg.set` are virtual
+  modules registered in the inferencer's builtin table with a
+  name→namespace side map (`builtin_ns`); `(:require [lg.str :as s])`
+  resolves the alias without a file lookup and `s/name` hits the
+  builtin's type. Bare names of moved functions are *not* bound —
+  `(join …)` is E102 with a `did you mean` hint, so namespaces are
+  enforced at compile time, not by convention. Fully-qualified
+  `lg.str/join` also resolves. Emit munging is unchanged: the same
+  `EBuiltin` node carries the name through.
 - **Seqable builtins take any collection.** `zipmap`, `sort`, `concat`,
   `apply`, `into`, `mapv`-family unify on the *element* type via
   `with_coll`, and emit listifies with `as_list`.

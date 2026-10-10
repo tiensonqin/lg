@@ -1,3 +1,4 @@
+(:require [lg.set :as set])
 (ns core-test)
 
 ;; arithmetic / comparison / str
@@ -52,7 +53,7 @@
 (println (str "set " s))
 (println (str "sconj " (conj s 4)))
 (println (str "disj " (disj s 1)))
-(println (str "union " (union s #{3 4})))
+(println (str "union " (set/union s #{3 4})))
 (println (str "scontains " (contains? s 2)))
 
 ;; seq conversions

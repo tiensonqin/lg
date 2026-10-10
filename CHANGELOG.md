@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Builtin namespaces** (`lg.str`, `lg.io`, `lg.set`). String,
+  io, and set helpers moved out of the bare namespace following
+  Clojure conventions: `str/join str/split str/subs str/trim
+  str/re-find str/re-replace …`, `io/slurp io/spit io/argv io/env
+  io/sh io/now-ms`, `set/union set/intersection set/difference
+  set/subset? set/superset? set/select`. Reached via
+  `(:require [lg.str :as str] …)` — builtin, no `-I` needed; the
+  fully-qualified `lg.str/join` resolves without a require. The
+  old bare names are gone: `(join …)` is E102 with a
+  did-you-mean hint (`str/join`). New set builtins shipped with
+  the namespace: `intersection`, `difference`, `subset?`,
+  `superset?`, `select`. `test/nscore.lg` exercises all three
+  namespaces end-to-end; `should_fail/bare_ns.lg` pins the E102.
 - `nil` is removed from the language.
   `()` is now *the* unit literal — it prints `()`, binds `unit?`,
   and is a static E101 in `if`/`when`/`and`/`or` condition
