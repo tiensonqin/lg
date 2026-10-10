@@ -207,7 +207,8 @@ be (a) now.
 | `gensym` | a | macro-time only |
 | macro eval subset: `if do let fn quote` + eval builtins | a | `map mapv filter reduce apply meta with-meta not` implemented over mvals; the advertised list now matches the implementation. |
 | cross-module macros via `ns/m` | a | unqualified lookup restricted to the expanding macro's own module — no last-wins global fallback. |
-| `defmacro` multi-arity / docstring | c | absent |
+| `defmacro` docstring | a | `(defmacro name "doc" [p] body)` — skipped like defn's |
+| `defmacro` multi-arity | c | absent |
 | macro must be defined textually before use | a | spec the ordering rule |
 
 ### 1.7 Top-level semantics
@@ -215,7 +216,7 @@ be (a) now.
 | Element | Class | Notes |
 |---|---|---|
 | `def` `defn` `defmacro` at top level only | a | nested `def` is unsupported — spec |
-| def-with-docstring `(def name "doc" v)`, `(defn name "doc" …)` | a | `defmacro` lacks docstring — add or spec |
+| def-with-docstring `(def name "doc" v)`, `(defn name "doc" …)`, `(defmacro name "doc" …)` | a | skipped uniformly |
 | **effect ordering** | a | `TEffect` rides in `tops` — effects emit at source position; they split `let rec .. and ..` groups (correct: a crossing effect breaks the cycle). |
 | `f` multi-arity name as a *value* | a | static error — "call it with a matching argument count". |
 | `__aN` arity-mangled globals | a | internal; freeze only that `f__aN` is reserved |

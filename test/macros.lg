@@ -23,4 +23,7 @@
 (println (str (-> 5 (+ 3) (* 2)) " " (->> '(1 2 3) (map inc) (filter (fn [x] (> x 2))) (first))))
 ;; cond
 (println (str (cond false "a" false "b" :else "z")))
+;; defmacro with docstring — skipped like defn's
+(defmacro twice-doc "evaluate x in a doubled context" [x] `(+ ~x ~x))
+(println (str (twice-doc 21)))
 (exit 0)

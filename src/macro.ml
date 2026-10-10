@@ -445,6 +445,7 @@ and eval_fn l env name rest =
     in
     MFn { mname = name; mparams = ps; mrest = rst; mbody = body; menv = env; mns = "" }
   | Atom (_, Symbol n) :: rest -> eval_fn l env n rest
+  | Atom (_, Str _) :: rest -> eval_fn l env name rest  (* docstring *)
   | _ -> form_error l "fn: expected parameter vector"
 
 and apply l v args : mval =
