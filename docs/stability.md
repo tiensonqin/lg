@@ -300,10 +300,10 @@ release:
    regressions invisible to `.out` diffs. Requires deterministic emit
    (binder counters are process-global; single-process emit is
    deterministic today — spec it).
-4. **Negative-message classes.** `should_fail` stays exit-code, but add a
-   `.err` glob check per feature (arity, mismatch, unbound, private-ref
-   post-`.lgi`, macro arg misuse, `TAny`-leak sites) so a regression that
-   fails for the wrong reason is caught.
+4. **Negative-message classes — DONE.** Each `should_fail/*.lg` may carry
+   a `*.err` file holding an ERE pattern that the compiler's stderr must
+   match — a failure for the wrong reason now fails the suite. All 13
+   current negatives carry patterns.
 5. **Macro corpus — DONE.** `test/hyg.lg` (hygiene/capture attempts),
    `test/macros.lg` (defmacro incl. `~@`/nested squote), and
    `test/_hyglib.lg` (cross-module macro module) run in `test.sh`.
@@ -315,9 +315,15 @@ release:
 7. **Compat corpus.** `test/compat/` frozen at v1.0: programs are only
    added, never edited; every release must run them green. Distinct from
    `test/` which may evolve.
-8. **Wire `examples/` into the suite** or move its coverage into `test/`.
-9. **Reader round-trip:** parse → `form_to_string` → parse → equal forms
-   (form-level equality exists in macro.ml for `=`).
+8. **Wire `examples/` into the suite — DONE.** test.sh builds and runs
+   all single-file examples plus the multi-file `impdemo`/`wfreq`
+   programs (no `.out` diff — several print timings or read files).
+9. **Reader round-trip — DONE.** `test/roundtrip.ml` (dune exe) parses,
+   prints via `form_to_string`, re-parses and compares `form_eq` for
+   every `test/`+`lib/`+`examples/` source in preserve mode. Landing it
+   surfaced two printer bugs now fixed: `Char` printed as a bare char
+   (re-parsed as a symbol) and `#_`/`#?`/`#?@` preserve-mode
+   pseudo-nodes printed as plain lists (unparseable).
 
 ## 5. Sequencing vs v2.md
 

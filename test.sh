@@ -67,10 +67,53 @@ for src in should_fail/*.lg; do
   if "$LG" check "$src" $extra > ".test-bin/$name.err" 2>&1; then
     echo "FAIL(expected-error) $name: typechecked but should not"
     fail=1
+  elif [ -f "should_fail/$name.err" ] && ! grep -Eq "$(cat "should_fail/$name.err")" ".test-bin/$name.err"; then
+    # must fail for the documented reason, not any error
+    echo "FAIL(error-class) $name: stderr does not match should_fail/$name.err"
+    head -3 ".test-bin/$name.err"
+    fail=1
   else
     echo "ok(negative) $name"
   fi
 done
+
+# examples/: every example must build and run green (no .out diff —
+# several print timings or read input files)
+for name in hello features csv json jsonp util stopwatch eiodemo; do
+  src="examples/$name.lg"
+  [ -e "$src" ] || continue
+  if ! "$LG" build "$src" -I lib -I examples -o ".test-bin/ex_$name" >/dev/null 2>&1; then
+    echo "FAIL(example-build) $name"
+    fail=1; continue
+  fi
+  if ! ".test-bin/ex_$name" >/dev/null 2>&1; then
+    echo "FAIL(example-run) $name"
+    fail=1; continue
+  fi
+  echo "ok example-$name"
+done
+# multi-file examples (deps resolve inside their own directory)
+if "$LG" build examples/impdemo/main.lg -I lib -I examples/impdemo -o .test-bin/ex_impdemo >/dev/null 2>&1 \
+   && .test-bin/ex_impdemo >/dev/null 2>&1; then
+  echo "ok example-impdemo"
+else
+  echo "FAIL(example) impdemo"; fail=1
+fi
+if "$LG" build examples/wfreq/wfreq.lg -I lib -I examples/wfreq -o .test-bin/ex_wfreq >/dev/null 2>&1 \
+   && .test-bin/ex_wfreq examples/wfreq/wfreq.lg >/dev/null 2>&1; then
+  echo "ok example-wfreq"
+else
+  echo "FAIL(example) wfreq"; fail=1
+fi
+
+# reader round-trip: parse -> print -> parse -> form_eq over every .lg
+RT=./_build/default/test/roundtrip.exe
+if [ -x "$RT" ]; then
+  "$RT" test/*.lg test/*.cljc lib/*.lg examples/*.lg examples/*/*.lg \
+    || fail=1
+else
+  echo "skip roundtrip (not built)"
+fi
 
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
