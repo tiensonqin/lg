@@ -1,0 +1,45 @@
+;; `&` rest params (variadic fns) and `&` in destructuring patterns
+(ns varargs-test)
+
+;; --- & rest params: extra call-site args are collected into a list
+(defn v0 [x & xs] (str x "|" xs))
+(println (v0 1))
+(println (v0 1 2))
+(println (v0 1 2 3 4))
+
+;; & rest with no fixed params
+(defn v1 [& all] (str all))
+(println (v1))
+(println (v1 1 2))
+
+;; & rest composes with first/next/count on the collected list
+(defn v2 [x & xs] (str x "+" (count xs)))
+(println (v2 9))
+(println (v2 9 8 7))
+
+;; def of a fn value keeps `&` variadic semantics (same as defn)
+(def v3 (fn [x & xs] (str x ":" xs)))
+(println (v3 1))
+(println (v3 1 2 3))
+
+;; qualified ns/name variadic calls
+(println (varargs-test/v0 5))
+(println (varargs-test/v0 5 6 7))
+
+;; apply spreads a list across a variadic fn
+(println (apply v0 '(1 2 3)))
+
+;; --- & in vector destructuring binds the rest as a seq
+(let [[a b & r] [1 2 3 4]] (println (str "v& " a " " b " " r)))
+(let [[& all] [1 2]] (println (str "v&all " all)))
+(let [[a & r] [1]] (println (str "v&e " a " " r)))
+
+;; nested pattern inside a `&` rest destructure position
+(let [[[x y] & zs] [[1 2] [3 4]]] (println (str "v&n " x " " y " " zs)))
+
+;; & rest inside let + fn destructure positions both work
+(defn head [^any v] (let [[h & _] v] (str h)))
+(println (head [7 8 9]))
+
+;; seq vs vec: rest of a vec destructure is a seq
+(let [[a & r] [1 2 3]] (println (str a " " (first r) " " (next r))))

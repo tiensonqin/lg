@@ -773,7 +773,10 @@ and infer_def ctx f =
     let keep = ann_vars ty_ann @ (match imp with Some (Some t) -> free_tvars t [] | _ -> []) in
     let sch = generalize [] (canon_free keep texpr.ety) in
     let top = { tname = name; tloc = l; tsch = sch; texpr; tis_fn = false; tmode = (match mode_hint with Some m -> m | None -> Shared); timplicit = None } in
-    register_global ctx name sch false;
+    (* `(def f (fn [x & xs] ...))` keeps the fn's variadic flag so callers
+       see the same `&` semantics as `defn` *)
+    let variadic = match texpr.desc with EFun fn -> fn.variadic <> None | _ -> false in
+    register_global ctx name sch variadic;
     register_implicit ctx l name imp top;
     top
   | _ -> type_error l "malformed def"
@@ -1477,6 +1480,19 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
     (match Array.to_list items with
      | [] -> []
      | pats ->
+       (* `[p1 .. pn & r]` — `&` is not a pattern: it splits positional
+          destructure from a rest binder receiving `(drop n v)` *)
+       let pats, rest =
+         let rec go acc = function
+           | Atom (_, Symbol "&") :: tl ->
+             (match tl with
+              | [ Atom (_, Symbol s) ] -> (List.rev acc, Some s)
+              | _ -> type_error vl "let: '&' must be followed by a single symbol")
+           | x :: xs -> go (x :: acc) xs
+           | [] -> (List.rev acc, None)
+         in
+         go [] pats
+       in
        (tmp, rhs)
        :: List.concat
             (List.mapi
@@ -1487,7 +1503,16 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
                              [ tmp_e; mk vl TInt (EInt i) ]))
                  in
                  bind_pattern ctx vl p ith)
-               pats))
+               pats)
+       @ (match rest with
+          | None -> []
+          | Some s ->
+            let tail =
+              mk vl (TSeq el)
+                (ECall (mk vl (TFun ([ TInt; TVec el ], TSeq el)) (EBuiltin "drop"),
+                        [ mk vl TInt (EInt (List.length pats)); tmp_e ]))
+            in
+            bind_pattern ctx vl (Atom (vl, Symbol s)) tail))
   | Map (ml, kvs) ->
     let rhs =
       match repr rhs.ety with
@@ -2255,6 +2280,9 @@ and rewrite_variadic_call ctx s l arg_es =
                  List.fold_left (fun (a, b) e -> if List.length a < fixed then (a @ [ e ], b) else (a, b @ [ e ])) ([], []) arg_es
                in
                hd @ [ mk l (List.nth ts (List.length ts - 1)) (EListLit tl) ]
+             else if List.length arg_es = fixed then
+               (* zero rest args: the rest list binds to () *)
+               arg_es @ [ mk l (List.nth ts (List.length ts - 1)) (EListLit []) ]
              else arg_es
            | _ -> arg_es)
         | _ -> arg_es)
@@ -2273,6 +2301,10 @@ and rewrite_variadic_call ctx s l arg_es =
                in
                let elem = match repr (List.nth ts (List.length ts - 1)) with TList x -> x | t -> t in
                hd @ [ mk l (TList elem) (EListLit tl) ]
+             else if List.length arg_es = fixed then
+               (* zero rest args: the rest list binds to () *)
+               let elem = match repr (List.nth ts (List.length ts - 1)) with TList x -> x | t -> t in
+               arg_es @ [ mk l (TList elem) (EListLit []) ]
              else arg_es
            | _ -> arg_es)
         | _ -> arg_es)
