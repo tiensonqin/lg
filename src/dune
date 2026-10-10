@@ -1,6 +1,6 @@
 (library
  (name lgc)
- (modules (:standard \ embed_gen)) (libraries unix))
+ (modules (:standard \ embed_gen)) (libraries unix compiler-libs.common))
 
 (rule
  (target embedded_runtime.ml)
