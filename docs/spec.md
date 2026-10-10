@@ -600,8 +600,8 @@ Explicit exclusions — each is a documented design position
   atoms as the sole mutable cell (§3).
 - **No `nil`** — a deliberate deviation from Clojure: `()` is
   `unit` (printed `()`), `None`/`option` covers absent values, and
-  an empty collection is `[]`/`(list)`. `nil` is a deprecated
-  reader warning now and a hard E100 next; `nil?` is renamed to
+  an empty collection is `[]`/`(list)`. `nil` is a
+  reader error (E201) with the replacement hint; `nil?` is renamed to
   `unit?`; `none?` stays. A `()` value in `if`/`and`/`or` position
   is a static E101 — unit is not a truthiness operand.
 - **Nominal `TCon` record types** are deferred — `defrecord`
