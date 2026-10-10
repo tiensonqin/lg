@@ -1,0 +1,49 @@
+;; linear let-chains fuse into one mutable builder + one freeze when
+;; each intermediate binder is used only by the next step.
+;; escaping collections fall back to persistent ops.
+
+(defn vec-chain []
+  (let [v0 [1 2]
+        v1 (conj v0 3)
+        v2 (conj v1 4 5)
+        v3 (assoc v2 0 9)
+        v4 (conj (pop v3) 99)]
+    v4))
+
+(println (vec-chain))
+
+(defn map-chain []
+  (let [m0 {:a 1}
+        m1 (assoc m0 :b 2)
+        m2 (assoc m1 :c 3 :d 4)
+        m3 (dissoc m2 :a)
+        m4 (update m3 :b (fn [x] (* x 100)))]
+    (sort (keys m4))))
+
+(println (map-chain))
+
+(defn set-chain []
+  (let [s0 #{1 2}
+        s1 (conj s0 3)
+        s2 (conj s1 4 5)
+        s3 (disj s2 1)]
+    (sort (map (fn [e] e) s3))))
+
+(println (set-chain))
+
+;; escape: v is used again after the chain -> persistent ops, v unchanged
+(defn escape [v]
+  (let [w (conj v 99)]
+    (tuple w v)))
+
+(println (escape [7]))
+
+;; chain across a non-chain step stays correct
+(defn mixed []
+  (let [v0 [10]
+        v1 (conj v0 20)
+        n (count v1)
+        v2 (conj v1 n)]
+    v2))
+
+(println (mixed))

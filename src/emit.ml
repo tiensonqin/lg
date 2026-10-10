@@ -271,31 +271,7 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
         if i < List.length es - 1 then buf_add b ")")
       es;
     buf_add b ")"
-  | ELet (pairs, body) ->
-    List.iter
-      (fun (bd, init) ->
-        let selfrec =
-          match init.desc with
-          | EFun fn -> Modes.occurs_anywhere bd fn.body
-          | _ -> false
-        in
-        buf_add b (if selfrec then "(let rec " else "(let ");
-        (match bd.bmode, !oxcaml with
-         | Ast.Local, false -> buf_add b "(* @local *) "
-         | Ast.Owned, false -> buf_add b "(* @owned *) "
-         | _ -> ());
-        buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
-        let loc = !oxcaml && bd.bmode = Ast.Local in
-        if loc then buf_add b " @ local";
-        buf_add b " = ";
-        (match bd.bmode, !oxcaml with
-         | Ast.Owned, true -> buf_add b "(* unique *) "
-         | _ -> ());
-        emit_expr ~local:loc b init;
-        buf_add b " in ")
-      pairs;
-    emit_expr ~local b body;
-    List.iter (fun _ -> buf_add b ")") pairs
+  | ELet (pairs, body) -> emit_let_binds ~local b pairs body
   | ETuple es ->
     let stk = local && e.emode = Ast.Local && !oxcaml in
     let tys = match repr e.ety with TTuple ts -> ts | _ -> List.map (fun _ -> TAny) es in
@@ -967,6 +943,131 @@ and emit_sbuilder b root el ops =
   buf_add b ("(let " ^ bn ^ " = "); sroot b root; buf_add b " in ";
   List.iter (emit_sop b bn el) ops;
   buf_add b ("Lg_rt.sb_freeze " ^ bn ^ ")")
+
+(* ---- linear let-chains: (let [v2 (conj v1 x) v3 (assoc v2 k y)] ...)
+   where every intermediate binder's only use is the next step (bused=1)
+   collapses into ONE mutable builder + one freeze. The root is owned
+   the same way owned chains are (literal or once-used concrete local —
+   vb_of_vec copies, so value semantics hold regardless). Intermediate
+   binders get no OCaml binding at all; only the run's last binder is
+   materialized (frozen). Oxcaml keeps the persistent path, like fbip. *)
+
+and lin_root e =
+  match e.desc with
+  | EVecLit _ | EMapLit _ | ESetLit _ -> true
+  | ELocal bd -> bd.bused <= 1 && conc_ty bd.bty
+  | _ -> false
+
+and lin_chain_step e : (expr * cop list) option =
+  match e.desc with
+  | ECall ({ desc = EBuiltin n; _ }, args) ->
+    (match n, args with
+     | _, c :: _ ->
+       let root_ops =
+         match lin_chain_step c with
+         | Some _ as r -> r
+         | None -> if lin_root c then Some (c, []) else None
+       in
+       (match root_ops, step_ops n (repr c.ety) args with
+        | Some (r, ops), Some more -> Some (r, ops @ more)
+        | _ -> None)
+     | _ -> None)
+  | _ -> None
+
+and emit_let_binds ~(local : bool) b (pairs : (Ast.binder * expr) list) body =
+  let bind_one (bd : Ast.binder) init =
+    let selfrec =
+      match init.desc with
+      | EFun fn -> Modes.occurs_anywhere bd fn.body
+      | _ -> false
+    in
+    buf_add b (if selfrec then "(let rec " else "(let ");
+    (match bd.bmode, !oxcaml with
+     | Ast.Local, false -> buf_add b "(* @local *) "
+     | Ast.Owned, false -> buf_add b "(* @owned *) "
+     | _ -> ());
+    buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
+    let loc = !oxcaml && bd.bmode = Ast.Local in
+    if loc then buf_add b " @ local";
+    buf_add b " = ";
+    (match bd.bmode, !oxcaml with
+     | Ast.Owned, true -> buf_add b "(* unique *) "
+     | _ -> ());
+    emit_expr ~local:loc b init;
+    buf_add b " in "
+  in
+  let step_on prev init =
+    match init.desc with
+    | ECall ({ desc = EBuiltin n; _ }, args) ->
+      (match args with
+       | ({ desc = ELocal p; _ } as c) :: _ when p.bid = prev.Ast.bid && conc_ty c.ety ->
+         step_ops n (repr c.ety) args
+       | _ -> None)
+    | _ -> None
+  in
+  let emit_run root ops lastb =
+    let bn pre = pre ^ "__" ^ string_of_int (fresh_uid ()) in
+    (match repr root.ety with
+     | TVec el ->
+       let n = bn "vb" in
+       buf_add b ("(let " ^ n ^ " = "); vroot b root;
+       buf_add b " in (begin ";
+       List.iter (emit_vop b n el) ops;
+       buf_add b ("() end); (let " ^ sanitize lastb.Ast.bname ^ "__" ^ string_of_int lastb.bid
+                  ^ " = (Lg_rt.vb_freeze " ^ n ^ ") in ")
+     | TMap (kt, vt) ->
+       let n = bn "mb" in
+       buf_add b ("(let " ^ n ^ " = "); mroot b root kt vt;
+       buf_add b " in (begin ";
+       List.iter (emit_mop b n kt vt) ops;
+       buf_add b ("() end); (let " ^ sanitize lastb.Ast.bname ^ "__" ^ string_of_int lastb.bid
+                  ^ " = (Lg_rt.mb_freeze " ^ n ^ ") in ")
+     | TSet el ->
+       let n = bn "sb" in
+       buf_add b ("(let " ^ n ^ " = "); sroot b root;
+       buf_add b " in (begin ";
+       List.iter (emit_sop b n el) ops;
+       buf_add b ("() end); (let " ^ sanitize lastb.Ast.bname ^ "__" ^ string_of_int lastb.bid
+                  ^ " = (Lg_rt.sb_freeze " ^ n ^ ") in ")
+     | _ -> ())
+  in
+  let rec go pairs closes =
+    match pairs with
+    | [] -> emit_expr ~local b body; List.iter (fun _ -> buf_add b ")") (List.init closes (fun _ -> ()))
+    | (bd, init) :: rest ->
+      (match (if !oxcaml then None else lin_chain_step init) with
+       | Some (root, ops0) ->
+         let rec gather ops prev acc rs =
+           match rs with
+           | (bd2, i2) :: tl when prev.bused <= 1 ->
+             (match step_on prev i2 with
+              | Some more -> gather (ops @ more) bd2 (bd2 :: acc) tl
+              | None -> (ops, List.rev acc, rs))
+           | _ -> (ops, List.rev acc, rs)
+         in
+         let ops, run, rest' = gather ops0 bd [] rest in
+         (match run with
+          | _ :: _ ->
+            (match repr root.ety with
+             | TVec _ | TMap (_, _) | TSet _ ->
+               let lastb = List.nth run (List.length run - 1) in
+               emit_run root ops lastb; go rest' (closes + 2)
+             | _ -> bind_one bd init; go rest (closes + 1))
+          | [] ->
+            (match repr root.ety with
+             | TVec el when List.length ops >= 2 ->
+               buf_add b ("(let " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
+               emit_vbuilder b root el ops; buf_add b " in "; go rest' (closes + 1)
+             | TMap (kt, vt) when List.length ops >= 2 ->
+               buf_add b ("(let " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
+               emit_mbuilder b root kt vt ops; buf_add b " in "; go rest' (closes + 1)
+             | TSet el when List.length ops >= 2 ->
+               buf_add b ("(let " ^ sanitize bd.bname ^ "__" ^ string_of_int bd.bid ^ " = ");
+               emit_sbuilder b root el ops; buf_add b " in "; go rest' (closes + 1)
+             | _ -> bind_one bd init; go rest' (closes + 1)))
+       | None -> bind_one bd init; go rest (closes + 1))
+  in
+  go pairs 0
 
 (* ---- FBIP: self-recursive accumulator params as mutable builders ----
    In `(fn f [.. p ..] body)` where collection param p is only ever (a) the

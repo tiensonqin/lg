@@ -129,3 +129,12 @@ compiling to OCaml via `Clj_core` data structures.
   round-trip, compat corpus, generated builtin×collection-kind matrix,
   compile-speed bench assertions. `test/emit_matrix.py` runs the
   builtin-emission matrix.
+
+## Linear let-chain FBIP (2026-10-10)
+
+- `(let [v2 (conj v1 x) v3 (assoc v2 k y)] …)` where each intermediate
+  binder's only use is the next update step now emits ONE mutable
+  builder + one freeze — intermediate binders get no OCaml binding at
+  all. Roots may be literals or once-used concrete collection locals
+  (the builder copies the root once, so persistent semantics hold).
+  Escaping collections still take the persistent path. Oxcaml unchanged.
