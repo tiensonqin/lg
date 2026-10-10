@@ -395,6 +395,27 @@ let is_special_builtin = function
 
 (* ---------- inference ---------- *)
 
+(* Builtins that emit a real first-class value (dispatch closure); keep in
+   sync with `emit_builtin_value` in src/emit.ml. A special builtin used as
+   a value but missing here is a static error — never a runtime failwith. *)
+let value_builtin_ok = function
+  | "*" | "*." | "+" | "+." | "-" | "-." | "/" | "/." | "<" | "<=" | "=" | ">" | ">="
+  | "abs" | "atom" | "blank?" | "bool?" | "char?" | "coll?" | "comp" | "conj" | "cons"
+  | "constantly" | "count" | "cycle" | "dec" | "dedupe" | "deref" | "distinct" | "doall"
+  | "dorun" | "drop" | "drop-while" | "empty?" | "even?" | "every?" | "exit"
+  | "file-exists?" | "filter" | "filter-map" | "first" | "float?" | "fn?" | "fold"
+  | "frequencies" | "group-by" | "identity" | "inc" | "includes?" | "int?" | "interleave"
+  | "interpose" | "iterate" | "juxt" | "keep" | "keys" | "keyword?" | "list?"
+  | "lower-case" | "map" | "map-indexed" | "map?" | "mapcat" | "max" | "min" | "mod"
+  | "neg?" | "next" | "nil?" | "none?" | "not" | "not=" | "nth" | "nthrest" | "number?"
+  | "odd?" | "pos?" | "pr-str" | "print" | "println" | "reduce" | "reductions" | "remove"
+  | "repeat" | "replace" | "reset!" | "rest" | "reverse" | "second" | "seq" | "seq?"
+  | "set?" | "slurp" | "some" | "some?" | "sort" | "sort-by" | "split" | "split-at"
+  | "split-with" | "str" | "string?" | "swap!" | "symbol?" | "take" | "take-nth"
+  | "take-while" | "trim" | "triml" | "trimr" | "upper-case" | "vals" | "vec" | "vec?"
+  | "zero?" | "zipmap" -> true
+  | _ -> false
+
 let instantiate_builtin_ty name = Hashtbl.find builtin_table name ()
 
 let last xs = List.nth xs (List.length xs - 1)
@@ -418,9 +439,38 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
   Hashtbl.iter (Hashtbl.replace vtypes) all_vtypes;
   let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes; multi_arity = Hashtbl.create 7 } in
   List.iter (infer_top ctx) forms;
+  check_builtin_values m;
   if !(ctx.mimplicits) <> [] then
     Hashtbl.replace module_implicits mname (List.rev !(ctx.mimplicits));
   m
+
+(* A builtin used as a first-class value must have a real dispatch closure
+   in emit_builtin_value — otherwise reject statically instead of emitting
+   a body that always fails at runtime. *)
+and check_builtin_values m =
+  let rec walk e =
+    match e.desc with
+    | EBuiltin n ->
+      if not (value_builtin_ok n) then
+        type_error e.loc (Printf.sprintf "%s cannot be used as a first-class value" n)
+    | ECall (c, args) ->
+      (match c.desc with EBuiltin _ -> () | _ -> walk c);
+      List.iter walk args
+    | EFun fn -> walk fn.body
+    | EIf (c, t, x) -> walk c; walk t; walk x
+    | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.iter walk es
+    | EMapLit kes -> List.iter (fun (k, v) -> walk k; walk v) kes
+    | ELet (ps, b) -> List.iter (fun (_, i) -> walk i) ps; walk b
+    | EMatchOpt (s, _, t, x) -> walk s; walk t; walk x
+    | EVariant (s, _, _, t, x) -> walk s; walk t; walk x
+    | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) -> walk s; walk t; walk x
+    | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
+    | _ -> ()
+  in
+  List.iter
+    (function TDef d -> walk d.texpr | TEffect e -> walk e | _ -> ())
+    m.tops;
+  List.iter walk m.effects
 
 and infer_top ctx f =
   (* macro expansions arrive with hygiene-marked heads (def__hN); unmark the
