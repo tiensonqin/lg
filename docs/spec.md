@@ -98,6 +98,7 @@ mutual recursion), `test/_privdep.lg`+`.lgi` (private surface).
 | `when` | `(when c e…)` | `(if c (do e…) nil)` |
 | `and`/`or` | short-circuit | `nil`/`false` falsy, everything else truthy |
 | `cond` | `(cond c1 e1 c2 e2 … (:else en))` | nested `if`; `:else` keyword terminates |
+| `try` | `(try body… (catch e h…) (finally f…))` | OCaml exceptions; `e` binds an opaque `exn` handle; result = join(body, handler); finally's value is discarded |
 | `quote` | `'form` | literal data |
 | `syntax-quote` | `` `form `` | template for macros (§5) |
 | `match` | `(match s pat1 e1 pat2 e2 …)` | §4 patterns |
@@ -125,6 +126,19 @@ form — `(-> x (f a) (g b))` is `(g (f x a) b)`.
 `(let [x (cond …)])` joins branch types per §4 option rules.
 Keyword call `(:k m)` unifies `m` to a keyword-keyed map; the
 2-ary form returns `option`, the 3-ary a default value.
+
+**Exceptions.** `(try body… (catch e h…) (finally f…))` compiles to a
+real OCaml `try…with` wrapped in `Fun.protect` — exceptions raised
+through `ocaml.*` interop (`Not_found`, `Invalid_argument`, …) are
+caught exactly like native ones. `e` binds an opaque `exn` handle:
+`exn-message : exn -> string` renders it via `Printexc.to_string`,
+`(exn s)` constructs `Stdlib.Failure s`, `(throw e)` re-raises a
+handle. The try's value joins body and handler per §4 — a
+difference is E101; finally always runs and its value is dropped.
+A unit branch collapsing to `None` still evaluates its side
+effects first (`EDo [branch; None]`).
+**Anchor**: `test/try.lg` (a real `Not_found` from `ocaml.List`
+`List.find`), `should_fail/try_{join,binder,throw_type}`.
 
 **Anchors**: `test/core.lg`, `test/control.lg`,
 `test/loopcase.lg` (case/named fn), `test/destructure.lg`,
@@ -297,6 +311,8 @@ Builtins are grouped by domain; names and argument order follow
   — pattern first, subject second.
 - **Misc**: `tuple`, `int`/`float`/`str`/`name` coercions,
   `println print pr-str`, `gensym` (macro context).
+- **Exceptions**: `exn` (opaque handle type), `(exn s)`,
+  `throw`, `exn-message` — see §3.
 - **Dispatch matrix.** The builtin × collection-kind table — which
   `(builtin, {vec,list,seq,map,set,any})` cells are allowed, and
   which are static errors — is generated from
@@ -363,8 +379,8 @@ lanes in `test.sh`.
   when element types also cross a boundary.
 - **Runtime contracts fail loudly.** Checked `^T` unboxes, a
   missing-key 3-ary `update-in`, `contains?` on a non-coll, and
-  `no_match` fallthroughs raise OCaml exceptions — these are
-  bugs, not control flow, and stay uncatchable from lg.
+  `no_match` fallthroughs raise OCaml exceptions — catchable via
+  `try` (§3) but treated as bugs, not control flow.
 - **Atoms** are `Clj_core.Atom` cells (`deref`/`reset!`/`swap!`).
 - **Printing**: `str`/`println`/`pr-str` render per static type —
   dyn values render via their runtime tag (`DVec` → `(1 2)`,
@@ -421,8 +437,8 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
   Abstract types name themselves by the resolved canonical
   unit rather than the textual alias, keeping
   `Eio__core__Switch.t`/`Eio__Std.Switch.t` spellings on one
-  type. `exn` maps to the opaque `Stdlib.exn` handle (not
-  `string`). The builtin table binds on the exact primitive path
+  type. `exn` maps to the opaque `exn` handle type (not
+  `string`) — the same handle `try`/`throw`/`exn-message` use. The builtin table binds on the exact primitive path
   (`list`/`Stdlib.list`): `list`→`TList` and `option`→`TOption`
   are the only mapped containers — `result`, `array`, `ref`,
   `bytes` import as opaque named handles (`Stdlib.result`, …),
@@ -569,10 +585,12 @@ Explicit exclusions — each is a documented design position
   collections in the language (eio is reachable via `ocaml.*`
   interop for programs that need it, e.g.
   `examples/eiodemo.lg`).
-- **No `try`/`catch`/`throw`** — error channels are typed:
-  `option` for maybe-absent values (`Some`/`None`, `if-let`,
-  `match`), Result-style data when a reason must travel.
-  Runtime contract failures are uncatchable by design (§8).
+- **`try` exists but exn-pattern matching is deferred** —
+  `(catch e …)` binds the whole `exn` handle only; discriminating
+  on the constructor (`(catch (Not_found) h)`) is a v0.2 item.
+  Typed error channels (`option`, Result-style data) stay the
+  default; `try` is for real exceptional paths including
+  `ocaml.*` raises.
 - **No `defprotocol`/`defmulti`** — static polymorphism via
   OCaml modules/functors (interop) and implicit parameters;
   open dispatch via `match` dyn-tag arms.

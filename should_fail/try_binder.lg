@@ -1,0 +1,2 @@
+;; catch binds a plain symbol only
+(try 42 (catch 7 "h"))

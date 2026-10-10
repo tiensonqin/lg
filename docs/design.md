@@ -196,6 +196,20 @@ per source line because every emitted top-level form is a single
 line; finer positioning needs multi-line emission (not worth it —
 the containing form's line is already the useful answer).
 
+**Exceptions (`try`/`throw`).** `(try body… (catch e h…) (finally f…))`
+is inferred like a branch join — body and handler join via
+`join_branches` (option-widening included), finally is inferred for
+effects and its value dropped. Emit uses `Fun.protect` for finally
+(OCaml has no `finally` keyword; `Fun.protect` runs the cleanup on
+success and exception alike, which is exactly finally semantics) and
+a plain `try…with` for catch, nested inside it when both appear.
+`e` binds an opaque `exn` handle (`TCon "exn"`, same spelling the
+cmi reader produces for `Stdlib.exn` — so `ocaml.*` raises and lg
+`throw` share one type). `(exn s)` is `Stdlib.Failure s`,
+`exn-message` is `Printexc.to_string`, `throw` is `raise`.
+Constructor-pattern catches (`(catch (Not_found) h)`) are deferred —
+MVP binds the whole handle; discriminating on it is a v0.2 item.
+
 ## 7. Emit → `Clj_core.*` mapping
 
 | lg form | emitted OCaml |

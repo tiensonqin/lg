@@ -1,0 +1,7 @@
+caught: Not_found
+join=1
+finally-log=[:f1 :f2]
+Failure("boom")
+rethrown: Not_found
+nofinally=3
+div=5 -1

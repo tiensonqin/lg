@@ -344,7 +344,7 @@ let rec ty_of_te ?(depth = 0) ?(subst = []) ?(nested = false) te : ty =
      | "bytes", [] -> TCon ("Stdlib.bytes", [])
        (* opaque handle — lg strings are immutable; convert via
           Bytes.to_string / Bytes.of_string *)
-     | "exn", [] -> TCon ("Stdlib.exn", []) (* opaque handle — not a string *)
+     | "exn", [] -> TCon ("exn", []) (* opaque exception handle — canonical spelling *)
      | "list", [ a ] -> TList (ty_of_te ~depth ~subst ~nested:true a)
      | "option", [ a ] -> TOption (ty_of_te ~depth ~subst ~nested:true a)
      | "array", [ a ] ->

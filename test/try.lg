@@ -1,0 +1,34 @@
+;; try/catch/finally + throw — OCaml exceptions reach lg through ocaml.*
+;; requires and opaque exn handles.
+
+(:require [ocaml.List :as olist])
+
+;; acceptance: a real OCaml Not_found from List.find is caught
+(try
+  (olist/find (fn [x] (= x 9)) '(1 2))
+  (catch e (println (str "caught: " (exn-message e)))))
+
+;; catch returns a value joined with the body
+(println (str "join=" (try (str (olist/find (fn [x] (= x 1)) '(1 2))) (catch e "miss"))))
+
+;; finally runs on success and on exception
+(def log (atom []))
+(try 42 (finally (swap! log (fn [xs] (conj xs :f1)))))
+(try (olist/find (fn [x] (= x 9)) '(1)) (catch e -1) (finally (swap! log (fn [xs] (conj xs :f2)))))
+(println (str "finally-log=" (str @log)))
+
+;; throw + exn construct
+(try (throw (exn "boom")) (catch e (println (exn-message e))))
+
+;; throw of a caught handle re-raises it
+(defn safe-f [x]
+  (try (olist/find (fn [y] (= y x)) '(1 2))
+       (catch e (throw e))))
+(try (safe-f 9) (catch e (println (str "rethrown: " (exn-message e)))))
+
+;; body without catch: value passes through, finally still runs
+(println (str "nofinally=" (str (try (+ 1 2) (finally nil)))))
+
+;; try inside fn
+(defn div-may [x] (try (/ 10 x) (catch e -1)))
+(println (str "div=" (str (div-may 2)) " " (str (div-may 0))))

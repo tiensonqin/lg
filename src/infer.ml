@@ -335,6 +335,11 @@ let () =
   reg "symbol" (fun () -> f [ TString ] TSymbol);
   reg "println" (fun () -> f [ v () ] TUnit);
   reg "exit" (fun () -> f [ TInt ] (fresh_var ()));
+  (* exceptions: exn is the opaque OCaml exception handle; `throw`
+     re-raises it, `(exn s)` builds `Failwith s`, `exn-message` renders *)
+  reg "exn" (fun () -> f [ TString ] (TCon ("exn", [])));
+  reg "exn-message" (fun () -> f [ TCon ("exn", []) ] TString);
+  reg "throw" (fun () -> let r = v () in f [ TCon ("exn", []) ] r);
   reg "print" (fun () -> f [ v () ] TUnit);
   reg "pr-str" (fun () -> f [ v () ] TString);
   reg "map" (fun () -> f [ v (); v () ] (v ()));
@@ -532,6 +537,10 @@ and check_builtin_values m =
     | EMapLit kes -> List.iter (fun (k, v) -> walk k; walk v) kes
     | ELet (ps, b) -> List.iter (fun (_, i) -> walk i) ps; walk b
     | EMatchOpt (s, _, t, x) -> walk s; walk t; walk x
+    | ETry (b', c, f) ->
+      walk b';
+      (match c with Some (_, h) -> walk h | None -> ());
+      (match f with Some fe -> walk fe | None -> ())
     | EVariant (s, _, _, t, x) -> walk s; walk t; walk x
     | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) -> walk s; walk t; walk x
     | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
@@ -1395,6 +1404,7 @@ and infer_call ctx l items : expr =
   | Atom (_, Symbol "cond") :: args -> infer_cond ctx l args
   | Atom (_, Symbol "->") :: x :: steps -> infer_expr ctx (desugar_thread l true x steps)
   | Atom (_, Symbol "->>") :: x :: steps -> infer_expr ctx (desugar_thread l false x steps)
+  | Atom (_, Symbol "try") :: forms -> infer_try ctx l forms
   | Atom (_, Symbol "match") :: scrut :: clauses -> infer_match ctx l scrut clauses
   | Atom (_, Symbol "case") :: scrut :: clauses ->
     (* (case x lit v lit v default) — literals become match patterns *)
@@ -1429,6 +1439,15 @@ and infer_call ctx l items : expr =
     infer_app ctx l callee args
 
 and join_branches l a b =
+  (* a unit branch collapsing into an option's `None` must still run its
+     side effects (`(if c x (println y))` can't drop the print) — sequence
+     it before the literal None. Literal `nil`/`()` has no effects and
+     stays a bare None. *)
+  let unit_to_none ty e =
+    match e.desc with
+    | ENil | EOpt None -> mk e.loc ty (EOpt None)
+    | _ -> mk e.loc ty (EDo [ e; mk e.loc ty (EOpt None) ])
+  in
   match repr a.ety, repr b.ety with
   | TAny, TAny -> (TAny, a, b)
   | TAny, _ -> (TAny, a, mk b.loc TAny (EBox b))
@@ -1437,10 +1456,10 @@ and join_branches l a b =
      nil)` is `(option <t>)`, wrapped as `Some`/`None` at emit. Unit on
      BOTH sides stays unit (e.g. `(if c (pass) (fail))`). *)
   | TUnit, TUnit -> (TUnit, a, b)
-  | TOption _, TUnit -> (a.ety, a, mk b.loc a.ety (EOpt None))
-  | TUnit, TOption _ -> (b.ety, mk a.loc b.ety (EOpt None), b)
-  | TUnit, _ -> let ot = TOption b.ety in (ot, mk a.loc ot (EOpt None), mk b.loc ot (EOpt (Some b)))
-  | _, TUnit -> let ot = TOption a.ety in (ot, mk a.loc ot (EOpt (Some a)), mk b.loc ot (EOpt None))
+  | TOption _, TUnit -> (a.ety, a, unit_to_none a.ety b)
+  | TUnit, TOption _ -> (b.ety, unit_to_none b.ety a, b)
+  | TUnit, _ -> let ot = TOption b.ety in (ot, unit_to_none ot a, mk b.loc ot (EOpt (Some b)))
+  | _, TUnit -> let ot = TOption a.ety in (ot, mk a.loc ot (EOpt (Some a)), unit_to_none ot b)
   | _ -> unify l a.ety b.ety; (a.ety, a, b)
 
 and infer_if ctx l c t e =
@@ -1688,6 +1707,60 @@ and infer_or ctx l args =
 
 and final_ret t =
   match repr t with TFun (_, r) -> final_ret r | _ -> t
+
+(* `(try body… (catch e h…) (finally f…))` — body joins the catch
+   handler type via the same branch rules as `if` (option-widening
+   included); finally is inferred for effects and its value dropped.
+   Emits `try..with` wrapped in `Fun.protect` for finally (OCaml has
+   no `finally` keyword; Fun.protect covers success and exception). *)
+and infer_try ctx l forms =
+  let is_clause = function
+    | List (_, Atom (_, Symbol ("catch" | "finally")) :: _) -> true
+    | _ -> false
+  in
+  let rec take_body acc = function
+    | f :: rest when not (is_clause f) -> take_body (f :: acc) rest
+    | rest -> (List.rev acc, rest)
+  in
+  let body_fs, clauses = take_body [] forms in
+  if body_fs = [] then type_error l "try requires a body";
+  let body_e =
+    match List.map (infer_expr ctx) body_fs with
+    | [ e ] -> e
+    | es -> mk l (last es).ety (EDo es)
+  in
+  let parse_clause catch finally = function
+    | List (cl, Atom (_, Symbol "catch") :: Atom (_, Symbol s) :: hs) ->
+      if catch <> None then type_error cl "try takes a single catch clause";
+      if hs = [] then type_error cl "catch requires a handler body";
+      let b = fresh_binder s in
+      b.bty <- TCon ("exn", []);
+      let saved = ctx.env in
+      ctx.env <- (s, { vscheme = mono b.bty; vkind = KLocal b; vvariadic = false }) :: ctx.env;
+      let hes = List.map (infer_expr ctx) hs in
+      ctx.env <- saved;
+      let he = (match hes with [ e ] -> e | es -> mk cl (last es).ety (EDo es)) in
+      (Some (b, he), finally)
+    | List (cl, Atom (_, Symbol "finally") :: fs) ->
+      if finally <> None then type_error cl "try takes a single finally clause";
+      if fs = [] then type_error cl "finally requires a body";
+      let fes = List.map (infer_expr ctx) fs in
+      let fe = (match fes with [ e ] -> e | es -> mk cl (last es).ety (EDo es)) in
+      (catch, Some fe)
+    | List (cl, Atom (_, Symbol "catch") :: _) ->
+      type_error cl "catch binds a plain symbol: (catch e body…)"
+    | List (cl, _) -> type_error cl "try clauses must be (catch e body…) or (finally body…)"
+    | _ -> type_error l "try clauses must be (catch e body…) or (finally body…)"
+  in
+  let catch, finally = List.fold_left (fun (c, f) cl -> parse_clause c f cl) (None, None) clauses in
+  let ret, body_e, catch =
+    match catch with
+    | Some (b, he) ->
+      let r, b2, h2 = join_branches l body_e he in
+      (r, b2, Some (b, h2))
+    | None -> (body_e.ety, body_e, None)
+  in
+  mk l ret (ETry (body_e, catch, finally))
 
 and infer_cond ctx l args =
   match args with

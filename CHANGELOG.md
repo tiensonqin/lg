@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `try`/`catch`/`finally` + `throw`: `(try body… (catch e h…)
+  (finally f…))` compiles to a real OCaml `try…with` wrapped in
+  `Fun.protect`; `e` binds an opaque `exn` handle with `exn-message`
+  (`Printexc.to_string`), `(exn s)` (`Stdlib.Failure s`), and
+  `throw` for re-raise. Exceptions raised through `ocaml.*`
+  interop (`Not_found`, …) are caught exactly like native ones —
+  verified against `ocaml.List`'s `List.find`. The try value joins
+  body and handler per the §4 option rules; finally's value is
+  discarded. exn-constructor pattern catches are deferred to v0.2.
+- Soundness fix in `join_branches`: a unit-typed branch collapsing
+  into an option's `None` now still evaluates its side effects
+  (`EDo [branch; None]`) — `(if c x (println y))` previously
+  dropped the print entirely, and the same hole applied to the new
+  `try` catch handler.
 - `ocaml.*` interop now compiles and runs under OxCaml: the
   compiler-libs ABI differences (`cmi_sign` staticity pair, arrow
   labels, variant/ctor payload shapes, archive split) are normalized

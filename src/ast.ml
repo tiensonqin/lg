@@ -64,6 +64,8 @@ and edesc =
   | EDynMap of expr * binder * expr * expr (* match on `any`: DMap b -> t | _ -> e *)
   | EVariant of expr * string * binder list * expr * expr
     (* match se with Mod.Ctor (b..) -> t | _ -> e *)
+  | ETry of expr * (binder * expr) option * expr option
+    (* try body [with exn_b -> handler] [finally cleanup] *)
   | EOCamlCall of expr * oarg list
     (* direct OCaml library call: positional args plus `~lbl:e` / `~opt:e`
        (optional params supplied by value emit as ~opt:v) in signature

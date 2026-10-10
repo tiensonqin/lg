@@ -1,0 +1,2 @@
+;; try: body and catch handler must join to one type
+(def x (try 42 (catch e "miss")))

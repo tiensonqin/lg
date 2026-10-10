@@ -96,6 +96,10 @@ let expr_types m : (int * int, string) Hashtbl.t =
     | Ast.EDo xs | Ast.ETuple xs | Ast.EVecLit xs | Ast.ESetLit xs | Ast.EListLit xs -> List.iter walk xs
     | Ast.EMapLit kvs -> List.iter (fun (k, v) -> walk k; walk v) kvs
     | Ast.EMatchOpt (s, _, a, b) | Ast.EVariant (s, _, _, a, b) | Ast.EDynVec (s, _, a, b) | Ast.EDynMap (s, _, a, b) -> walk s; walk a; walk b
+    | Ast.ETry (b', c, f) ->
+      walk b';
+      (match c with Some (_, h) -> walk h | None -> ());
+      (match f with Some fe -> walk fe | None -> ())
     | Ast.EUnbox (x, _) | Ast.EUnboxOpt (x, _) | Ast.EBox x -> walk x
     | Ast.EOpt (Some x) -> walk x
     | _ -> ()

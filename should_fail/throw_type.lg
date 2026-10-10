@@ -1,0 +1,2 @@
+;; throw needs an exn handle
+(throw "not-an-exn")

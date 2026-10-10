@@ -348,6 +348,7 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
      | [ b1 ] -> buf_add b (" with " ^ cq ^ " " ^ sanitize b1.bname ^ "__" ^ string_of_int b1.bid ^ " -> ")
      | _ -> buf_add b (" with " ^ cq ^ " (" ^ String.concat ", " (List.map (fun bb -> sanitize bb.bname ^ "__" ^ string_of_int bb.bid) bs) ^ ") -> "));
     buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | _ -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
+  | ETry (b', catch, fin) -> emit_try b b' catch fin
   | EOpt (Some e) ->
     let stk = local && e.emode = Ast.Local && !oxcaml in
     buf_add b ((if stk then "(stack_ " else "") ^ "(Some " ^ arg_str ~local e ^ ")" ^ (if stk then ")" else ""))
@@ -366,6 +367,31 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
       buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid);
       buf_add b " -> "; buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t)); buf_add b " | None -> "; buf_add b (conv e.ety x.ety (arg_str ~local:(local && conv e.ety x.ety "x" = "x") x)); buf_add b ")"
     end
+
+and emit_try b b' catch fin =
+  (* OCaml has no `finally` keyword: Fun.protect runs the cleanup on both
+     success and exception, which is exactly finally semantics. catch only
+     is a plain try..with; finally wraps the whole thing. *)
+  let with_catch () =
+    (match catch with
+     | Some (bd, h) ->
+       buf_add b "(try ";
+       emit_expr b b';
+       buf_add b " with ";
+       buf_add b (sanitize bd.Ast.bname ^ "__" ^ string_of_int bd.Ast.bid);
+       buf_add b " -> ";
+       emit_expr b h;
+       buf_add b ")"
+     | None -> emit_expr b b')
+  in
+  (match fin with
+   | Some f ->
+     buf_add b "(Fun.protect ~finally:(fun () -> (ignore (";
+     emit_expr b f;
+     buf_add b "))) (fun () -> ";
+     with_catch ();
+     buf_add b "))"
+   | None -> with_catch ())
 
 and emit_args b es = List.iteri (fun i a -> if i > 0 then buf_add b "; "; emit_expr b a) es
 and arg_str ?local e =
@@ -970,6 +996,10 @@ and occurs_bid bid e =
     List.exists (fun (k, v) -> occurs_bid bid k || occurs_bid bid v) ps
   | EMatchOpt (a, _, x, y) | EDynVec (a, _, x, y) | EDynMap (a, _, x, y)
   | EVariant (a, _, _, x, y) -> List.exists (occurs_bid bid) [ a; x; y ]
+  | ETry (b', c, f) ->
+    List.exists (occurs_bid bid)
+      (b' :: (match c with Some (_, h) -> [ h ] | None -> [])
+         @ (match f with Some fe -> [ fe ] | None -> []))
   | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a -> occurs_bid bid a
   | EOpt None -> false
   | EOpt (Some a) -> occurs_bid bid a
@@ -1217,6 +1247,9 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "rest" -> buf_add b ("(" ^ sfn "rest" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "seq" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if " ^ "Clj_core.Seq.is_empty" ^ " s then None else " ^ (if call_local then "(stack_ (Some s))" else "Some s") ^ ")")
    | "exit" -> buf_add b ("(Stdlib.exit " ^ conv TInt (t 0) (a 0) ^ ")")
+   | "exn" -> buf_add b ("(Stdlib.Failure " ^ conv TString (t 0) (a 0) ^ ")")
+   | "exn-message" -> buf_add b ("(Printexc.to_string " ^ a 0 ^ ")")
+   | "throw" -> buf_add b ("(raise " ^ a 0 ^ ")")
    (* io / system builtins: native emits inline channel/Sys/Unix code;
       melange routes through the emitted Lg_node JS bridge *)
    | "slurp" ->
@@ -1944,6 +1977,9 @@ and emit_builtin_value name ty =
   | "println" -> "(fun x -> print_endline (" ^ gen_printer (arg 0) ^ " x))"
   | "print" -> "(fun x -> print_string (" ^ gen_printer (arg 0) ^ " x))"
   | "exit" -> "Stdlib.exit"
+  | "exn" -> "(fun s -> Stdlib.Failure s)"
+  | "exn-message" -> "Printexc.to_string"
+  | "throw" -> "(fun e -> raise e)"
   | "atom" -> "Clj_core.Atom.atom" | "deref" -> "Clj_core.Atom.deref"
   | "reset!" -> "Clj_core.Atom.reset_bang" | "swap!" -> "Clj_core.Atom.swap_bang"
   | "comp" -> "(fun f g x -> f (g x))"
@@ -2228,6 +2264,10 @@ let rec refs_in acc e =
   | EOpt (Some a) -> refs_in acc a
   | EOpt None -> acc
   | EVariant (a, _, _, x, y) -> refs_in (refs_in (refs_in acc a) x) y
+  | ETry (b', c, f) ->
+    let acc = refs_in acc b' in
+    let acc = (match c with Some (_, h) -> refs_in acc h | None -> acc) in
+    (match f with Some fe -> refs_in acc fe | None -> acc)
 
 (* Split a run of fn defs into binding groups: only defs that reach each
    other transitively (a real recursion cycle, self-loops included) need one
