@@ -24,7 +24,7 @@ jobs:
           opam pin add -yn clj-core git+https://github.com/logseq/clj-core.git#main
 
       - name: Install OCaml deps
-        run: opam install -y ocamlfind dune clj-core ctypes ctypes-foreign melange
+        run: opam install -y ocamlfind dune clj-core ctypes ctypes-foreign melange eio eio_main eio_posix iomux
 
       - uses: actions/setup-node@v4
         with:
