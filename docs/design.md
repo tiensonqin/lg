@@ -623,6 +623,14 @@ first-class modules) raise `Unsupported` -> `type not expressible in lg`.
 Mode analysis treats every `EOCamlCall` argument as escaping — cmi
 signatures carry no borrow metadata.
 
+**Record labels** are projections, not `Sig_value` functions, so the
+value/ctor lookup misses and `lookup_label` scans `Type_record`
+declarations instead: `(x/lbl r)` emits `r.lbl` (AST `EOcamlGet`);
+unapplied it is `(fun r -> r.lbl)` for HOF use. Mutation (`r.lbl <- v`)
+is intentionally not surfaced — OCaml records are conventionally
+immutable. With projection expressible, record->map conversion is
+manual: `(hash-map :contents (std/contents r) ...)`.
+
 ## 18. Incremental compilation
 
 `lg build` caches per-module OCaml artifacts so unchanged sources are
@@ -650,3 +658,32 @@ never recompiled.
   for the dev loop; ocamlopt stays the default for shipped binaries.
   `test.sh`'s bench lane asserts cold/warm build times stay within
   order-of-magnitude bounds (`LG_BENCH_*_MS`).
+
+## 19. Dyn boxing audit + profiling
+
+**Audit (2026-10-10, counted constructor applications in emitted .ml
+program bodies):** `dyn` boxing happens only where `conv` meets an
+`any`-typed slot — heterogeneous collection literals, `map dyn dyn`,
+fn params inferred dyn, and explicit `^any` signatures. Fully-typed
+programs box nothing: `examples/markdown.lg` and `test/lispi.lg` emit
+zero `DInt`/`DVec`/`DMap`/`DOpt` applications in the program body;
+`test/varargs.lg` emits 1; `test/polydyn.lg` (a deliberate dyn-semantics
+test) emits 22, all in `DMap`/`DInt` coll literals. The dyn type and its
+~30 helpers are a fixed ~350-line runtime prelude compiled once into
+`.lg-obj/lg_rt.*` — never duplicated per unit. No further reduction is
+warranted: boxing is already pay-as-you-go at declared `any` boundaries.
+
+**Profiling.** lg binaries are plain ocamlopt output — stock OCaml
+profilers apply, no lg-specific tooling needed:
+
+- GC pressure: `OCAMLRUNPARAM='v=0x400' ./prog` prints major/minor
+  stats at exit; `Gc.quick_stat` is what bench/ uses for allocation
+  numbers.
+- macOS: `sample ./prog 5` for a quick stack sample, or Instruments
+  Time Profiler on the binary.
+- Linux: `perf record ./prog && perf report`; DWARF backtraces need
+  `-O2 -g` equivalents — lg emits `#line` directives so frames map
+  back to .lg source lines.
+- Byte builds (`--byte`) profile identically but skew hot paths
+  toward interpreter dispatch — measure the native binary for real
+  numbers.
