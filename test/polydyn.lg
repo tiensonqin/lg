@@ -56,3 +56,13 @@
 (println (str (conj {:a 1} (tuple :b 2) (tuple :c 3))))
 (println (str (conj {:a 1} {:b 2 :c 3})))
 (let [p ^any (tuple :z 9)] (println (str (conj {} p))))
+
+;; canonical drift repro: a two-param poly map fn canonicalizes to
+;; (map dyn dyn) at the def boundary; both call sites re-box different
+;; concrete key/value types into the emitted dyn object
+(defn getk [m k] (get m k))
+(println (str (getk {:a 1} :a) " " (getk {1 10} 1)))
+;; same boundary through a def-bound lambda and a def alias
+(def getkv (fn [m k] (get m k)))
+(def getka getk)
+(println (str (getkv {:q 3} :q) " " (getka {2 20} 2)))
