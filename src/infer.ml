@@ -2532,7 +2532,18 @@ and infer_special ctx l name ce arg_es =
           (fun a -> List.iter (unify l a) xs; TVec a)
           (fun a -> List.iter (unify l a) xs; TList a)
           (fun a -> List.iter (unify l a) xs; TSet a)
-          (fun kk v -> List.iter (fun x -> unify l x (TTuple [ kk; v ])) xs; TMap (kk, v))
+          (fun kk v ->
+            List.iter
+              (fun x ->
+                match repr x with
+                | TTuple [ tk; tv ] -> unify l tk kk; unify l tv v
+                | TMap (k2, v2) -> unify l k2 kk; unify l v2 v
+                (* a pair from any seqable ([k v] vec, seq, list, `any`)
+                   destructures at runtime; components unbox to k/v *)
+                | TVec _ | TSeq _ | TList _ | TAny -> ()
+                | _ -> unify l x (TTuple [ kk; v ]))
+              xs;
+            TMap (kk, v))
           (fun _ -> type_error l "conj not supported")
     in
     mk l ret (ECall (ce, arg_es))

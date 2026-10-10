@@ -859,13 +859,19 @@ and emit_mop b bn kt vt op =
     (match repr kv.ety with
      | TTuple [ tk; tv ] ->
        buf_add b ("Lg_rt.mb_assoc " ^ bn ^ " " ^ conv kt tk ("(fst " ^ ke ^ ")") ^ " " ^ conv vt tv ("(snd " ^ ke ^ ")") ^ "; ")
+     | TMap _ ->
+       buf_add b ("Lg_rt.mb_extend_map " ^ bn ^ " " ^ ke ^ "; ")
      | TAny ->
        buf_add b ("(match Lg_rt.dyn_to_list " ^ ke ^ " with [k; v] -> Lg_rt.mb_assoc " ^ bn ^ " "
                   ^ conv kt TAny "k" ^ " " ^ conv vt TAny "v" ^ " | _ -> failwith \"conj: map entry must be [k v]\"); ")
-     | TVec pe ->
-       buf_add b ("(match Clj_core.Vec.to_list " ^ ke ^ " with [k; v] -> Lg_rt.mb_assoc " ^ bn ^ " "
-                  ^ conv kt pe "k" ^ " " ^ conv vt pe "v" ^ " | _ -> failwith \"conj: map entry must be [k v]\"); ")
-     | _ -> ())
+     | _ ->
+       let pe =
+         (match repr kv.ety with
+          | TVec el | TSeq el | TList el -> el
+          | _ -> TAny)
+       in
+       buf_add b ("(match " ^ as_list kv ^ " with [k; v] -> Lg_rt.mb_assoc " ^ bn ^ " "
+                  ^ conv kt pe "k" ^ " " ^ conv vt pe "v" ^ " | _ -> failwith \"conj: map entry must be [k v]\"); "))
   | CMExt m2 ->
     (match repr m2.ety with
      | TMap (sk, sv) ->
@@ -1419,10 +1425,13 @@ and emit_builtin_call ?(call_local = false) b ret name args =
           | TAny ->
             "(match Lg_rt.dyn_to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt TAny "k" ^ ", " ^ conv vt TAny "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
           | TMap _ -> "(Clj_core.Map.merge " ^ acc ^ " " ^ e ^ ")"
-          | TVec pe ->
-            "(match Clj_core.Vec.to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt pe "k" ^ ", " ^ conv vt pe "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
           | _ ->
-            "(match Clj_core.Vec.to_list " ^ e ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt TAny "k" ^ ", " ^ conv vt TAny "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
+            let pe =
+              (match repr (List.nth args i).ety with
+               | TVec el | TSeq el | TList el -> el
+               | _ -> TAny)
+            in
+            "(match " ^ as_list (List.nth args i) ^ " with [k; v] -> Clj_core.Map.conj " ^ acc ^ " (" ^ conv kt pe "k" ^ ", " ^ conv vt pe "v" ^ ") | _ -> failwith \"conj: map entry must be [k v]\")"
         in
         buf_add b (List.fold_left one (a 0) (List.init (List.length args - 1) (fun i -> i + 1)))
       | `Seq ->

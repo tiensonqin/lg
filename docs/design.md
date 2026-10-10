@@ -378,6 +378,10 @@ global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
   a vec index must be a `DInt`, a map entry a `(k, v)` tuple, boxed
   tuples appear as pair-vecs inside `dyn`); map ops unwrap `any` args
   via `as_map` and keep results as flat `(dyn, dyn)` maps.
+- **Map `conj` entries:** `(k, v)` tuples (fully typed — key/value unify
+  element-wise), `[k v]` pairs from any seqable — vec, list, seq or
+  `any` — destructured at runtime, or a whole map (`conj m m2` merges,
+  key/value types unify with the destination's).
 - **Predicates.** Tag predicates (`int?` … `coll?`, `nil?`, `some?`,
   `none?`, `fn?`) dispatch on the `Lg_rt.dyn` tag for `any` scrutinees
   and constant-fold statically. `fn?` is always `false` — functions are

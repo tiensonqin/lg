@@ -50,3 +50,9 @@
 (println (str (nth (asv [1 2] 0 7) 0)))
 (let [m ^any {:a 1}] (println (str (assoc-in m [:a :b] 3))))
 (let [m ^any {:a {:b 1}}] (println (str (get-in m [:a :b]))))
+
+;; conj map entries: [k v] vec pair, seqable pair, or a whole map (merge)
+(println (str (conj {:a 1} [:b 2])))
+(println (str (conj {:a 1} (tuple :b 2) (tuple :c 3))))
+(println (str (conj {:a 1} {:b 2 :c 3})))
+(let [p ^any (tuple :z 9)] (println (str (conj {} p))))
