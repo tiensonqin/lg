@@ -106,6 +106,58 @@ else
   echo "FAIL(example) wfreq"; fail=1
 fi
 
+# compat corpus: frozen v1 programs — add-only, must stay green forever
+for src in test/compat/*.lg; do
+  [ -e "$src" ] || continue
+  name=$(basename "$src"); name=${name%.*}
+  if ! "$LG" build "$src" -I lib -o ".test-bin/c_$name" >/dev/null 2>&1; then
+    echo "FAIL(compat-build) $name"; fail=1; continue
+  fi
+  if ! ".test-bin/c_$name" > ".test-bin/c_$name.out" 2>&1; then
+    echo "FAIL(compat-run) $name"; fail=1; continue
+  fi
+  if ! diff -u "test/compat/$name.out" ".test-bin/c_$name.out" > /dev/null 2>&1; then
+    echo "FAIL(compat-diff) $name"
+    diff -u "test/compat/$name.out" ".test-bin/c_$name.out" | head -10
+    fail=1; continue
+  fi
+  echo "ok compat-$name"
+done
+
+# byte/native parity: the semantic core must produce byte-identical
+# output under ocamlc (--byte) and ocamlopt
+for name in core builtins destructure dyn hof match polydyn; do
+  src="test/$name.lg"; [ -e "$src" ] || continue
+  if ! "$LG" build "$src" -I lib --byte -o ".test-bin/b_$name" >/dev/null 2>&1; then
+    echo "FAIL(byte-build) $name"; fail=1; continue
+  fi
+  if ! ".test-bin/b_$name" > ".test-bin/b_$name.out" 2>&1; then
+    echo "FAIL(byte-run) $name"; fail=1; continue
+  fi
+  if ! diff -u "test/$name.out" ".test-bin/b_$name.out" > /dev/null 2>&1; then
+    echo "FAIL(byte-diff) $name"
+    diff -u "test/$name.out" ".test-bin/b_$name.out" | head -10
+    fail=1; continue
+  fi
+  echo "ok byte-$name"
+done
+
+# emit snapshots: test/$name.emit.ml is the checked-in `lg emit` output;
+# any codegen drift on those files fails the diff
+for snap in test/*.emit.ml; do
+  [ -e "$snap" ] || continue
+  name=$(basename "$snap" .emit.ml)
+  if ! "$LG" emit "test/$name.lg" -I lib -o ".test-bin/$name.emit.ml" >/dev/null 2>&1; then
+    echo "FAIL(snapshot-emit) $name"; fail=1; continue
+  fi
+  if ! diff -u "$snap" ".test-bin/$name.emit.ml" > /dev/null 2>&1; then
+    echo "FAIL(snapshot-diff) $name"
+    diff -u "$snap" ".test-bin/$name.emit.ml" | head -15
+    fail=1; continue
+  fi
+  echo "ok snapshot-$name"
+done
+
 # reader round-trip: parse -> print -> parse -> form_eq over every .lg
 RT=./_build/default/test/roundtrip.exe
 if [ -x "$RT" ]; then

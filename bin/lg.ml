@@ -20,6 +20,7 @@ let () =
   let file = ref None in
   let backend = ref "ocaml" in
   let all_mods = ref false in
+  let byte = ref false in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
@@ -27,6 +28,8 @@ let () =
        "<ocaml|oxcaml|melange> emit mode annotations for OxCaml, or JS via melange")
     ; ("--all", Arg.Set all_mods,
        " lg lgi: generate .lgi for every module in the require closure")
+    ; ("--byte", Arg.Set byte,
+       " lg build --backend=ocaml: force an ocamlc bytecode build")
     ; ("--strict", Arg.Set Lgc.Infer.strict,
        " heterogeneous literals require an explicit ^any annotation") ]
   in
@@ -276,8 +279,8 @@ let () =
              (try Unix.mkdir objdir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
              let units = Lgc.Emit.emit_units mods in
              let opt = Sys.command "ocamlfind ocamlopt -version >/dev/null 2>&1" = 0 in
-             let comp = if opt then "ocamlopt" else "ocamlc" in
-             let obj_ext = if opt then ".cmx" else ".cmo" in
+             let comp = if !byte || not opt then "ocamlc" else "ocamlopt" in
+             let obj_ext = if !byte || not opt then ".cmo" else ".cmx" in
              let read_file p =
                try
                  let ic = open_in_bin p in

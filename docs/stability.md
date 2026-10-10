@@ -296,10 +296,11 @@ release:
    return lazy seqs, `int`/`float`/`name` reject non-convertible
    static types, builtins lacking value closures are E100.
 2. **Builtin × collection-kind matrix.** `map`/`first`/`count`/`get`/`conj`/`take`/`drop`/`into`/`seq`/`reverse`/`sort`/`contains?` dispatch by static coll type (vec/list/set/map/string) — golden-test each cell that's allowed and assert each forbidden cell is a static error, not a build failure.
-3. **Emit snapshots.** `lg emit` output diffed per test — catches codegen
-   regressions invisible to `.out` diffs. Requires deterministic emit
-   (binder counters are process-global; single-process emit is
-   deterministic today — spec it).
+3. **Emit snapshots — DONE.** Opt-in: a checked-in `test/$name.emit.ml`
+   is diffed against a fresh `lg emit` run — codegen drift invisible to
+   `.out` diffs now fails the suite. Seeded for polydyn / destructure /
+   fbip / dyn / oxcaml (dyn paths, destructuring, builders, mode
+   annotations). Single-process emit is deterministic.
 4. **Negative-message classes — DONE.** Each `should_fail/*.lg` may carry
    a `*.err` file holding an ERE pattern that the compiler's stderr must
    match — a failure for the wrong reason now fails the suite. All 13
@@ -307,14 +308,14 @@ release:
 5. **Macro corpus — DONE.** `test/hyg.lg` (hygiene/capture attempts),
    `test/macros.lg` (defmacro incl. `~@`/nested squote), and
    `test/_hyglib.lg` (cross-module macro module) run in `test.sh`.
-6. **Cross-backend parity.** `lg build` already falls back ocamlopt →
-   ocamlc; run the same `.out` diffs on native *and* byte, and add a
-   melange/js_of_ocaml lane when the runtime is wired (clj-core already
-   builds `melange`). Byte-identical program output across backends is
-   the parity claim.
-7. **Compat corpus.** `test/compat/` frozen at v1.0: programs are only
-   added, never edited; every release must run them green. Distinct from
-   `test/` which may evolve.
+6. **Cross-backend parity — byte lane DONE.** `lg build --byte` forces
+   ocamlc; test.sh runs the semantic core (core/builtins/destructure/
+   dyn/hof/match/polydyn) through byte build + run + `.out` diff —
+   byte-identical output across ocamlopt/ocamlc is the parity claim.
+   A melange lane waits on the melange runtime wiring.
+7. **Compat corpus — DONE.** `test/compat/` is the add-only frozen
+   corpus (basic / collections / macros so far); test.sh runs it through
+   the same build→run→diff pipeline as the live suite.
 8. **Wire `examples/` into the suite — DONE.** test.sh builds and runs
    all single-file examples plus the multi-file `impdemo`/`wfreq`
    programs (no `.out` diff — several print timings or read files).

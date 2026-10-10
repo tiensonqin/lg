@@ -1,0 +1,6 @@
+;; compat corpus — frozen at v1.0: add, never edit
+(ns cmac)
+(defmacro twice [e] `(let [tmp ~e] (+ tmp tmp)))
+(println (twice 21))
+(println (str (-> 5 (+ 3) (* 2))))
+(println (str (->> '(1 2 3) (map inc) (count))))

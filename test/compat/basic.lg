@@ -1,0 +1,7 @@
+;; compat corpus — frozen at v1.0: add, never edit
+(ns cbasic)
+(defn add ^(fn [int int] int) [a b] (+ a b))
+(println (add 20 22))
+(println (str "x" (* 6 7) "y"))
+(let [a 1 b 2] (println (+ a b)))
+(println (if (> 3 2) "gt" "le"))

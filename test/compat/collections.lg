@@ -1,0 +1,9 @@
+;; compat corpus — frozen at v1.0: add, never edit
+(ns ccoll)
+(println (str [1 2 3]))
+(println (str {:a 1 :b 2}))
+(println (str #{1 2 3}))
+(let [{:keys [a b] :or {b 9}} {:a 5}] (println (str a "," b)))
+(let [[x y] [7 8]] (println (str x "," y)))
+(println (str (map (fn [x] (* x 2)) [1 2 3])))
+(println (str (reduce + 0 [1 2 3 4])))
