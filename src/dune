@@ -1,9 +1,31 @@
+; compiler-libs.optcomp (not .common) because typechecker units
+; (Types, Cmi_format, Subst, Path) live in ocamlcommon.cmxa upstream but
+; moved to ocamlfrontend.cmxa under OxCaml — optcomp's requires chain
+; resolves to exactly the right archive set on each toolchain.
 (library
  (name lgc)
- (modules (:standard \ embed_gen)) (libraries unix compiler-libs.common))
+ (modules (:standard \ embed_gen osig_shim_upstream osig_shim_ox))
+ (libraries unix compiler-libs.optcomp))
 
 (rule
  (target embedded_runtime.ml)
  (deps embed_gen.ml ../runtime/lg_rt.ml)
  (action
   (run ocaml embed_gen.ml %{target} ../runtime/lg_rt.ml)))
+
+; compiler-libs ABI differs between upstream OCaml and OxCaml: copy the
+; matching shim impl to osig_shim.ml. OxCaml reports a "+ox" version
+; (e.g. 5.4.0+ox); every other toolchain gets the upstream impl.
+(rule
+ (target osig_shim.ml)
+ (deps osig_shim_ox.ml)
+ (enabled_if (= %{ocaml_version} "5.4.0+ox"))
+ (action (copy# %{deps} %{target})))
+
+(rule
+ (target osig_shim.ml)
+ (deps osig_shim_upstream.ml)
+ (enabled_if (<> %{ocaml_version} "5.4.0+ox"))
+ (action (copy# %{deps} %{target})))
+
+

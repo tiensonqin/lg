@@ -25,10 +25,14 @@ eval "$(opam env --switch=oxcaml --set-switch)"
 
 LG=./_build/default/bin/lg.exe
 fail=0
+# _build is shared across switches: refresh lg.exe under this switch so
+# the ocaml.* interop lanes run against ox-written cmis (an upstream
+# binary in _build cannot parse them).
+dune build bin/lg.exe 2>/dev/null || true
 # ocaml.* requires read .cmi signatures, which are toolchain-bound — an
 # upstream-built lg cannot parse OxCaml cmis. Probe once: when the reader
 # reports the toolchain mismatch, the ocamlinterop lane is skipped rather
-# than failed (an oxcaml-built lg would pass it).
+# than failed (an oxcaml-built lg passes it).
 SKIP_OI=0
 if "$LG" check test/ocamlinterop.lg -I lib 2>&1 | grep -q "different OCaml toolchain"; then
   SKIP_OI=1

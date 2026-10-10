@@ -395,13 +395,25 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
   synthesizes `()`; under-application returns the remaining
   `TFun`. Constructors emit `Mod.Ctor` calls with exact field
   count.
-- **Types**: `ty_of_te` maps cmi `type_expr`s onto lg types;
-  unknown constructors become opaque `TCon` handles qualified by
-  owning unit (dune-wrapped spellings canonicalize to the flat
-  unit); unexpressible types (objects, polymorphic variants,
-  first-class modules) raise `type not expressible in lg`.
-  cmi files are toolchain-bound — a `.cmi` from a different OCaml
-  toolchain is reported as such, not misparsed.
+- **Types**: `ty_of_te` maps cmi `type_expr`s onto lg types.
+  A constructor path whose declaration carries a *transparent
+  manifest* (`type t = string`, `type 'a t = 'a list`) expands
+  through its own cmi — OxCaml cmis spell `string` as
+  `Stdlib__String.t` where upstream writes the primitive —
+  with the declaration's `type_params` instantiated by the
+  constructor args, bounded at depth 8. Unresolved or
+  inexpressible manifests become opaque `TCon` handles
+  qualified by owning unit (dune-wrapped spellings
+  canonicalize to the flat unit); unexpressible types
+  (objects, polymorphic variants, first-class modules) raise
+  `type not expressible in lg`. The compiler-libs ABI surface
+  (`Cmi_format`, `Types`, arg labels, constructor payloads)
+  is normalized by `src/osig_shim*.ml` — dune selects the
+  upstream or OxCaml implementation by `%{ocaml_version}`, so
+  `dune build` works under either switch and an ox-built lg
+  reads ox cmis natively. cmi files remain toolchain-bound —
+  a `.cmi` from a different OCaml toolchain is reported as
+  such, not misparsed.
 - **Mode analysis** treats every `EOCamlCall` argument as
   escaping (cmi carries no borrow metadata).
 

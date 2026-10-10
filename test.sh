@@ -8,8 +8,10 @@ command -v opam >/dev/null 2>&1 && eval $(opam env --switch=5.5.0 --set-switch) 
 LG=./_build/default/bin/lg.exe
 mkdir -p .test-bin
 fail=0
-# test/ executables are not in the root @default alias — build roundtrip
-dune build test/roundtrip.exe 2>/dev/null || true
+# test/ executables are not in the root @default alias; build them plus
+# lg.exe — a binary left in _build by a different switch silently reads
+# the wrong cmi family (toolchain-bound format), so always refresh it.
+dune build bin/lg.exe test/roundtrip.exe 2>/dev/null || true
 
 # ffi.lg links a C stub via LG_EXTRA_LINK (like a real OCaml-runtime binding)
 if [ -f test/ffi_stub.c ]; then

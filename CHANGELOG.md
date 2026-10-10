@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `ocaml.*` interop now compiles and runs under OxCaml: the
+  compiler-libs ABI differences (`cmi_sign` staticity pair, arrow
+  labels, variant/ctor payload shapes, archive split) are normalized
+  in `src/osig_shim*.ml` selected by `%{ocaml_version}`, and
+  transparent manifest aliases in cmis (`Stdlib__String.t = string`)
+  expand with their `type_params` instantiated — `ocamlinterop` and
+  `eiodemo` build+run identically on both toolchains.
+- `lg fmt` escapes char literals (`\newline`, `\space`, …) instead of
+  emitting raw control bytes; whole-corpus fmt fidelity lanes assert
+  form-level equivalence, idempotence, and comment preservation.
+- `test.sh` refreshes `bin/lg.exe` before running — a `_build` binary
+  left by another opam switch reads the wrong cmi family.
+
 ## v0.1.0
 
 First tagged release of lg — a statically-typed Clojure-flavored Lisp

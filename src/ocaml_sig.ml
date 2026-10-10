@@ -15,7 +15,7 @@
 
 open Typ
 
-type ocaml_lbl = ONo | OLbl of string | OOpt of string
+type ocaml_lbl = Osig_shim.ocaml_lbl = ONo | OLbl of string | OOpt of string
 
 (* alias -> OCaml module path ("String", "Eio.Fiber", "Unix") *)
 let aliases : (string, string) Hashtbl.t = Hashtbl.create 17
@@ -169,7 +169,7 @@ let signature_of modpath =
        in
        let segs = String.split_on_char '.' modpath in
        let rest = List.filteri (fun i _ -> i >= k) segs in
-       let r = (cmi.Cmi_format.cmi_sign, unit, rest) in
+       let r = (Osig_shim.cmi_signature cmi, unit, rest) in
        Hashtbl.replace unit_paths modpath (String.concat "." (unit :: rest));
        Hashtbl.replace sig_cache modpath r;
        Some r)
@@ -206,67 +206,6 @@ let qualify_tcon n =
   if String.contains n '.' || !cur_unit_path = "" then flat_path n
   else flat_path (!cur_unit_path ^ "." ^ n)
 
-let rec ty_of_te te : ty =
-  match Types.get_desc te with
-  | Types.Tarrow (_, a, r, _) -> TFun ([ ty_of_te a ], ty_of_te r)
-  | Types.Ttuple ts -> TTuple (List.map (fun (_, t) -> ty_of_te t) ts)
-  | Types.Tlink t | Types.Tsubst (t, _) -> ty_of_te t
-  | Types.Tvar _ ->
-    let id = Types.get_id te in
-    (match Hashtbl.find_opt var_tbl id with
-     | Some v -> TVar v
-     | None ->
-       let v = Typ.fresh_var () in
-       (match v with
-        | TVar tv -> Hashtbl.replace var_tbl id tv
-        | _ -> ());
-       v)
-  | Types.Tpoly (t, _) -> ty_of_te t
-  | Types.Tconstr (p, args, _) ->
-    let n = Path.name p in
-    let base =
-      match List.rev (String.split_on_char '.' n) with
-      | b :: _ -> b
-      | [] -> n
-    in
-    (match base, args with
-     | "int", [] -> TInt
-     | "float", [] -> TFloat
-     | "bool", [] -> TBool
-     | "string", [] -> TString
-     | "char", [] -> TChar
-     | "unit", [] -> TUnit
-     | "bytes", [] -> TString
-     | "exn", [] -> TString
-     | "list", [ a ] -> TList (ty_of_te a)
-     | "option", [ a ] -> TOption (ty_of_te a)
-     | "array", [ a ] -> TList (ty_of_te a)
-     | "seq", [ a ] -> TSeq (ty_of_te a)
-     | "result", [ o; _ ] -> TOption (ty_of_te o)
-     | "ref", [ a ] -> TAtom (ty_of_te a)
-     (* abstract/unknown type constructors become opaque handles: they can
-        be held and passed back to the library that produced them, never
-        constructed from lg directly *)
-     | _ -> TCon (qualify_tcon n, List.map ty_of_te args))
-  | _ -> raise (Unsupported "type form")
-
-(* decompose a value's type into positional/labeled params + result *)
-let decompose te : (ty list) * ocaml_lbl list * ty =
-  let rec go ps ls t =
-    match Types.get_desc t with
-    | Types.Tarrow (lbl, a, r, _) ->
-      let l =
-        match lbl with
-        | Asttypes.Nolabel -> ONo
-        | Asttypes.Labelled s -> OLbl s
-        | Asttypes.Optional s -> OOpt s
-      in
-      go (ps @ [ ty_of_te a ]) (ls @ [ l ]) r
-    | Types.Tlink t | Types.Tsubst (t, _) -> go ps ls t
-    | _ -> (ps, ls, ty_of_te t)
-  in
-  go [] [] te
-
 (* descend nested-module segments of a modpath through Sig_module decls
    (Mty_signature), following Mty_alias through the aliased unit's cmi.
    Naming tracks the actual unit read ("Eio__core__.Switch") rather than
@@ -295,7 +234,7 @@ let rec walk_submodules items (unit, acc) = function
                       modules inside the aliased unit's signature *)
                    let asegs = String.split_on_char '.' (Path.name p) in
                    let arest = List.filteri (fun i _ -> i >= k) asegs in
-                   Some (`Alias (cmi.Cmi_format.cmi_sign, un, arest))
+                   Some (`Alias (Osig_shim.cmi_signature cmi, un, arest))
                  | None -> Some `Missing)
               | _ -> Some `Missing)
            | _ -> None)
@@ -305,6 +244,113 @@ let rec walk_submodules items (unit, acc) = function
      | Some (`Alias (inner, un, arest)) ->
        walk_submodules inner (un, []) (arest @ tl)
      | _ -> None)
+
+(* a Tconstr path "P.t" may hide a transparent manifest alias — ox cmis
+   spell String.t as Stdlib__String.t where upstream cmis spell the
+   primitive `string`, and user libraries do the same with `type t =
+   inner`. Read the type's declaration in P's own cmi and expand the
+   manifest when it is transparent. Depth-bound keeps alias cycles
+   finite; the declaration's type_params instantiate against the
+   Tconstr's args via subst. *)
+let manifest_decl path =
+  match String.rindex_opt path '.' with
+  | None -> None
+  | Some i ->
+    let modpath = String.sub path 0 i in
+    let tname = String.sub path (i + 1) (String.length path - i - 1) in
+    (match signature_of modpath with
+     | None -> None
+     | Some (items, unit, rest) ->
+       (match walk_submodules items (unit, []) rest with
+        | None -> None
+        | Some (items, _) ->
+          List.find_map
+            (fun it ->
+              (match it with
+               | Types.Sig_type (id, td, _, _) when Ident.name id = tname ->
+                 Some td
+               | _ -> None))
+            items))
+
+let rec ty_of_te ?(depth = 0) ?(subst = []) te : ty =
+  match Types.get_desc te with
+  | Types.Tarrow (_, a, r, _) ->
+    TFun ([ ty_of_te ~depth ~subst a ], ty_of_te ~depth ~subst r)
+  | Types.Ttuple ts ->
+    TTuple (List.map (fun (_, t) -> ty_of_te ~depth ~subst t) ts)
+  | Types.Tlink t | Types.Tsubst (t, _) -> ty_of_te ~depth ~subst t
+  | Types.Tvar _ ->
+    let id = Types.get_id te in
+    (match List.assoc_opt id subst with
+     | Some t -> t
+     | None ->
+       (match Hashtbl.find_opt var_tbl id with
+        | Some v -> TVar v
+        | None ->
+          let v = Typ.fresh_var () in
+          (match v with
+           | TVar tv -> Hashtbl.replace var_tbl id tv
+           | _ -> ());
+          v))
+  | Types.Tpoly (t, _) -> ty_of_te ~depth ~subst t
+  | Types.Tconstr (p, args, _) ->
+    let n = Path.name p in
+    let base =
+      match List.rev (String.split_on_char '.' n) with
+      | b :: _ -> b
+      | [] -> n
+    in
+    (match base, args with
+     | "int", [] -> TInt
+     | "float", [] -> TFloat
+     | "bool", [] -> TBool
+     | "string", [] -> TString
+     | "char", [] -> TChar
+     | "unit", [] -> TUnit
+     | "bytes", [] -> TString
+     | "exn", [] -> TString
+     | "list", [ a ] -> TList (ty_of_te ~depth ~subst a)
+     | "option", [ a ] -> TOption (ty_of_te ~depth ~subst a)
+     | "array", [ a ] -> TList (ty_of_te ~depth ~subst a)
+     | "seq", [ a ] -> TSeq (ty_of_te ~depth ~subst a)
+     | "result", [ o; _ ] -> TOption (ty_of_te ~depth ~subst o)
+     | "ref", [ a ] -> TAtom (ty_of_te ~depth ~subst a)
+     (* expand a transparent manifest alias (Stdlib__String.t = string);
+        on failure fall through to an opaque handle *)
+     | _ when depth < 8 ->
+       (match manifest_decl (qualify_tcon n) with
+        | Some { Types.type_manifest = Some m; type_params = ps; _ } ->
+          (try
+             let subst' =
+               try
+                 List.map2
+                   (fun pe a -> (Types.get_id pe, ty_of_te ~depth ~subst a))
+                   ps args
+               with Invalid_argument _ -> subst
+             in
+             ty_of_te ~depth:(depth + 1) ~subst:subst' m
+           with Unsupported _ ->
+             (* an inexpressible manifest is no better than the handle —
+                keep the opaque TCon *)
+             TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
+        | _ -> TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
+     (* abstract/unknown type constructors become opaque handles: they can
+        be held and passed back to the library that produced them, never
+        constructed from lg directly *)
+     | _ -> TCon (qualify_tcon n, List.map (ty_of_te ~depth ~subst) args))
+  | _ -> raise (Unsupported "type form")
+
+(* decompose a value's type into positional/labeled params + result *)
+let decompose te : (ty list) * ocaml_lbl list * ty =
+  let rec go ps ls t =
+    match Osig_shim.split_arrow t with
+    | Some (l, a, r) -> go (ps @ [ ty_of_te a ]) (ls @ [ l ]) r
+    | None ->
+      (match Types.get_desc t with
+       | Types.Tlink u | Types.Tsubst (u, _) -> go ps ls u
+       | _ -> (ps, ls, ty_of_te t))
+  in
+  go [] [] te
 
 (* look up `name` in modpath's signature: either a value or a variant
    constructor. Returns (param tys, labels, result ty, is_ctor). *)
@@ -325,16 +371,16 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
           Some (ps, ls, r, false)
         end else find tl
       | Types.Sig_type (tid, td, _, _) :: tl ->
-        (match td.Types.type_kind with
-         | Types.Type_variant (cds, _) ->
+        (match Osig_shim.variant_ctors td with
+         | Some cds ->
            (match
               List.find_opt
                 (fun cd -> Ident.name cd.Types.cd_id = name)
                 cds
             with
             | Some cd ->
-              (match cd.Types.cd_args with
-               | Types.Cstr_tuple ts ->
+              (match Osig_shim.cstr_tuple cd with
+               | Some ts ->
                  let rt =
                    let emod = flat_path naming in
                    match td.Types.type_manifest with
@@ -344,9 +390,9 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
                    | None -> TCon (emod ^ "." ^ Ident.name tid, [])
                  in
                  Some (List.map ty_of_te ts, List.map (fun _ -> ONo) ts, rt, true)
-               | Types.Cstr_record _ -> find tl)
+               | None -> find tl)
             | None -> find tl)
-         | _ -> find tl)
+         | None -> find tl)
       | _ :: tl -> find tl
     in
     find items)
