@@ -88,8 +88,9 @@ to `{:kw pat}` form — spec.
 | top-level defs public unless `.lgi`-unlisted | a | `.lgi` shipped (v2) — listed = exported, unlisted = private |
 | `:refer` / `:use` / `:import` | c | absent; adding is non-breaking |
 
-Open: ns `foo-bar` and `foo_bar` both munge to OCaml module `Foo_bar` —
-collision, currently unhandled.
+Resolved: ns `foo-bar` and `foo_bar` both munge to OCaml module `Foo_bar` —
+`compile_path` now rejects the collision (and a repeated ns name across
+files) with E100 naming both namespaces.
 
 ### 1.4 `^meta`
 
@@ -111,11 +112,10 @@ silently dropped.
 ### 1.5 Builtins
 
 127 `reg` calls register the builtin table (src/infer.ml) plus the
-numeric/comparison batches; `is_special_builtin` has 115 entries. Four
-specials — `vector`, `hash-map`, `hash-set`, `kw-get` — are *not* in
-`builtin_table`, so `(vector 1 2)` fails `unresolved symbol vector`.
-`kw-get` is internal (emitted by destructuring); `dyn-eq` and `no-match`
-are internal too and never user-visible — they stay unfrozen.
+numeric/comparison batches; `is_special_builtin` has 112 entries.
+`kw-get` is the one special *not* in `builtin_table` — internal, emitted
+by destructuring; `dyn-eq` and `no-match` are internal too and never
+user-visible — they stay unfrozen.
 
 Both systemic hazards are **resolved**:
 
@@ -181,9 +181,9 @@ Per-builtin classification (`(a)` = frozen-now):
 
 **(c) — experimental / dead (4 + syntax):**
 
-| Item | Reason |
-|---|---|
-| `vector` `hash-map` `hash-set` `kw-get` | in `is_special_builtin` but not `builtin_table` — unreachable as symbols; literals cover the first three and `kw-get` is internal. Cut the dead dispatch. |
+Resolved: `vector`/`hash-map`/`hash-set` dead dispatch cut (infer, emit,
+modes tables); literals cover them. `kw-get` stays — it is the internal
+builtin destructuring compiles down to.
 
 `& rest` varargs moved to (a): implemented (`rest : 'a list`, call sites
 wrap extras in a list literal) and spec'd in README/design §10.
@@ -364,9 +364,9 @@ Argued from the code:
    self-recursive `defn` + OCaml TCO covers loops; there is no `set!`
    target semantics worth freezing; exceptions deserve a designed story,
    not a half-port. Re-adding is a MINOR.
-2. **`vector`/`hash-map`/`hash-set`** — dead dispatch entries; `[…]`,
-   `{…}`, `#{…}` literals cover them. Cut the dead code; register later
-   only if `apply`-style use cases appear.
+2. **`vector`/`hash-map`/`hash-set`** — done: dead dispatch entries cut;
+   `[…]`, `{…}`, `#{…}` literals cover them. Register later only if
+   `apply`-style use cases appear.
 3. **Most seq/HOF builtins → `core.lg`.** `second butlast interpose
    distinct frequencies group-by zipmap mapcat juxt comp partial
    take-while drop-while every? reverse last peek pop` are each ~5 lines

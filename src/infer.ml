@@ -420,7 +420,7 @@ let is_special_builtin = function
   | "dissoc" | "map" | "filter" | "reduce" | "mapv" | "filterv" | "into"
   | "apply" | "kw-get" | "contains?" | "empty?" | "count" | "range" | "int" | "float" | "name"
   | "take" | "drop" | "cons" | "tuple"
-  | "concat" | "merge" | "list" | "vector" | "hash-map" | "hash-set"
+  | "concat" | "merge" | "list"
   | "str" | "println" | "print" | "pr-str" | "swap!"
   | "select-keys" | "update" | "get-in" | "assoc-in" | "update-in" | "comp" | "juxt"
   | "partial" | "mapcat" | "interpose" | "reverse" | "distinct" | "second"
@@ -2691,26 +2691,6 @@ and infer_special ctx l name ce arg_es =
     let a = fresh_var () in
     List.iter (fun t -> unify l t a) ty_args;
     mk l (TList a) (EListLit arg_es)
-  | "vector", _ ->
-    let a = fresh_var () in
-    List.iter (fun t -> unify l t a) ty_args;
-    mk l (TVec a) (EVecLit arg_es)
-  | "hash-map", _ ->
-    let kes =
-      let rec go acc = function
-        | [] -> List.rev acc
-        | e1 :: e2 :: r -> go ((e1, e2) :: acc) r
-        | _ -> type_error l "hash-map requires even forms"
-      in
-      go [] arg_es
-    in
-    let kk = fresh_var () and v = fresh_var () in
-    List.iter (fun (k2, v2) -> unify k2.loc kk k2.ety; unify v2.loc v v2.ety) kes;
-    mk l (TMap (kk, v)) (EMapLit kes)
-  | "hash-set", _ ->
-    let a = fresh_var () in
-    List.iter (fun t -> unify l t a) ty_args;
-    mk l (TSet a) (ESetLit arg_es)
   | "select-keys", [ m; ks ] ->
     let kk = fresh_var () and v = fresh_var () in
     unify l m (TMap (kk, v));

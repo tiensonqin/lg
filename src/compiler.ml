@@ -405,6 +405,24 @@ let compile_path ~(roots : string list) ?(target = Reader.TNative) (path : strin
     end
   in
   load path;
+  (* two modules must not collapse into one emitted name: a repeated ns
+     name (same name from different files) silently merges globals, and
+     distinct ns names that munge to the same OCaml module (foo-bar vs
+     foo_bar) emit a duplicate `module M = struct` — catch both early *)
+  let seen_ns = Hashtbl.create 16 and seen_mod = Hashtbl.create 16 in
+  List.iter
+    (fun (m : Ast.modl) ->
+      (match Hashtbl.find_opt seen_ns m.mname with
+       | Some (m2 : Ast.modl) when m2.mpath <> m.mpath ->
+         raise (Compile_error (no_loc, "duplicate namespace " ^ m.mname ^ " in " ^ m.mpath ^ " and " ^ m2.mpath))
+       | _ -> ());
+      (match Hashtbl.find_opt seen_mod m.ocaml_name with
+       | Some (m2 : Ast.modl) when m2.mname <> m.mname ->
+         raise (Compile_error (no_loc, "namespaces " ^ m2.mname ^ " and " ^ m.mname ^ " both compile to OCaml module " ^ m.ocaml_name))
+       | _ -> ());
+      Hashtbl.replace seen_ns m.mname m;
+      Hashtbl.replace seen_mod m.ocaml_name m)
+    !order;
   List.rev !order
 
 let mode_stats mods =

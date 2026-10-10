@@ -1184,23 +1184,6 @@ and emit_builtin_call ?(call_local = false) b ret name args =
        ((if call_local then "(stack_ [" else "[")
         ^ String.concat "; " (List.map arg_str args)
         ^ (if call_local then "])" else "]"))
-   | "vector" ->
-     buf_add b
-       ((if call_local then "(Clj_core.Vec.of_list_local (stack_ [" else "(Clj_core.Vec.of_list [")
-        ^ String.concat "; " (List.map arg_str args)
-        ^ (if call_local then "]))" else "])"))
-   | "hash-map" ->
-     let kt, vt = match repr ret with TMap (k, v) -> (k, v) | _ -> (TUnit, TUnit) in
-     let enc ty e = if is_any ty && not (is_any e.ety) then box_of e else arg_str e in
-     let rec pairs acc = function
-       | k :: v :: rest -> pairs (("(" ^ enc kt k ^ ", " ^ enc vt v ^ ")") :: acc) rest
-       | [] -> List.rev acc
-       | [ _ ] -> acc
-     in
-     buf_add b ("(Clj_core.Map.of_list [" ^ String.concat "; " (pairs [] args) ^ "])")
-   | "hash-set" ->
-     let el = match repr ret with TSet e -> e | _ -> TUnit in
-     buf_add b ("(Clj_core.Set.of_list [" ^ String.concat "; " (List.map (fun e -> if is_any el && not (is_any e.ety) then box_of e else arg_str e) args) ^ "])")
    | "first" -> buf_add b ("(" ^ "Clj_core.Seq.first" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "next" -> buf_add b ("(" ^ sfn "next" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "rest" -> buf_add b ("(" ^ sfn "rest" ^ " " ^ as_seq (List.nth args 0) ^ ")")

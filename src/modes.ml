@@ -158,7 +158,6 @@ let () =
       "vec", Fixed [ { pos = 0; mode = Flows; kinds = [ KVec; KList; KMap ]; needs_local_coll = false };
                      { pos = 0; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
       "list", Variadic (Flows, []);
-      "vector", Variadic (Flows, []);
       "mapv", Fixed [ { pos = 0; mode = Borrows; kinds = [ KVec ]; needs_local_coll = true };
                       { pos = 1; mode = Elems 0; kinds = [ KVec ]; needs_local_coll = false };
                       { pos = 1; mode = Borrows; kinds = [ KSeq ]; needs_local_coll = false } ];
