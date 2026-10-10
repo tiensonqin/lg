@@ -404,6 +404,9 @@ let last xs = List.nth xs (List.length xs - 1)
    constructors for match exhaustiveness and emit *)
 let all_variants : (string, vctor) Hashtbl.t = Hashtbl.create 16
 let all_vtypes : (string, string list) Hashtbl.t = Hashtbl.create 8
+(* defvariant type name -> ocaml module that declares it; used by emit to
+   qualify cross-module type references *)
+let all_type_mods : (string, string) Hashtbl.t = Hashtbl.create 8
 
 let register_variant_mod ocaml_mod c sch nfields =
   Hashtbl.replace all_variants c { vc_ocaml = ocaml_mod ^ "." ^ String.capitalize_ascii (munge c); vc_scheme = sch; vc_nfields = nfields }
@@ -492,6 +495,7 @@ and infer_top ctx f =
     let cnames = List.map fst parsed in
     Hashtbl.replace ctx.vtypes vname cnames;
     Hashtbl.replace all_vtypes vname cnames;
+    Hashtbl.replace all_type_mods vname ctx.modl.ocaml_name;
     ctx.modl.tops <- ctx.modl.tops @ [ TVariant (l, vname, tvars, parsed) ]
   | List (l, Atom (_, Symbol "ffi") :: _) ->
     ctx.modl.tops <- ctx.modl.tops @ [ infer_ffi ctx l f ]

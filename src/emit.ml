@@ -1701,13 +1701,18 @@ let rec ocaml_ty t =
   | TSet u -> paren_ty (ocaml_ty u) ^ " Clj_core.Set.t"
   | TMap (k, v) -> "(" ^ ocaml_ty k ^ ", " ^ ocaml_ty v ^ ") Clj_core.Map.t"
   | TAtom u -> paren_ty (ocaml_ty u) ^ " Clj_core.Atom.t"
-  | TCon (n, []) -> munge n
-  | TCon (n, ts) -> "(" ^ String.concat ", " (List.map ocaml_ty ts) ^ ") " ^ munge n
+  | TCon (n, []) -> tcon_name n
+  | TCon (n, ts) -> "(" ^ String.concat ", " (List.map ocaml_ty ts) ^ ") " ^ tcon_name n
   | TVar v -> "'a" ^ string_of_int v.id
   | TFun (a, r) ->
     let dom = match a with [] -> [ "unit" ] | _ -> List.map ocaml_ty a in
     "(" ^ String.concat " -> " (dom @ [ ocaml_ty r ]) ^ ")"
   | t -> failwith ("emit: type has no OCaml FFI mapping: " ^ Typ.string_of_lg_ty t)
+
+and tcon_name n =
+  match Hashtbl.find_opt Infer.all_type_mods n with
+  | Some m when m <> !cur_mod -> m ^ "." ^ munge n
+  | _ -> munge n
 
 and paren_ty s = if String.contains s ' ' then "(" ^ s ^ ")" else s
 
@@ -1887,21 +1892,24 @@ let fn_groups (ds : topdef list) : (bool * topdef list) list =
   let names = List.map (fun d -> d.tname) ds in
   let tbl = Hashtbl.create 16 in
   List.iter (fun d -> Hashtbl.replace tbl d.tname (refs_in [] d.texpr)) ds;
-  let memo = Hashtbl.create 16 in
-  let rec reach seen n =
-    match Hashtbl.find_opt memo n with
-    | Some r -> r
-    | None ->
-      let direct = match Hashtbl.find_opt tbl n with Some r -> r | None -> [] in
-      let acc = ref direct in
-      List.iter
-        (fun m ->
-          if List.mem m names && not (List.mem m seen) then
-            acc := reach (m :: seen) m @ !acc)
-        direct;
-      acc := List.sort_uniq compare !acc;
-      Hashtbl.replace memo n !acc;
-      !acc
+  (* transitive refs of n, restricted to names in this run. Plain DFS —
+     a shared visited set per call; no memo (a memoized result would be
+     poisoned by whichever ancestors happened to be on the DFS path). *)
+  let reach n =
+    let seen = Hashtbl.create 16 in
+    let rec go acc n =
+      match Hashtbl.find_opt tbl n with
+      | None -> acc
+      | Some direct ->
+        List.fold_left
+          (fun acc m ->
+            if List.mem m names && not (Hashtbl.mem seen m) then (
+              Hashtbl.replace seen m ();
+              go (m :: acc) m)
+            else acc)
+          acc direct
+    in
+    go [] n
   in
   let assigned = Hashtbl.create 16 in
   let sccs =
@@ -1909,12 +1917,12 @@ let fn_groups (ds : topdef list) : (bool * topdef list) list =
       (fun acc d ->
         if Hashtbl.mem assigned d.tname then acc
         else
-          let dr = reach [] d.tname in
+          let dr = reach d.tname in
           let scc =
             List.filter
               (fun o ->
                 o.tname = d.tname
-                || (List.mem o.tname dr && List.mem d.tname (reach [] o.tname)))
+                || (List.mem o.tname dr && List.mem d.tname (reach o.tname)))
               ds
           in
           List.iter (fun o -> Hashtbl.replace assigned o.tname ()) scc;
