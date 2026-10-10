@@ -27,6 +27,15 @@ type form =
   (* (quote form) produced by the ' reader macro *)
   | Quote of loc * form
 
+(* char literal printer — the inverse of Reader's named_char. Shared by
+   every form printer (macro form_to_string, fmt) so named/control chars
+   never leak into emitted text as raw bytes. *)
+let char_to_string = function
+  | '\n' -> "\\newline" | ' ' -> "\\space" | '\t' -> "\\tab"
+  | '\r' -> "\\return" | '\b' -> "\\backspace" | '\012' -> "\\formfeed"
+  | c when c >= '!' && c <= '~' -> "\\" ^ String.make 1 c
+  | c -> Printf.sprintf "\\u%04x" (Char.code c)
+
 exception Read_error of loc * string
 
 let read_error loc msg = raise (Read_error (loc, msg))

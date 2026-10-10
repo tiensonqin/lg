@@ -15,7 +15,7 @@ let atom_str = function
   | Int i -> string_of_int i
   | Float x -> let s = Printf.sprintf "%g" x in if String.contains s '.' then s else s ^ ".0"
   | Bool b -> string_of_bool b
-  | Char c -> "\\" ^ String.make 1 c
+  | Char c -> char_to_string c
   | Str s -> Printf.sprintf "%S" s
   | Keyword k -> ":" ^ k
   | Symbol s -> s

@@ -169,6 +169,58 @@ else
   echo "skip roundtrip (not built)"
 fi
 
+# fmt fidelity: `lg fmt` on copies of the whole corpus must (a) re-parse
+# to the same forms (`--same`), (b) be a fixed point (second fmt reports
+# "unchanged"), and (c) preserve every ';' occurrence (comments may move
+# but never drop).
+if [ -x "$RT" ]; then
+  FMTD=.test-bin/fmt-corpus
+  rm -rf "$FMTD"
+  mkdir -p "$FMTD/test" "$FMTD/lib" "$FMTD/examples"
+  cp test/*.lg test/*.cljc "$FMTD/test/" 2>/dev/null
+  cp lib/*.lg "$FMTD/lib/" 2>/dev/null
+  cp -R examples/ "$FMTD/examples/" 2>/dev/null
+  fmtbad=0; pairs=""
+  for f in "$FMTD"/test/*.lg "$FMTD"/test/*.cljc "$FMTD"/lib/*.lg \
+           "$FMTD"/examples/*.lg "$FMTD"/examples/*/*.lg; do
+    [ -e "$f" ] || continue
+    rel=${f#$FMTD/}
+    if ! "$LG" fmt "$f" >/dev/null 2>&1; then
+      echo "FAIL(fmt) $rel"; fmtbad=1; continue
+    fi
+    if ! "$LG" fmt "$f" 2>/dev/null | grep -q 'unchanged'; then
+      echo "FAIL(fmt-idempotent) $rel"; fmtbad=1
+    fi
+    if [ "$(grep -o ';' "$rel" | wc -l)" != "$(grep -o ';' "$f" | wc -l)" ]; then
+      echo "FAIL(fmt-comments-dropped) $rel"; fmtbad=1
+    fi
+    pairs="$pairs $rel $f"
+  done
+  # shellcheck disable=SC2086 # intentional word-splitting of file pairs
+  if [ $fmtbad = 0 ] && "$RT" --same $pairs >/dev/null 2>&1; then
+    nfmt=$(echo "$FMTD"/test/*.lg "$FMTD"/test/*.cljc "$FMTD"/lib/*.lg \
+               "$FMTD"/examples/*.lg "$FMTD"/examples/*/*.lg | wc -w | tr -d ' ')
+    echo "ok fmt-fidelity ($nfmt files)"
+  else
+    "$RT" --same $pairs 2>&1 | grep -v '^ok' | head -10
+    [ $fmtbad = 0 ] || true
+    echo "FAIL(fmt-fidelity)"; fail=1
+  fi
+
+  # fmt golden: the comment corpus must format to the checked-in output
+  cp test/fmt/comments.lg .test-bin/comments.lg
+  if "$LG" fmt .test-bin/comments.lg >/dev/null 2>&1 \
+     && diff -u test/fmt/comments.fmted .test-bin/comments.lg > /dev/null 2>&1; then
+    echo "ok fmt-comments-golden"
+  else
+    echo "FAIL(fmt-comments-golden)"
+    diff -u test/fmt/comments.fmted .test-bin/comments.lg | head -15
+    fail=1
+  fi
+else
+  echo "skip fmt-fidelity (roundtrip not built)"
+fi
+
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
    && grep -q '@ local\|local_\|unique_\|stack_' .test-bin/oxcaml.ml; then

@@ -1,0 +1,34 @@
+;; leading file comment
+(defn f [x] (+ x 1)) ;; trailing comment
+;; doc comment
+;; params comment
+;; body comment
+
+;; between forms
+(def v 42) ;; inline trailing
+
+(let [a 1 b 2] (+ a b)) ;; binding comment
+
+(def s "a;b not comment") ;; real comment
+
+#_(discard-me) ;; discard-prefix comment
+#_(discard2)
+(keep2)
+#_(inner form) ;; c-in-discard
+(after)
+
+(list 1 #_(skip) 2) ;; mid-list discard comment
+
+(foo bar) ;; c inside open-paren
+
+(def a 1) ;;c1
+;;c2
+;;c3
+(def b 2)
+
+;; consecutive before close
+(defn g [x] [1 2 3])
+;; inside vector below
+;; inner comment
+x
+;; no final newline

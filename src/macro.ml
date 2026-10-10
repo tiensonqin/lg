@@ -297,12 +297,7 @@ and form_to_string (f : form) : string =
      | Int i -> string_of_int i
      | Float x -> string_of_float x
      | Bool b -> string_of_bool b
-     | Char c ->
-       (match c with
-        | '\n' -> "\\newline" | ' ' -> "\\space" | '\t' -> "\\tab"
-        | '\r' -> "\\return" | '\b' -> "\\backspace" | '\012' -> "\\formfeed"
-        | c when c >= '!' && c <= '~' -> "\\" ^ String.make 1 c
-        | c -> Printf.sprintf "\\u%04x" (Char.code c))
+     | Char c -> char_to_string c
      | Str s -> Printf.sprintf "%S" s
      | Keyword k -> ":" ^ k
      | Symbol s -> s
