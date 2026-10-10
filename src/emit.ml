@@ -1213,14 +1213,17 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "filter" -> buf_add b ("(" ^ sfn "filter" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "remove" -> buf_add b ("(" ^ sfn "remove" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "reduce" ->
-     buf_add b ("(match " ^ a 2 ^ " with "
+     (* bind the collection once: emitting `a 2` both as a match scrutinee
+        and inside the fold call would duplicate its effects *)
+     let cn = "rc__" ^ string_of_int (fresh_uid ()) in
+     buf_add b ("(let " ^ cn ^ " = " ^ a 2 ^ " in "
                 ^ (match coll_kind (t 2) with
-                   | `Vec -> "_ -> " ^ sconsi 2 "Clj_core.Vec.reduce" "Clj_core.Vec.reduce_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2
-                   | `Set -> "_ -> " ^ sconsi 2 "Clj_core.Set.fold" "Clj_core.Set.fold_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2
-                   | `Map -> "_ -> " ^ sconsi 2 "Clj_core.Map.fold" "Clj_core.Map.fold_local" ^ " (fun acc k v -> " ^ a 0 ^ " acc (k, v)) " ^ a 1 ^ " " ^ a 2
-                   | `Str -> "_ -> List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " (Lg_rt.string_chars " ^ a 2 ^ ")"
-                   | `Seq -> "_ -> " ^ "Clj_core.Seq.reduce" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2
-                   | `List -> "_ -> List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " " ^ a 2)
+                   | `Vec -> sconsi 2 "Clj_core.Vec.reduce" "Clj_core.Vec.reduce_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ cn
+                   | `Set -> sconsi 2 "Clj_core.Set.fold" "Clj_core.Set.fold_local" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ cn
+                   | `Map -> sconsi 2 "Clj_core.Map.fold" "Clj_core.Map.fold_local" ^ " (fun acc k v -> " ^ a 0 ^ " acc (k, v)) " ^ a 1 ^ " " ^ cn
+                   | `Str -> "List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " (Lg_rt.string_chars " ^ cn ^ ")"
+                   | `Seq -> "Clj_core.Seq.reduce " ^ a 0 ^ " " ^ a 1 ^ " " ^ cn
+                   | `List -> "List.fold_left " ^ a 0 ^ " " ^ a 1 ^ " " ^ cn)
                 ^ ")")
    | "mapv" ->
      (match coll_kind (t 1) with

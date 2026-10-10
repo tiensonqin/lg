@@ -1,0 +1,15 @@
+(ns stopwatch)
+
+;; ffi with zero stubs: OCaml runtime symbol + libc via :native
+(ffi cpu-time [] :float {:ocaml "caml_sys_time"})
+(ffi c-strlen [:string] :int {:native "strlen"})
+
+;; a lazy seq pipeline timed through the ffi clock:
+;; range -> filter multiples of 3 -> strict reduce
+(let [t0 (cpu-time)
+      total (reduce (fn [a b] (+ a b)) 0
+                    (filter (fn [n] (= (mod n 3) 0)) (range 0 300000)))
+      dt (- (cpu-time) t0)]
+  (println (str "sum: " total))
+  (println (str "strlen: " (c-strlen "ffi works")))
+  (println (str "cpu s: " dt)))
