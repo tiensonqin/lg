@@ -295,7 +295,15 @@ release:
    go through `dyn_*` helpers or are static errors, `take`/`drop`/`seq`
    return lazy seqs, `int`/`float`/`name` reject non-convertible
    static types, builtins lacking value closures are E100.
-2. **Builtin × collection-kind matrix.** `map`/`first`/`count`/`get`/`conj`/`take`/`drop`/`into`/`seq`/`reverse`/`sort`/`contains?` dispatch by static coll type (vec/list/set/map/string) — golden-test each cell that's allowed and assert each forbidden cell is a static error, not a build failure.
+2. **Builtin × collection-kind matrix — DONE.** `test/gen_collmatrix.py`
+   generates `test/collmatrix.lg` (67 allowed cells, golden `.out`) plus
+   one `should_fail/cm_<builtin>_<kind>.lg` per forbidden cell (29 files,
+   each pinned to its error class by a `.err` ERE). Covers
+   `map`/`first`/`count`/`get`/`conj`/`take`/`drop`/`into`/`seq`/
+   `reverse`/`sort`/`contains?` plus the coll-mutating family
+   `assoc`/`update`/`merge`/`select-keys` across
+   vec/list/seq/map/set/dyn — including the boundary where `any`
+   dispatch is allowed (dyn-path ops) vs statically rejected.
 3. **Emit snapshots — DONE.** Opt-in: a checked-in `test/$name.emit.ml`
    is diffed against a fresh `lg emit` run — codegen drift invisible to
    `.out` diffs now fails the suite. Seeded for polydyn / destructure /

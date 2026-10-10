@@ -1,0 +1,67 @@
+map|vec (2 3 4)
+map|list (2 3 4)
+map|seq (2 3 4)
+map|map ((:a, 1) (:b, 2))
+map|set (2 3 4)
+first|vec 1
+first|list 1
+first|seq 1
+first|map (:a, 1)
+first|set 1
+count|vec 3
+count|list 3
+count|seq 3
+count|map 2
+count|set 3
+get|vec 2
+get|list 2
+get|seq 2
+get|map 1
+get|set 2
+conj|vec [1 2 3 4]
+conj|list (0 1 2 3)
+conj|seq (0 1 2 3)
+conj|map {:a 1, :b 2, :c 3}
+conj|set #{1 2 3 4}
+take|vec (1 2)
+take|list (1 2)
+take|seq (1 2)
+take|map ((:a, 1))
+take|set (1 2)
+drop|vec (2 3)
+drop|list (2 3)
+drop|seq (2 3)
+drop|map ((:b, 2))
+drop|set (2 3)
+into|vec [1 2 3 9]
+into|list (9 1 2 3)
+into|seq (9 1 2 3)
+into|map {:a 1, :b 2, :c 3}
+into|set #{1 2 3 4}
+seq|vec (1 2 3)
+seq|list (1 2 3)
+seq|seq (1 2 3)
+seq|map ((:a, 1) (:b, 2))
+seq|set (1 2 3)
+reverse|vec (3 2 1)
+reverse|list (3 2 1)
+reverse|seq (3 2 1)
+reverse|map ((:b, 2) (:a, 1))
+reverse|set (1 2 3)
+sort|vec (1 2 3)
+sort|list (1 2 3)
+sort|seq (1 2 3)
+sort|set (1 2 3)
+contains?|vec true
+contains?|list true
+contains?|seq true
+contains?|map true
+contains?|set true
+assoc|vec [9 2 3]
+assoc|map {:a 1, :b 2, :c 3}
+update|map {:a 2, :b 2}
+update|dyn {:a 2, :b 2}
+merge|map {:a 1, :b 2, :c 3}
+merge|dyn {:a 1, :b 2, :c 3}
+select-keys|map {:a 1}
+select-keys|dyn {:a 1}

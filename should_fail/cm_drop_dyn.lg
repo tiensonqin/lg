@@ -1,0 +1,10 @@
+;; GENERATED FILE — do not edit by hand. See test/gen_collmatrix.py.
+(def v [1 2 3])
+(def l (list 1 2 3))
+(def sq (take 3 v))
+(def st #{1 2 3})
+(def m {:a 1 :b 2})
+(def dm ^any {:a 1 :b 2})
+(def dv ^any [1 2 3])
+;; forbidden cell: drop x dyn must be a static error
+(println (str (drop 1 dv)))
