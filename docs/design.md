@@ -260,6 +260,16 @@ All of docs/v2.md landed (detail lives there):
 - **FBIP builder lowering** — provably single-use collection literals
   (unique-owner chains of conj/assoc/dissoc/pop/update/into/disj) emit
   `Lg_rt` growable builders + one freeze instead of persistent copies.
+  A self-recursive `(fn go [i acc] …)` whose collection param is only
+  ever (a) the root of an update chain in every self-call's p-position
+  or (b) a bare result also runs as a mutable builder: the `let rec`'s
+  param is the builder, self-calls mutate in place, results freeze, and
+  the fn value is a wrapper lambda converting the caller's collection —
+  invisible outside the fn. Requires the param's collection type to be
+  fully concrete (a `TVar` inside would emit dyn-keyed ops disagreeing
+  with the instantiated use site) and no escapes: closures capturing
+  the param, other-arg occurrences, scrutinee/condition uses all fall
+  back to the persistent path. ~2.2x measured on a 5M conj loop.
 - **OxCaml emit** — `--backend=oxcaml` is verified end-to-end against a
   real OxCaml (flambda2) switch (test/oxcaml_smoke.sh — OCaml
   5.4.0+ox). The lowering, in three tiers. Tier 1: `(param @ local)` on
@@ -301,8 +311,10 @@ All of docs/v2.md landed (detail lives there):
   The remaining 37M words are the per-iteration callback closure,
   which must stay global (clj-core `_local` signatures take global
   callbacks so ordinary fns like `(+)` keep working). FBIP/transient
-  builders have ~1.7x headroom on pure conj chains — already exploited
-  by the owned-spine lowering; `unique_` would add nothing there.
+  builders have ~1.7x headroom on pure conj chains — now exploited by
+  both the owned-spine lowering and the self-recursive accumulator
+  transform (measured ~2.2x on a 5M lg conj loop); `unique_` would add
+  nothing there.
 - **`--strict`** — heterogeneous literals require `^any`-family
   annotation; every `any` in a program is one the author wrote.
 - **Named `fn` self-recursion, `case`, `defrecord` (map-backed ctor +

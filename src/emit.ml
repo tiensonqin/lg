@@ -100,6 +100,15 @@ let ctor_qual q =
    positions in calls, `let x @ local` inits, branch/scrutinee spines.
    Combined with e.emode = Local it licenses `stack_` on direct allocation
    sites and `*_local` collection twins on local arguments. *)
+
+(* fbip accumulator state: a self-recursive fn can thread one collection
+   param through `let rec` as a mutable builder (see the FBIP block below);
+   these tables describe the fn being emitted, if any *)
+let fbip_params : (int, [ `Vec | `Map | `Set ]) Hashtbl.t = Hashtbl.create 7
+let fbip_self = ref (-1)   (* fself bid of the fbip fn currently emitted *)
+let fbip_pidx = ref (-1)   (* its builder param's position *)
+let fbip_pb : Ast.binder option ref = ref None
+
 let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
   match e.desc with
   | EInt i -> buf_add b (if i < 0 then "(" ^ string_of_int i ^ ")" else string_of_int i)
@@ -110,7 +119,10 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
   | EKeyword k -> buf_add b (kw_expr k)
   | ESymbol s -> buf_add b (sym_expr s)
   | ENil -> buf_add b (if is_any e.ety then "(Lg_rt.DUnit)" else "()")
-  | ELocal bd -> buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid)
+  | ELocal bd ->
+    (match Hashtbl.find_opt fbip_params bd.bid with
+     | Some kind -> fbip_freeze b kind (sanitize bd.bname ^ "__" ^ string_of_int bd.bid)
+     | None -> buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid))
   | EGlobal (m, n, _) ->
     (match find_ctor m n with
      | Some (q, 0) -> buf_add b (ctor_qual q)
@@ -120,6 +132,38 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
      | None -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n))
   | EBuiltin name -> buf_add b (emit_builtin_value name e.ety)
   | EFun fn ->
+    (match fn.Ast.fself, (if !oxcaml then None else fbip_pick fn) with
+     | Some sb, Some (pidx, kind) ->
+       (* fbip accumulator: the let rec's param is a mutable builder;
+          self-calls mutate it in place, results freeze it, and the fn
+          value is a wrapper that converts the caller's collection in *)
+       let pb = List.nth fn.Ast.params pidx in
+       Hashtbl.replace fbip_params pb.Ast.bid kind;
+       buf_add b ("(let rec " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ " = (fun ");
+       List.iter
+         (fun p -> buf_add b (sanitize p.Ast.bname ^ "__" ^ string_of_int p.Ast.bid ^ " "))
+         fn.Ast.params;
+       buf_add b "-> ";
+       let saved_self, saved_pidx, saved_pb = !fbip_self, !fbip_pidx, !fbip_pb in
+       fbip_self := sb.bid; fbip_pidx := pidx; fbip_pb := Some pb;
+       (match repr e.ety with
+        | TFun (_, r) -> buf_add b (conv r fn.body.ety (arg_str fn.body))
+        | _ -> emit_expr b fn.body);
+       fbip_self := saved_self; fbip_pidx := saved_pidx; fbip_pb := saved_pb;
+       Hashtbl.remove fbip_params pb.Ast.bid;
+       buf_add b ") in (fun ";
+       List.iter
+         (fun p -> buf_add b (sanitize p.Ast.bname ^ "__" ^ string_of_int p.Ast.bid ^ " "))
+         fn.Ast.params;
+       buf_add b ("-> " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid);
+       List.iteri
+         (fun i p ->
+           buf_add b " ";
+           let nm = sanitize p.Ast.bname ^ "__" ^ string_of_int p.Ast.bid in
+           if i = pidx then fbip_of b kind nm else buf_add b nm)
+         fn.Ast.params;
+       buf_add b "))"
+     | _ ->
     let stk = local && e.emode = Ast.Local && !oxcaml && fn.Ast.fself = None in
     if stk then buf_add b "(stack_ ";
     (match fn.Ast.fself with
@@ -157,7 +201,7 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
     if stk then buf_add b ")";
     (match fn.Ast.fself with
      | Some sb -> buf_add b (" in " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ ")")
-     | None -> ())
+     | None -> ()))
   | ECall (ce, args) -> emit_call b e ce args
   | EOCamlCall (ce, oargs) ->
     (* direct OCaml call: positional args first, then ~lbl:v — optional
@@ -361,6 +405,24 @@ and emit_call b (e : expr) ce args =
          args;
        buf_add c ")";
        buf_add b (conv ret sret (Buffer.contents c))
+     | ELocal lb when lb.bid = !fbip_self ->
+       (* fbip self-call: the accumulator arg is an in-place update *)
+       let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
+       buf_add b "("; emit_expr b ce;
+       if args = [] then buf_add b " ()";
+       (match !fbip_pb with
+        | Some pb ->
+          List.iteri
+            (fun i a ->
+              buf_add b " ";
+              if i = !fbip_pidx && Hashtbl.mem fbip_params pb.Ast.bid then
+                fbip_rec_arg b (Hashtbl.find fbip_params pb.Ast.bid) pb a
+              else
+                let p = if i < List.length pts then List.nth pts i else TAny in
+                buf_add b (conv p a.ety (arg_str ~local:false a)))
+            args
+        | None -> List.iter (fun a -> buf_add b " "; buf_add b (arg_str a)) args);
+       buf_add b ")"
      | _ ->
        let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
        buf_add b "("; emit_expr b ce;
@@ -658,47 +720,49 @@ and coll_spine e : (expr * cop list) option =
   | ECall ({ desc = EBuiltin n; _ }, args) -> chain_step n args
   | _ -> None
 
+(* update ops contributed by one call `n c args...` on a collection of
+   type ety — shared by chain_step (literal/once-used roots) and
+   fbip_chain (self-recursive accumulator params) *)
+and step_ops n (ety : ty) (args : expr list) : cop list option =
+  match n, args with
+  | "conj", _ :: xs when xs <> [] ->
+    (match ety with
+     | TVec _ -> Some (List.map (fun x -> CPush x) xs)
+     | TMap _ -> Some (List.map (fun x -> CPair x) xs)
+     | TSet _ -> Some (List.map (fun x -> CAdd x) xs)
+     | _ -> None)
+  | "assoc", _ :: i :: x :: rest ->
+    (match ety with
+     | TVec _ when rest = [] -> Some [ CSet (i, x) ]
+     | TMap _ when List.length rest mod 2 = 0 ->
+       let rec ps = function a :: b :: t -> (a, b) :: ps t | [] -> [] | _ -> [] in
+       Some (List.map (fun (k, v) -> CPut (k, v)) ((i, x) :: ps rest))
+     | _ -> None)
+  | "dissoc", _ :: ks when ks <> [] ->
+    (match ety with TMap _ -> Some (List.map (fun k -> CDrop k) ks) | _ -> None)
+  | "pop", [ _ ] -> (match ety with TVec _ -> Some [ CPop ] | _ -> None)
+  | "update", [ _; i; f ] ->
+    (match ety with TVec _ -> Some [ CUpd (i, f) ] | TMap _ -> Some [ CUpdMap (i, f) ] | _ -> None)
+  | "into", [ _; xs ] ->
+    (match repr xs.ety with
+     | TMap _ -> (match ety with TMap _ -> Some [ CMExt xs ] | _ -> None)
+     | TVec _ | TList _ | TSet _ ->
+       (match ety with TVec _ -> Some [ CExt xs ] | TSet _ -> Some [ CSExt xs ] | _ -> None)
+     | _ -> None)
+  | "disj", _ :: xs when xs <> [] ->
+    (match ety with TSet _ -> Some (List.map (fun x -> CDel x) xs) | _ -> None)
+  | _ -> None
+
 and chain_step n args : (expr * cop list) option =
   match n, args with
   | _, c :: _ ->
-    let step mk =
-      let root_ops =
-        match coll_spine c with
-        | Some _ as r -> r
-        | None -> if owned_root c then Some (c, []) else None
-      in
-      match root_ops, mk (repr c.ety) with
-      | Some (r, ops), Some more -> Some (r, ops @ more)
-      | _ -> None
+    let root_ops =
+      match coll_spine c with
+      | Some _ as r -> r
+      | None -> if owned_root c then Some (c, []) else None
     in
-    (match n, args with
-     | "conj", _ :: xs when xs <> [] ->
-       step (function
-         | TVec _ -> Some (List.map (fun x -> CPush x) xs)
-         | TMap _ -> Some (List.map (fun x -> CPair x) xs)
-         | TSet _ -> Some (List.map (fun x -> CAdd x) xs)
-         | _ -> None)
-     | "assoc", _ :: i :: x :: rest ->
-       step (function
-         | TVec _ when rest = [] -> Some [ CSet (i, x) ]
-         | TMap _ when List.length rest mod 2 = 0 ->
-           let rec ps = function a :: b :: t -> (a, b) :: ps t | [] -> [] | _ -> [] in
-           Some (List.map (fun (k, v) -> CPut (k, v)) ((i, x) :: ps rest))
-         | TMap _ -> None
-         | _ -> None)
-     | "dissoc", _ :: ks when ks <> [] ->
-       step (function TMap _ -> Some (List.map (fun k -> CDrop k) ks) | _ -> None)
-     | "pop", [ _ ] -> step (function TVec _ -> Some [ CPop ] | _ -> None)
-     | "update", [ _; i; f ] ->
-       step (function TVec _ -> Some [ CUpd (i, f) ] | TMap _ -> Some [ CUpdMap (i, f) ] | _ -> None)
-     | "into", [ _; xs ] ->
-       (match repr xs.ety with
-        | TMap _ -> step (function TMap _ -> Some [ CMExt xs ] | _ -> None)
-        | TVec _ | TList _ | TSet _ ->
-          step (function TVec _ -> Some [ CExt xs ] | TSet _ -> Some [ CSExt xs ] | _ -> None)
-        | _ -> None)
-     | "disj", _ :: xs when xs <> [] ->
-       step (function TSet _ -> Some (List.map (fun x -> CDel x) xs) | _ -> None)
+    (match root_ops, step_ops n (repr c.ety) args with
+     | Some (r, ops), Some more -> Some (r, ops @ more)
      | _ -> None)
   | _ -> None
 
@@ -821,6 +885,152 @@ and emit_sbuilder b root el ops =
   buf_add b ("(let " ^ bn ^ " = "); sroot b root; buf_add b " in ";
   List.iter (emit_sop b bn el) ops;
   buf_add b ("Lg_rt.sb_freeze " ^ bn ^ ")")
+
+(* ---- FBIP: self-recursive accumulator params as mutable builders ----
+   In `(fn f [.. p ..] body)` where collection param p is only ever (a) the
+   root of an update chain in every self-call's p-position, or (b) a bare
+   result, p can run as a mutable builder: self-calls mutate in place and
+   pass it along, results freeze it. The emitted value wraps the inner
+   `let rec` in `(fun .. -> f' .. (vb_of_vec p) ..)` so callers still see a
+   plain `vec -> r` — the transform is invisible outside the fn. *)
+
+and occurs_bid bid e =
+  match e.desc with
+  | ELocal q -> q.bid = bid
+  | EInt _ | EFloat _ | EBool _ | EChar _ | EStr _ | EKeyword _ | ESymbol _
+  | ENil | EGlobal _ | EBuiltin _ -> false
+  | EFun fn -> occurs_bid bid fn.body
+  | ECall (c, xs) -> List.exists (occurs_bid bid) (c :: xs)
+  | EOCamlCall (c, oas) ->
+    List.exists (occurs_bid bid) (c :: List.map oarg_expr oas)
+  | EIf (a, x, y) -> List.exists (occurs_bid bid) [ a; x; y ]
+  | EDo xs | ETuple xs | EVecLit xs | EListLit xs | ESetLit xs ->
+    List.exists (occurs_bid bid) xs
+  | ELet (bs, x) ->
+    List.exists (fun (_, ex) -> occurs_bid bid ex) bs || occurs_bid bid x
+  | EMapLit ps ->
+    List.exists (fun (k, v) -> occurs_bid bid k || occurs_bid bid v) ps
+  | EMatchOpt (a, _, x, y) | EDynVec (a, _, x, y) | EDynMap (a, _, x, y)
+  | EVariant (a, _, _, x, y) -> List.exists (occurs_bid bid) [ a; x; y ]
+  | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a -> occurs_bid bid a
+  | EOpt None -> false
+  | EOpt (Some a) -> occurs_bid bid a
+
+(* exprs carried by one builder op — the accumulator must not appear in
+   them (that would read the builder while it's being threaded) *)
+and cop_exprs = function
+  | CPush x -> [ x ] | CSet (i, x) -> [ i; x ] | CUpd (i, f) -> [ i; f ]
+  | CPut (k, v) -> [ k; v ] | CDrop k -> [ k ] | CPair kv -> [ kv ]
+  | CUpdMap (k, f) -> [ k; f ] | CMExt m -> [ m ] | CExt x -> [ x ]
+  | CSExt x -> [ x ] | CAdd x -> [ x ] | CDel x -> [ x ] | CPop -> []
+
+(* chain of update calls rooted at a bare ELocal p (fbip accumulator) *)
+and fbip_chain p e : cop list option =
+  match e.desc with
+  | ELocal q -> if q.bid = p.Ast.bid then Some [] else None
+  | ECall ({ desc = EBuiltin n; _ }, (c :: _ as args)) ->
+    (match fbip_chain p c, step_ops n (repr c.ety) args with
+     | Some ops, Some more -> Some (ops @ more)
+     | _ -> None)
+  | _ -> None
+
+(* does body contain a self-call to sb at all — otherwise the transform
+   buys nothing *)
+and fbip_has_self_call sb e =
+  match e.desc with
+  | ECall (ce, _) -> (match ce.desc with ELocal q -> q.bid = sb.Ast.bid | _ -> occurs_bid sb.Ast.bid e)
+  | _ -> occurs_bid sb.Ast.bid e
+
+(* every use of param p inside a self-recursive body stays fbip-safe:
+   - bare ELocal p in a result position -> frozen at emit
+   - p-th arg of a self-call -> must be an update chain rooted at p, and
+     neither p nor the self name may occur inside the op's operands
+   - p anywhere else (other call args, let inits, literals, closures,
+     scrutinees, conditions) -> escapes or can't run on a builder: reject *)
+and fbip_flow p pidx sb e : bool =
+  let free x = not (occurs_bid p.Ast.bid x || occurs_bid sb.Ast.bid x) in
+  match e.desc with
+  | ELocal q -> q.bid <> sb.Ast.bid (* bare p allowed; bare self-name is not *)
+  | ECall (ce, args) ->
+    (match ce.desc with
+     | ELocal f' when f'.bid = sb.Ast.bid ->
+       List.for_all
+         (fun (j, a) ->
+           if j = pidx then
+             match fbip_chain p a with
+             | Some ops ->
+               List.for_all
+                 (fun op -> List.for_all free (cop_exprs op))
+                 ops
+             | None -> false
+           else free a)
+         (List.mapi (fun j a -> (j, a)) args)
+     | _ -> free e)
+  | EIf (c, t, f) -> free c && fbip_flow p pidx sb t && fbip_flow p pidx sb f
+  | EDo es ->
+    (match List.rev es with
+     | last :: rest -> List.for_all free rest && fbip_flow p pidx sb last
+     | [] -> true)
+  | ELet (bs, body) ->
+    List.for_all (fun (_, x) -> free x) bs && fbip_flow p pidx sb body
+  | EMatchOpt (a, _, x, y) | EDynVec (a, _, x, y) | EDynMap (a, _, x, y)
+  | EVariant (a, _, _, x, y) ->
+    free a && fbip_flow p pidx sb x && fbip_flow p pidx sb y
+  | _ -> free e
+
+(* a fully concrete type: no unresolved tvars anywhere. TVar args are
+   the one case where `repr` lies — it maps them to TAny, which would
+   emit dyn-keyed builders while infer instantiates the fn's use site
+   with a concrete type (the emitted builder then disagrees). *)
+and conc_ty t =
+  match Typ.dimp t with
+  | TVar _ -> false
+  | TVec x | TSet x | TList x | TSeq x | TOption x -> conc_ty x
+  | TMap (k, v) -> conc_ty k && conc_ty v
+  | TTuple ts -> List.for_all conc_ty ts
+  | _ -> true
+
+(* pick a param that can run as a builder, or None *)
+and fbip_pick fn : (int * [ `Vec | `Map | `Set ]) option =
+  match fn.Ast.fself, fn.Ast.variadic with
+  | Some sb, None when fbip_has_self_call sb fn.body ->
+    List.find_map
+      (fun (i, p) ->
+        match repr p.Ast.bty with
+        | TVec _ when conc_ty p.Ast.bty && fbip_flow p i sb fn.body -> Some (i, `Vec)
+        | TMap _ when conc_ty p.Ast.bty && fbip_flow p i sb fn.body -> Some (i, `Map)
+        | TSet _ when conc_ty p.Ast.bty && fbip_flow p i sb fn.body -> Some (i, `Set)
+        | _ -> None)
+      (List.mapi (fun i p -> (i, p)) fn.params)
+  | _ -> None
+
+and fbip_of b kind nm =
+  buf_add b (match kind with `Vec -> "(Lg_rt.vb_of_vec " | `Map -> "(Lg_rt.mb_of_map " | `Set -> "(Lg_rt.sb_of_set ");
+  buf_add b nm; buf_add b ")"
+and fbip_freeze b kind nm =
+  buf_add b (match kind with `Vec -> "(Lg_rt.vb_freeze " | `Map -> "(Lg_rt.mb_freeze " | `Set -> "(Lg_rt.sb_freeze ");
+  buf_add b nm; buf_add b ")"
+
+(* emit one self-call's builder-arg update as `begin ops; b end` *)
+and fbip_rec_arg b kind p a =
+  match fbip_chain p a with
+  | None -> fbip_of b kind (arg_str a)   (* defensive — flow proved a chain *)
+  | Some ops ->
+    let bn = sanitize p.Ast.bname ^ "__" ^ string_of_int p.Ast.bid in
+    let el =
+      match repr p.Ast.bty with
+      | TVec t | TMap (_, t) | TSet t -> t
+      | _ -> TAny
+    in
+    buf_add b "(begin ";
+    List.iter
+      (fun op ->
+        match kind with
+        | `Vec -> emit_vop b bn el op
+        | `Map -> (match repr p.Ast.bty with TMap (kt, vt) -> emit_mop b bn kt vt op | _ -> ())
+        | `Set -> emit_sop b bn el op)
+      ops;
+    buf_add b (bn ^ " end)")
 
 and emit_builtin_call ?(call_local = false) b ret name args =
   if not (emit_owned_chain b name args) then begin

@@ -16,3 +16,22 @@
 (println v2)
 (def m3 (update (assoc {:a 0} :a 5) :a (fn [^int x] (+ x 1))))
 (println (get m3 :a))
+
+;; self-recursive accumulators run as mutable builders inside the fn;
+;; callers see plain persistent values — the caller's vec is untouched
+(def src [1 2 3])
+(def grown ((fn go [i acc] (if (< i 5) (go (+ i 1) (conj acc i)) acc)) 0 src))
+(println grown)
+(println src)
+(println (str grown "/" grown))
+;; map and set accumulator params
+(def macc ((fn go [i acc] (if (< i 3) (go (+ i 1) (assoc acc i (* i 10))) acc)) 0 {0 1}))
+(println (get macc 2))
+(def sacc ((fn go [i acc] (if (< i 3) (go (+ i 1) (conj acc i)) acc)) 0 #{9}))
+(println (contains? sacc 2))
+;; a multi-step chain in one self-call
+(def bp ((fn go [i acc] (if (< i 3) (go (+ i 1) (conj (conj acc i) 9)) acc)) 0 [0]))
+(println bp)
+;; acc escaping into a closure falls back to the persistent path
+(def esc ((fn go [i acc] (if (< i 3) (go (+ i 1) (conj acc i)) (fn [_] acc))) 0 [1]))
+(println (esc 0))

@@ -152,7 +152,12 @@ unresolved), E2xx reader.
 - **FBIP builder lowering.** Provably single-use collection literals —
   unique-owner `conj`/`assoc`/`dissoc`/`pop`/`update`/`into`/`disj`
   chains — emit `Lg_rt` growable builders plus a single freeze instead
-  of persistent-structure copies. Everything else stays persistent.
+  of persistent-structure copies. The same builder runs across
+  iterations of a self-recursive `(fn go [i acc] … (go … (conj acc i)))`
+  accumulator when `acc` is provably threaded only through updates and
+  bare results (the emitted value wraps the `let rec` in a converting
+  lambda, so callers still pass and receive plain persistent colls).
+  ~2.2x on a 5M-iteration conj loop. Everything else stays persistent.
 - **OxCaml emit (`--backend=oxcaml`).** Verified end-to-end on an
   OxCaml (flambda2, `ocaml-variants.5.4.0+ox`) switch — emit →
   `ocamlfind ocamlopt` → run, 28/28 test programs green
