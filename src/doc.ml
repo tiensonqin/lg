@@ -312,6 +312,9 @@ let sidebar ~tutorials mods cur =
     Buffer.add_string b "</ul>"
   end;
   Buffer.add_string b "<nav><h2>Modules</h2><ul>";
+  Buffer.add_string b
+    (Printf.sprintf "<li%s><a href=\"core.html\">core</a></li>"
+       (if cur = "core" then " class=\"cur\"" else ""));
   List.iter
     (fun (m : Ast.modl) ->
       let c = if m.Ast.mname = cur then " class=\"cur\"" else "" in
@@ -381,6 +384,9 @@ let index ~title ~tutorials ~mods =
     Buffer.add_string b "</dl><h2>Modules</h2>"
   end;
   Buffer.add_string b "<dl class=\"entries\">";
+  Buffer.add_string b
+    (Printf.sprintf "<dt><a href=\"core.html\"><code>core</code></a><span class=\"kind\">%d builtins + %d special forms</span></dt>"
+       (List.length Core_doc.builtins) (List.length Core_doc.special_forms));
   List.iter
     (fun (m : Ast.modl) ->
       let n = List.length (entries_of_mod m) in
@@ -410,6 +416,50 @@ let tut_page ~title ~tutorials (slug, ttitle, body) =
   Buffer.add_string b "</main></body></html>";
   Buffer.contents b
 
+let core_page ~title ~tutorials ~mods =
+  let b = Buffer.create 8192 in
+  Buffer.add_string b "<!DOCTYPE html><html><head><meta charset=\"utf-8\">";
+  Buffer.add_string b (Printf.sprintf "<title>%s — core</title>" (esc title));
+  Buffer.add_string b css; Buffer.add_string b "</head><body>";
+  Buffer.add_string b (sidebar ~tutorials mods "core");
+  Buffer.add_string b "<main><h1><code>core</code></h1>";
+  Buffer.add_string b "<div class=\"sub\">The lg core library — special forms and builtins available unqualified in every module.</div>";
+  let alpha entries name_of =
+    Buffer.add_string b "<p class=\"alpha\">";
+    List.iteri
+      (fun i (n, _, _) ->
+        if i > 0 then Buffer.add_string b " \xc2\xb7 ";
+        Buffer.add_string b (Printf.sprintf "<a href=\"#%s\"><code>%s</code></a>" (esc (name_of n)) (esc n)))
+      entries;
+    Buffer.add_string b "</p>"
+  in
+  Buffer.add_string b "<h2>Special forms</h2>";
+  alpha Core_doc.special_forms (fun n -> "sf-" ^ n);
+  Buffer.add_string b "<dl class=\"entries\">";
+  List.iter
+    (fun (n, sig_, doc) ->
+      Buffer.add_string b (Printf.sprintf "<dt id=\"sf-%s\"><code>%s</code><span class=\"kind\">special form</span></dt>" (esc n) (esc n));
+      Buffer.add_string b (Printf.sprintf "<dd><pre>%s</pre><p>%s</p></dd>" (esc sig_) (esc doc)))
+    Core_doc.special_forms;
+  Buffer.add_string b "</dl>";
+  Buffer.add_string b "<h2>Functions and values</h2>";
+  alpha Core_doc.builtins (fun n -> n);
+  Buffer.add_string b "<dl class=\"entries\">";
+  List.iter
+    (fun (n, sig_opt, doc) ->
+      let sig_ =
+        match sig_opt with
+        | Some sg -> sg
+        | None ->
+          (try doc_ty (Infer.instantiate_builtin_ty n)
+           with Not_found -> "(builtin)")
+      in
+      Buffer.add_string b (Printf.sprintf "<dt id=\"%s\"><code>%s</code><span class=\"kind\">builtin</span></dt>" (esc n) (esc n));
+      Buffer.add_string b (Printf.sprintf "<dd><pre>%s</pre><p>%s</p></dd>" (esc sig_) (esc doc)))
+    Core_doc.builtins;
+  Buffer.add_string b "</dl></main></body></html>";
+  Buffer.contents b
+
 let generate ~title ~out ~tutorials mods =
   mkdir_p out;
   let wr file s =
@@ -417,5 +467,6 @@ let generate ~title ~out ~tutorials mods =
     output_string oc s; close_out oc
   in
   wr "index.html" (index ~title ~tutorials ~mods);
+  wr "core.html" (core_page ~title ~tutorials ~mods);
   List.iter (fun t -> wr (tut_slug t ^ ".html") (tut_page ~title ~tutorials t)) tutorials;
   List.iter (fun (m : Ast.modl) -> wr (m.Ast.mname ^ ".html") (page ~title ~tutorials ~mods m)) mods

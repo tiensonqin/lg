@@ -308,6 +308,11 @@ if "$LG" doc lib/qc.lg lib/test.lg test/docd.lg examples/util.lg -I lib -I examp
    && grep -q 'defvariant' .test-bin/apidoc/docd.html \
    && grep -q '<h2>Tutorials</h2>' .test-bin/apidoc/index.html \
    && grep -q '>macro<' .test-bin/apidoc/test.html \
+   && [ -f .test-bin/apidoc/core.html ] \
+   && grep -q 'id="map"' .test-bin/apidoc/core.html \
+   && grep -q 'id="sf-try"' .test-bin/apidoc/core.html \
+   && grep -q 'special form' .test-bin/apidoc/core.html \
+   && grep -q 'href="core.html"' .test-bin/apidoc/index.html \
    && ! grep -q 'id="internal-seed"' .test-bin/apidoc/util.html; then
   echo "ok doc"
 else
