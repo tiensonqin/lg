@@ -313,7 +313,16 @@ if "$LG" doc lib/qc.lg lib/test.lg test/docd.lg examples/util.lg -I lib -I examp
    && grep -q 'id="sf-try"' .test-bin/apidoc/core.html \
    && grep -q 'special form' .test-bin/apidoc/core.html \
    && grep -q 'href="core.html"' .test-bin/apidoc/index.html \
-   && ! grep -q 'id="internal-seed"' .test-bin/apidoc/util.html; then
+   && ! grep -q 'id="internal-seed"' .test-bin/apidoc/util.html \
+   && python3 -c '
+import re,sys
+ok=True
+for f in ["index.html","qc.html","core.html","01-getting-started.html"]:
+    h=open(".test-bin/apidoc/"+f).read()
+    for tag in ["nav","main","dl","ul","body","html"]:
+        if len(re.findall(r"<"+tag+r"[ >]",h)) != h.count("</"+tag+">"):
+            ok=False; print("unbalanced <%s> in %s"%(tag,f))
+sys.exit(0 if ok else 1)'; then
   echo "ok doc"
 else
   echo "FAIL(doc)"; fail=1

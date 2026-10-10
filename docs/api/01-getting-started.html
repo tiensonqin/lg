@@ -20,7 +20,7 @@ dd { margin:2px 4px 12px; padding-left:14px; }
 dd pre { background:#f8f8f9; border:1px solid var(--line); border-radius:4px;
          padding:8px 10px; overflow:auto; font-size:.9em; }
 dt:target { background:#fffbe8; }
-</style></head><body><nav><h2>Tutorials</h2><ul><li class="cur"><a href="01-getting-started.html">Getting started</a></li><li><a href="02-collections-and-errors.html">Collections and errors</a></li><li><a href="03-modules-and-lgi.html">Modules and interfaces</a></li></ul><nav><h2>Modules</h2><ul><li><a href="core.html">core</a></li></ul></nav><main><h1>Getting started</h1><p>lg is a small Lisp that compiles to OCaml. Programs are checked by a</p><p>Hindley-Milner inferencer and emitted as plain OCaml source, so a build</p><p>needs only ocamlfind plus the clj-core/rrbvec packages.</p><h2>Install and first program</h2><p>Build the compiler from source:</p><pre><code>dune build bin/lg.exe
+</style></head><body><nav><h2>Tutorials</h2><ul><li class="cur"><a href="01-getting-started.html">Getting started</a></li><li><a href="02-collections-and-errors.html">Collections and errors</a></li><li><a href="03-modules-and-lgi.html">Modules and interfaces</a></li></ul></nav><nav><h2>Modules</h2><ul><li><a href="core.html">core</a></li></ul></nav><main><h1>Getting started</h1><p>lg is a small Lisp that compiles to OCaml. Programs are checked by a</p><p>Hindley-Milner inferencer and emitted as plain OCaml source, so a build</p><p>needs only ocamlfind plus the clj-core/rrbvec packages.</p><h2>Install and first program</h2><p>Build the compiler from source:</p><pre><code>dune build bin/lg.exe
 </code></pre><p>Write <code>hello.lg</code>:</p><pre><code>(ns hello)
 
 (println &quot;hello, lg&quot;)

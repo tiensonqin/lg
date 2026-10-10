@@ -309,7 +309,7 @@ let sidebar ~tutorials mods cur =
         let c = if slug = cur then " class=\"cur\"" else "" in
         Buffer.add_string b (Printf.sprintf "<li%s><a href=\"%s.html\">%s</a></li>" c (esc slug) (esc ttitle)))
       tutorials;
-    Buffer.add_string b "</ul>"
+    Buffer.add_string b "</ul></nav>"
   end;
   Buffer.add_string b "<nav><h2>Modules</h2><ul>";
   Buffer.add_string b
