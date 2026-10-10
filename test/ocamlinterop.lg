@@ -4,6 +4,7 @@
             [ocaml.List :as olist]
             [ocaml.Unix :as unix]
             [ocaml.String :refer [uppercase_ascii]]
+            [ocaml.Str :as ostr]
             [ocaml.pkg/eio]))
 
 (println (std/abs -42))
@@ -16,3 +17,7 @@
 (def sa (unix/ADDR_UNIX "/tmp/x"))
 (println (> (unix/getpid) 0))
 (println (uppercase_ascii "refer"))
+;; abstract types become opaque handles: regexp flows back into Str
+(def re (ostr/regexp "a+"))
+(println (ostr/string_match re "aaa" 0))
+(println (ostr/string_match re "bbb" 0))

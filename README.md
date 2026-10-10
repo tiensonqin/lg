@@ -199,10 +199,13 @@ unresolved), E2xx reader.
   ```
 
   Signatures are read from `.cmi` files (wrapped stdlib units, findlib
-  package dirs, and dune-wrapped `pkg__Mod` units all resolve). Types that
-  lg cannot express — abstract types, objects, records — fail at compile
-  time with `type not expressible in lg`. Unknown package, value, or label
-  is a plain compile error listing what is available.
+  package dirs, and dune-wrapped `pkg__Mod` units all resolve). Abstract
+  and unknown type constructors map to opaque handles — values can be
+  held and passed back to the library (`Str.regexp`, `Eio.Stdenv.t`) —
+  while type forms lg cannot express at all (objects, records,
+  polymorphic variants) fail at compile time with `type not expressible
+  in lg`. Unknown package, value, or label is a plain compile error
+  listing what is available.
 
 ## Pipeline
 

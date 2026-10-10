@@ -490,8 +490,12 @@ Constructors (`is_ctor`, incl. `m/Ctor` for multi-seg paths) emit
 `Mod.Ctor` calls with an exact field count.
 
 Types: `ty_of_te` maps `Types.type_expr` onto lg's `ty` (int/float/bool/
-string/char/unit/list/option/array/seq/result/ref/tuple/fn/tvar); an
-unknown constructor (abstract types, objects, records, first-class
-modules) raises `Unsupported`, surfaced as `type not expressible in lg`.
+string/char/unit/list/option/array/seq/result/ref/tuple/fn/tvar).
+Unknown type constructors (`Str.regexp`, `Eio.Stdenv.t`) become opaque
+`TCon` handles: bare Pident names inside a cmi are qualified with the
+owning unit (`regexp` -> `Str.regexp`) so they unify by name and emit
+verbatim. Values may be held and passed back to the same library. Type
+forms with no lg equivalent at all (objects, polymorphic variants,
+first-class modules) raise `Unsupported` -> `type not expressible in lg`.
 Mode analysis treats every `EOCamlCall` argument as escaping — cmi
 signatures carry no borrow metadata.

@@ -1,2 +1,3 @@
-(ns f4 (:require [ocaml.Str :as ostr]))
-(println (ostr/regexp "a+"))
+(ns f4 (:require [ocaml.Oo :as oo]))
+;; object types are not expressible in lg
+(println (oo/id 1))

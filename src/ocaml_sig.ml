@@ -171,6 +171,15 @@ exception Unsupported of string
    fresh flexible lg var so ('a -> 'a) instantiates correctly *)
 let var_tbl : (int, tvar) Hashtbl.t = Hashtbl.create 7
 
+(* emit-visible path ("Str", "Eio.Fiber") of the signature being read;
+   Pident type names inside a cmi are bare ("regexp") — qualify them
+   with the owning unit so opaque TCon names unify and emit correctly *)
+let cur_unit_path = ref ""
+
+let qualify_tcon n =
+  if String.contains n '.' || !cur_unit_path = "" then n
+  else !cur_unit_path ^ "." ^ n
+
 let rec ty_of_te te : ty =
   match Types.get_desc te with
   | Types.Tarrow (_, a, r, _) -> TFun ([ ty_of_te a ], ty_of_te r)
@@ -209,7 +218,10 @@ let rec ty_of_te te : ty =
      | "seq", [ a ] -> TSeq (ty_of_te a)
      | "result", [ o; _ ] -> TOption (ty_of_te o)
      | "ref", [ a ] -> TAtom (ty_of_te a)
-     | _ -> raise (Unsupported n))
+     (* abstract/unknown type constructors become opaque handles: they can
+        be held and passed back to the library that produced them, never
+        constructed from lg directly *)
+     | _ -> TCon (qualify_tcon n, List.map ty_of_te args))
   | _ -> raise (Unsupported "type form")
 
 (* decompose a value's type into positional/labeled params + result *)
@@ -264,6 +276,7 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
     (match walk_submodules items rest with
      | None -> None
      | Some items ->
+    cur_unit_path := String.concat "." (unit :: rest);
     let rec find = function
       | [] -> None
       | Types.Sig_value (id, vd, _) :: tl ->
