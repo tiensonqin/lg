@@ -114,7 +114,11 @@ let read_char r =
   let l = loc r in
   ignore (next r);
   let tok = read_token r in
-  if String.length tok = 0 then read_error l "empty character literal"
+  if String.length tok = 0 then
+    (* `\(`, `\]`, `\<ws>`… — a delimiter right after `\` IS the char;
+       only a bare `\` at EOF is a true empty literal *)
+    if eof r then read_error l "empty character literal"
+    else Atom (l, Char (next r))
   else if String.length tok = 5 && tok.[0] = 'u' then
     let cp = int_of_string ("0x" ^ String.sub tok 1 4) in
     if cp > 255 then read_error l ("char literal \\" ^ tok ^ " out of range (\\uXXXX is byte-wide)")

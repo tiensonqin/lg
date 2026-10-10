@@ -838,9 +838,18 @@ and infer_defn ctx f =
     (match rest with
      | Vector (_, params) :: body ->
        (* allow self-recursion: bind name to a fresh var while the body is
-          inferred, then unify it with the inferred fn type *)
+          inferred, then unify it with the inferred fn type. When the name
+          carries a `(declare ^T n)` forward type, self-calls see THAT type
+          instead — otherwise a recursive call under option-join (e.g.
+          `(if c (rec) ())`) folds the bare () into `option self_v` and
+          self_v ~ option self_v occurs-fails before the declared type can
+          constrain it. *)
        let saved = ctx.env and saved_imp = ctx.implicits in
-       let self_v = fresh_var () in
+       let self_v =
+         match Hashtbl.find_opt ctx.declared name with
+         | Some dv -> dv
+         | None -> fresh_var ()
+       in
        ctx.env <- (name, { vscheme = mono self_v; vkind = KGlobal (ctx.modl.ocaml_name, munge name); vvariadic = false }) :: ctx.env;
        (* apply a `(fn [t1 ..] r)` annotation to the param binders BEFORE the
           body is inferred, so `nth`/`conj`/`assoc` on an annotated param see

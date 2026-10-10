@@ -11,6 +11,17 @@
   `nil?` builtin is renamed `unit?` (it no longer answers `true`
   for `None` — that is `none?`). All corpus uses are rewritten;
   printed representations moved from `nil` to `()`/`None`.
+- `qcfuzz`: self-bootstrapped fuzz lane — `test/qcfuzz.lg` uses qc's
+  split-seed rng to write 40 random s-expr sources (round-tripped
+  through reader/printer via `roundtrip.exe`) plus 12 generated
+  well-formed mini programs that must build and run (emit smoke).
+- Reader: `\<delim>` char literals (`\(`, `\]`, `\;`, `\<ws>`) now
+  parse — a delimiter right after `\` IS the character; only a bare
+  `\` at EOF is an empty-literal error. Fuzz-found.
+- `(declare ^T f)` forward types now actually constrain self-recursive
+  calls: the defn's self-binding uses the declared type instead of a
+  fresh var, so recursion under an option-join can't occurs-fail
+  before the annotation applies.
 - `try`/`catch`/`finally` + `throw`: `(try body… (catch e h…)
   (finally f…))` compiles to a real OCaml `try…with` wrapped in
   `Fun.protect`; `e` binds an opaque `exn` handle with `exn-message`

@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # needs the 5.5.0 switch for clj_core/rrbvec when building emitted OCaml
 command -v opam >/dev/null 2>&1 && eval $(opam env --switch=5.5.0 --set-switch) >/dev/null 2>&1
 LG=./_build/default/bin/lg.exe
-mkdir -p .test-bin
+mkdir -p .test-bin .test-bin/qcfuzz.d
 fail=0
 # test/ executables are not in the root @default alias; build them plus
 # lg.exe — a binary left in _build by a different switch silently reads
@@ -223,6 +223,33 @@ if [ -x "$RT" ]; then
   fi
 else
   echo "skip fmt-fidelity (roundtrip not built)"
+fi
+
+# qcfuzz: lg-written fuzz corpus — random s-expr sources round-tripped
+# through reader/printer, plus generated mini programs that must build
+# and run (emit smoke).
+if [ -x "$RT" ]; then
+  FZD=.test-bin/qcfuzz.d
+  rm -rf "$FZD"; mkdir -p "$FZD"
+  fzbad=0
+  if "$LG" build test/qcfuzz.lg -I lib -o .test-bin/qcfuzz_bin >/dev/null 2>&1 \
+     && ./.test-bin/qcfuzz_bin >/dev/null 2>&1 \
+     && "$RT" "$FZD"/sexpr_*.lg > /dev/null 2>&1; then
+    for f in "$FZD"/prog_*.lg; do
+      n=$(basename "$f" .lg)
+      if ! { "$LG" build "$f" -I lib -o "$FZD/${n}_bin" >/dev/null 2>&1 \
+             && "$FZD/${n}_bin" > /dev/null 2>&1; }; then
+        echo "FAIL(qcfuzz-prog) $n"; fzbad=1
+      fi
+    done
+    if [ $fzbad = 0 ]; then echo "ok qcfuzz (40 sexpr + 12 prog)"
+    else fail=1; fi
+  else
+    "$RT" "$FZD"/sexpr_*.lg 2>&1 | head -5
+    echo "FAIL(qcfuzz)"; fail=1
+  fi
+else
+  echo "skip qcfuzz (roundtrip not built)"
 fi
 
 # oxcaml backend: emit must carry mode annotations

@@ -1,0 +1,86 @@
+;; qcfuzz — self-bootstrapped fuzz corpus generator.
+;; Uses qc's split-seed rng to emit random s-expr source files (fuzzed
+;; into test/roundtrip.exe by test.sh) and small well-formed programs
+;; (built and run by test.sh as an emit smoke layer).
+(ns qcfuzz (:require [qc]))
+
+(def dir ".test-bin/qcfuzz.d")
+
+;; ---------- s-expr source fuzz ----------
+
+(def atoms
+  [ "0" "-7" "42" "999" "0x1f" "true" "false" "()" ":a" ":k-9" "x" "foo?"
+    "my-fn" "add-1" "\"hi\"" "\"a b\"" "\"esc\\n\\t\"" "\"\""
+    "\"q\\\"uote\"" "\\a" "\\z" "\\0" "\\(" "\\]"
+    "\\newline" "\\space" "\\tab" "\\u0041" ])
+
+(declare gen-coll)
+
+(defn pick [xs s] (nth xs (mod s (count xs))))
+
+(defn gen-atom [s] (tuple (pick atoms s) (qc/rng-next s)))
+
+;; returns (tuple source-text next-seed)
+(defn gen-form [s depth]
+  (match (<= depth 0)
+    true (gen-atom s)
+    _ (match (< (mod s 7) 3)
+        true (gen-atom (qc/rng-next s))
+        _ (gen-coll (qc/rng-next s) depth))))
+
+;; returns (tuple texts next-seed): n item sources at depth-1
+(defn gen-items [s depth n acc]
+  (match (<= n 0)
+    true (tuple acc s)
+    _ (let [r (gen-form s (- depth 1))]
+        (gen-items (nth r 1) depth (- n 1) (conj acc (nth r 0))))))
+
+;; returns (tuple source-text next-seed)
+(defn gen-coll [s depth]
+  (let [shape (mod s 4)
+        n0 (mod (qc/rng-next s) 5)
+        n (match (= shape 2) true (* n0 2) _ n0)
+        r (gen-items (qc/rng-next (qc/rng-next s)) depth n [])
+        body (join " " (nth r 0))
+        s3 (nth r 1)]
+    (match shape
+      0 (tuple (str "(" body ")") s3)
+      1 (tuple (str "[" body "]") s3)
+      2 (tuple (str "{" body "}") s3)
+      _ (tuple (str "'(" body ")") s3))))
+
+(defn gen-sexpr-file [i]
+  (let [r (gen-form (+ 1000 i) 4)]
+    (spit (str dir "/sexpr_" (str i) ".lg") (str (nth r 0) "\n"))))
+
+;; ---------- program emit smoke ----------
+
+;; fn values can't live in a coll (dyn has no fn repr) — dispatch on a
+;; template index instead of storing lambdas in a vec.
+(defn prog-text [i a b]
+  (match i
+    0 (str "(defn f [x] (+ x " (str a) "))\n(println (f " (str b) "))\n")
+    1 (str "(def v [" (str a) " " (str b) " " (str a) "])\n(println (reduce + 0 v))\n")
+    2 (str "(println (if (> " (str a) " " (str b) ") \"big\" \"small\"))\n")
+    3 (str "(let [x " (str a) " y " (str b) "]\n  (println (str (* x y))))\n")
+    _ (str "(def m {:a " (str a) " :b " (str b) "})\n(println (get m :a))\n")))
+
+(defn gen-prog-file [i s]
+  (let [a (- (mod (qc/rng-next s) 101) 50)
+        b (- (mod (qc/rng-next (qc/rng-next s)) 101) 50)]
+    (spit (str dir "/prog_" (str i) ".lg") (prog-text (mod s 5) a b))))
+
+;; ---------- driver ----------
+
+(declare ^(fn [int] unit) loop-sexpr)
+(declare ^(fn [int int] unit) loop-prog)
+
+(defn loop-sexpr [i]
+  (match (>= i 40) true () _ (do (gen-sexpr-file i) (loop-sexpr (+ i 1)))))
+
+(defn loop-prog [i s]
+  (match (>= i 12) true () _ (do (gen-prog-file i s) (loop-prog (+ i 1) (qc/rng-next s)))))
+
+(loop-sexpr 0)
+(loop-prog 0 42)
+(println "qcfuzz: 40 sexpr + 12 prog files written")
