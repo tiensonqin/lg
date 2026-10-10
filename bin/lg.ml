@@ -299,7 +299,11 @@ let () =
                            (List.filter_map (Hashtbl.find_opt uhashes) deps)))
                  in
                  Hashtbl.replace uhashes fname uh;
-                 let stamp = Filename.concat objdir (fname ^ ".stamp") in
+                 (* the stamp is per (unit, toolchain): ocamlc and ocamlopt
+                    produce different artifacts from the same source, so a
+                    shared stamp would let a stale .cmo/.cmx pass as fresh
+                    after the other mode rebuilt the unit *)
+                 let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
                  let obj = Filename.concat objdir (fname ^ obj_ext) in
                  if String.trim (read_file stamp) <> uh || not (Sys.file_exists obj) then begin
                    let mlp = Filename.concat objdir (fname ^ ".ml") in
