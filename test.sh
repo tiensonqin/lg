@@ -252,6 +252,13 @@ else
   echo "skip qcfuzz (roundtrip not built)"
 fi
 
+# repl smoke: defs persist across lines; eval lines print via the wrapper
+if printf '(def x 1)\n(+ x 41)\n:quit\n' | "$LG" repl 2>/dev/null | grep -q '42'; then
+  echo "ok repl"
+else
+  echo "FAIL(repl)"; fail=1
+fi
+
 # oxcaml backend: emit must carry mode annotations
 if "$LG" emit test/oxcaml.lg --backend=oxcaml -o .test-bin/oxcaml.ml >/dev/null 2>&1 \
    && grep -q '@ local\|local_\|unique_\|stack_' .test-bin/oxcaml.ml; then

@@ -11,6 +11,9 @@
   `nil?` builtin is renamed `unit?` (it no longer answers `true`
   for `None` — that is `none?`). All corpus uses are rewritten;
   printed representations moved from `nil` to `()`/`None`.
+- REPL latency: each line now reuses ONE stable session file plus
+  `--byte` (ocamlc) builds — a fresh temp name per line used to defeat
+  `.lg-obj` caching entirely. ~85ms per simple line (was ~1s native).
 - `qcfuzz`: self-bootstrapped fuzz lane — `test/qcfuzz.lg` uses qc's
   split-seed rng to write 40 random s-expr sources (round-tripped
   through reader/printer via `roundtrip.exe`) plus 12 generated

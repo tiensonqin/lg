@@ -75,13 +75,16 @@ let () =
    | Some "lsp" -> Lgc.Lsp.run (); exit 0
    | Some "repl" ->
      let session_txt = Buffer.create 512 in
+     (* one stable session file per repl: a fresh temp name per line would
+        defeat .lg-obj (the unit name derives from the file name) — stable
+        name + --byte keeps per-line latency to one unit compile + link *)
+     let f = Filename.temp_file "lg_repl_eval" ".lg" in
      let compile_run src =
-       let f = Filename.temp_file "lg_repl_eval" ".lg" in
        let oc = open_out f in output_string oc src; close_out oc;
        let bin = f ^ ".bin" and errf = f ^ ".err" in
        let rc =
          Sys.command
-           (Printf.sprintf "%s build %s -o %s 2>%s" (Filename.quote Sys.argv.(0)) (Filename.quote f)
+           (Printf.sprintf "%s build --byte %s -o %s 2>%s" (Filename.quote Sys.argv.(0)) (Filename.quote f)
               (Filename.quote bin) (Filename.quote errf))
        in
        if rc = 0 then ignore (Sys.command (Filename.quote bin))
