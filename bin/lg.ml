@@ -21,6 +21,7 @@ let () =
   let backend = ref "ocaml" in
   let all_mods = ref false in
   let byte = ref false in
+  let jobs = ref 4 in
   let speclist =
     [ ("-I", Arg.String (fun d -> roots := !roots @ [ d ]), "<dir> add a module search root")
     ; ("-o", Arg.String (fun s -> out := Some s), "<file> output file")
@@ -31,7 +32,9 @@ let () =
     ; ("--byte", Arg.Set byte,
        " lg build --backend=ocaml: force an ocamlc bytecode build")
     ; ("--strict", Arg.Set Lgc.Infer.strict,
-       " heterogeneous literals require an explicit ^any annotation") ]
+       " heterogeneous literals require an explicit ^any annotation")
+    ; ("-j", Arg.Set_int jobs,
+       "<n> lg build: parallel unit compiles per dependency level (default 4)") ]
   in
   Arg.parse speclist
     (fun a ->
@@ -290,6 +293,11 @@ let () =
                with _ -> ""
              in
              let uhashes = Hashtbl.create 16 in
+             (* the stamp is per (unit, toolchain): ocamlc and ocamlopt
+                produce different artifacts from the same source, so a
+                shared stamp would let a stale .cmo/.cmx pass as fresh
+                after the other mode rebuilt the unit *)
+             let stale = ref [] in
              List.iter
                (fun (fname, src, deps) ->
                  let uh =
@@ -299,10 +307,6 @@ let () =
                            (List.filter_map (Hashtbl.find_opt uhashes) deps)))
                  in
                  Hashtbl.replace uhashes fname uh;
-                 (* the stamp is per (unit, toolchain): ocamlc and ocamlopt
-                    produce different artifacts from the same source, so a
-                    shared stamp would let a stale .cmo/.cmx pass as fresh
-                    after the other mode rebuilt the unit *)
                  let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
                  let obj = Filename.concat objdir (fname ^ obj_ext) in
                  if String.trim (read_file stamp) <> uh || not (Sys.file_exists obj) then begin
@@ -311,17 +315,88 @@ let () =
                      let oc = open_out mlp in
                      output_string oc src; close_out oc
                    end;
-                   let rc =
-                     Sys.command
-                       (Printf.sprintf "cd %s && ocamlfind %s -package %s -c %s"
-                          (Filename.quote objdir) comp pkgs
-                          (Filename.quote (fname ^ ".ml")))
-                   in
-                   if rc <> 0 then (Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!"; raise (Exit rc));
-                   let oc = open_out stamp in
-                   output_string oc (uh ^ "\n"); close_out oc
+                   stale := (fname, uh) :: !stale
                  end)
                units;
+             (* parallel unit compilation in dependency levels: a unit needs
+                its lg deps' .cmi, so level(u) = 1 + max level of its stale
+                deps; fresh units count as done. Children fork per level in
+                batches of -j. *)
+             let stale_set =
+               List.fold_left (fun s (f, _) -> f :: s) [] !stale
+             in
+             let dep_of =
+               let t = Hashtbl.create 16 in
+               List.iter (fun (f, _, ds) -> Hashtbl.replace t f ds) units;
+               fun f -> try Hashtbl.find t f with Not_found -> []
+             in
+             let levels = Hashtbl.create 16 in
+             let rec level f =
+               match Hashtbl.find_opt levels f with
+               | Some l -> l
+               | None ->
+                 let l =
+                   1 + List.fold_left
+                         (fun m d -> if List.mem d stale_set then max m (level d) else m)
+                         (-1) (dep_of f)
+                 in
+                 Hashtbl.replace levels f l; l
+             in
+             let max_lvl =
+               List.fold_left (fun m (f, _) -> max m (level f)) (-1) !stale
+             in
+             let compile fname =
+               Sys.command
+                 (Printf.sprintf "cd %s && ocamlfind %s -package %s -c %s"
+                    (Filename.quote objdir) comp pkgs
+                    (Filename.quote (fname ^ ".ml")))
+             in
+             for lvl = 0 to max_lvl do
+               let fns =
+                 List.filter_map
+                   (fun (f, _) -> if level f = lvl then Some f else None)
+                   !stale
+               in
+               let rec chunks n l =
+                 match l with
+                 | [] -> []
+                 | _ ->
+                   let rec take k acc = function
+                     | [] -> (List.rev acc, [])
+                     | x :: xs -> if k = 0 then (List.rev acc, x :: xs) else take (k - 1) (x :: acc) xs
+                   in
+                   let g, rest = take (max 1 !jobs) [] l in
+                   g :: chunks n rest
+               in
+               List.iter
+                 (fun grp ->
+                   let pids =
+                     List.map
+                       (fun f ->
+                         match Unix.fork () with
+                         | 0 -> exit (compile f)
+                         | pid -> pid)
+                       grp
+                   in
+                   List.iter
+                     (fun pid ->
+                       match Unix.waitpid [] pid with
+                       | _, Unix.WEXITED 0 -> ()
+                       | _, Unix.WEXITED rc ->
+                         Printf.eprintf "lg: ocaml build failed (need clj_core + rrbvec installed)\n%!";
+                         raise (Exit rc)
+                       | _ ->
+                         Printf.eprintf "lg: ocaml build failed (compiler killed)\n%!";
+                         raise (Exit 2))
+                     pids)
+                 (chunks (max 1 !jobs) fns)
+             done;
+             List.iter
+               (fun (fname, uh) ->
+                 let stamp = Filename.concat objdir (fname ^ "." ^ comp ^ ".stamp") in
+                 let oc = open_out stamp in
+                 output_string oc (uh ^ "\n"); close_out oc)
+               !stale;
              let objs =
                String.concat " "
                  (List.map

@@ -2444,9 +2444,12 @@ let emit_units (mods : modl list) : (string * string * string list) list =
       let b = Buffer.create 8192 in
       emit_module_body b m;
       let deps =
-        List.filter_map
-          (fun (_, rn) -> Hashtbl.find_opt unit_of rn)
-          m.requires
+        (* every unit needs lg_rt's cmi, and a runtime change must
+           invalidate every stamp — keep it an explicit dep *)
+        "lg_rt"
+        :: List.filter_map
+             (fun (_, rn) -> Hashtbl.find_opt unit_of rn)
+             m.requires
       in
       (String.lowercase_ascii m.ocaml_name, Buffer.contents b, deps))
     mods
