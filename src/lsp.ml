@@ -102,7 +102,7 @@ let expr_types m : (int * int, string) Hashtbl.t =
        | Some (Ast.CatchAll (_, h) | Ast.CatchPat (_, _, h)) -> walk h
        | None -> ());
       (match f with Some fe -> walk fe | None -> ())
-    | Ast.EUnbox (x, _) | Ast.EUnboxOpt (x, _) | Ast.EBox x -> walk x
+    | Ast.EUnbox (x, _) | Ast.EUnboxOpt (x, _) | Ast.EBox x | Ast.EOcamlGet (x, _) -> walk x
     | Ast.EOpt (Some x) -> walk x
     | _ -> ()
   in

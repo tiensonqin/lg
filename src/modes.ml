@@ -33,7 +33,7 @@ let rec occurs_anywhere p e =
   | ELet (ps, b) -> List.exists (fun (_, i) -> occurs_anywhere p i) ps || occurs_anywhere p b
   | EMatchOpt (s, _, t, x) -> occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p x
   | EVariant (s, _, _, t, x) -> occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p x
-  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> occurs_anywhere p e
+  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) | EOcamlGet (e, _) -> occurs_anywhere p e
   | EOpt (Some e) -> occurs_anywhere p e
   | EDynVec (s, _, t, e) | EDynMap (s, _, t, e) ->
     occurs_anywhere p s || occurs_anywhere p t || occurs_anywhere p e
@@ -90,7 +90,7 @@ let is_escaping_use b es : bool =
        | None -> ());
       (match f with Some fe -> go false fe | None -> ())
     | EOpt (Some e) -> go in_closure e
-    | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> go false e
+    | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) | EOcamlGet (e, _) -> go false e
     | _ -> ()
   in
   List.iter (go false) es;
@@ -534,7 +534,7 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
    | EVecLit es | EListLit es | ESetLit es | ETuple es ->
      List.iter (fun a -> analyze_expr ~region_ret a) es
    | EMapLit kes -> List.iter (fun (k, v) -> analyze_expr ~region_ret k; analyze_expr ~region_ret v) kes
-   | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) -> analyze_expr ~region_ret:true a
+   | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOcamlGet (a, _) -> analyze_expr ~region_ret:true a
    | EOpt (Some a) -> analyze_expr ~region_ret a
    | _ -> ())
 
@@ -587,7 +587,7 @@ let rec collect_value_refs e =
      | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> collect_value_refs h
      | None -> ());
     (match f with Some fe -> collect_value_refs fe | None -> ())
-  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) -> collect_value_refs e
+  | EBox e | EUnbox (e, _) | EUnboxOpt (e, _) | EOcamlGet (e, _) -> collect_value_refs e
   | EOpt (Some e) -> collect_value_refs e
   | _ -> ()
 
@@ -671,7 +671,7 @@ let count_modes m =
         | Some (CatchAll (_, h) | CatchPat (_, _, h)) -> walk h
         | None -> ());
        (match f with Some fe -> walk fe | None -> ())
-     | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
+     | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) | EOcamlGet (a, _) -> walk a
      | _ -> ())
   in
   List.iter

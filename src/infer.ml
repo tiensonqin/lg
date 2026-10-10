@@ -47,6 +47,10 @@ let module_implicits : (string, (string * ty) list) Hashtbl.t = Hashtbl.create 1
    resolve_ocaml_value, consulted by infer_app_no_macro *)
 let ocaml_fns : (string, ty list * Ocaml_sig.ocaml_lbl list * ty * bool) Hashtbl.t = Hashtbl.create 16
 
+(* "<unit>.<oname>" -> (record_ty, field_ty) for OCaml record labels
+   (`x/lbl r` emits `r.lbl`, not `Mod.lbl r`) *)
+let ocaml_gets : (string, ty * ty) Hashtbl.t = Hashtbl.create 8
+
 (* "<unit>/<oname>" -> field count for OCaml variant ctors — parallel to
    Emit.cur_v so ctor calls emit Unit.Ctor (a, b) *)
 let ocaml_ctors : (string, int) Hashtbl.t = Hashtbl.create 16
@@ -571,7 +575,7 @@ and check_builtin_values m =
       (match f with Some fe -> walk fe | None -> ())
     | EVariant (s, _, _, t, x) -> walk s; walk t; walk x
     | EDynVec (s, _, t, x) | EDynMap (s, _, t, x) -> walk s; walk t; walk x
-    | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) -> walk a
+    | EBox a | EUnbox (a, _) | EUnboxOpt (a, _) | EOpt (Some a) | EOcamlGet (a, _) -> walk a
     | _ -> ()
   in
   List.iter
@@ -2227,6 +2231,15 @@ and resolve_ocaml_value _ctx l s modpath n : expr =
         (Printf.sprintf "ocaml.%s.%s: type not expressible in lg (%s)" modpath n t)
         []
   in
+  let try_label nm =
+    match lookup_label modpath nm with
+    | Some r -> Some (nm, r)
+    | None -> None
+    | exception Unsupported t ->
+      Err.err l "E102"
+        (Printf.sprintf "ocaml.%s.%s: type not expressible in lg (%s)" modpath n t)
+        []
+  in
   (match
      match try_name (munge n) with
      | Some _ as r -> r
@@ -2251,6 +2264,28 @@ and resolve_ocaml_value _ctx l s modpath n : expr =
       | false -> ());
      mk l ty (EGlobal (unit, oname, s))
    | None ->
+     (* record labels (`x/lbl r` -> `r.lbl`) are projections: they live
+        in type declarations, not Sig_value — try them before failing *)
+     (match
+        match try_label (munge n) with
+        | Some _ as r -> r
+        | None ->
+          (match try_label n with
+           | Some _ as r -> r
+           | None ->
+             (match try_label (String.uncapitalize_ascii n) with
+              | Some _ as r -> r
+              | None -> try_label (String.uncapitalize_ascii (munge n))))
+      with
+      | Some (oname, (rty, fty)) ->
+        let unit =
+          match Hashtbl.find_opt unit_paths modpath with
+          | Some u -> u
+          | None -> modpath
+        in
+        Hashtbl.replace ocaml_gets (unit ^ "." ^ oname) (rty, fty);
+        mk l (TFun ([ rty ], fty)) (EGlobal (unit, oname, s))
+      | None ->
      (match signature_of modpath with
       | Some _ ->
         Err.err l "E102" (Printf.sprintf "ocaml.%s.%s: not found" modpath n) []
@@ -2259,7 +2294,7 @@ and resolve_ocaml_value _ctx l s modpath n : expr =
           (Printf.sprintf
              "ocaml.%s: module not found — check the module path or require its package first ([ocaml.pkg/<name>])"
              modpath)
-          []))
+          [])))
 
 (* `(m/f pos... :lbl v ...)` against an ocaml.* alias: positional args
    bind the signature's unlabelled params in order; keywords find their
@@ -2361,8 +2396,20 @@ and infer_ocaml_call ctx l s ce ps ls rt is_ctor args =
        List.filteri (fun i _ -> i >= npos) ono_params
      in
      let result_ty = match remaining with [] -> rt | _ -> TFun (remaining, rt) in
+     (* record label pseudo-fn: applied once -> `r.lbl` *)
+     (match ce.desc with
+      | EGlobal (u, on, _)
+        when Hashtbl.mem ocaml_gets (u ^ "." ^ on) ->
+        (match pos_exprs, lbl_fs with
+         | [ (_, e) ], [] -> mk l rt (EOcamlGet (e, on))
+         | _ ->
+           type_error l
+             (Printf.sprintf
+                "ocaml.%s: a record label takes exactly the record value"
+                s))
+      | _ ->
      let oargs = List.map (fun (pty, e) -> Ast.OPos (pty, e)) pos_exprs @ lbl_exprs in
-     mk l result_ty (EOCamlCall (ce, oargs)))
+     mk l result_ty (EOCamlCall (ce, oargs))))
 
 and infer_app_no_macro ctx l s args =
   (* multi-arity dispatch: (f x y) where `f` was defined with arity 2
@@ -2390,7 +2437,17 @@ and infer_app_no_macro ctx l s args =
    | EGlobal (m, n, _) ->
      (match Hashtbl.find_opt ocaml_fns (m ^ "." ^ n) with
       | Some (ps, ls, rt, is_ctor) -> infer_ocaml_call ctx l s ce ps ls rt is_ctor args
-      | None -> infer_lg_call ctx l s ce args)
+      | None ->
+        (match Hashtbl.find_opt ocaml_gets (m ^ "." ^ n), args with
+         | Some (rty, fty), [ af ] ->
+           let e = infer_expr ctx af in
+           unify e.loc rty e.ety;
+           mk l fty (EOcamlGet (e, n))
+         | Some _, _ ->
+           type_error l
+             (Printf.sprintf
+                "ocaml.%s.%s: a record label takes exactly the record value" m n)
+         | None, _ -> infer_lg_call ctx l s ce args))
    | _ -> infer_lg_call ctx l s ce args)
 
 and infer_lg_call ctx l s ce args =

@@ -461,6 +461,15 @@ wasm reject them with E100): `src/ocaml_sig.ml` reads installed
   must stay type-correct (a `Result.map` cannot see an option).
   Cross the boundary explicitly (`Option.to_result`,
   `Result.to_option`, `Array.of_list`, `Bytes.to_string`).
+- **Record labels** are projections, not values: after the
+  `Sig_value`/ctor lookup misses, `(x/lbl r)` resolves `lbl` against
+  the module's `Type_record` declarations and emits `r.lbl` (never
+  `Mod.lbl r`). Applied once it projects the field; unapplied it is a
+  first-class fn `(fun r -> r.lbl)`. The record type unifies with the
+  argument (`(std/contents 99)` → E101). Mutation (`r.lbl <- v`) is
+  not surfaced — OCaml records are conventionally immutable.
+  **Anchor**: `test/ocamlinterop.lg` (`std/contents` applied,
+  fn-valued, and through `List.map`), `should_fail/ocaml_lbl`.
   Handle params are not boxed on import: `(def h (ht/create 8))`
   stores the generic `('a,'b) Hashtbl.t` scheme, and OCaml
   weak-var inference pins one instantiation per use — a def that

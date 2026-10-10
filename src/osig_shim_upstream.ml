@@ -30,3 +30,8 @@ let cstr_tuple (cd : Types.constructor_declaration) =
   match cd.Types.cd_args with
   | Types.Cstr_tuple ts -> Some ts
   | _ -> None
+
+let record_lbls (td : Types.type_declaration) =
+  match td.Types.type_kind with
+  | Types.Type_record (lds, _) -> Some lds
+  | _ -> None

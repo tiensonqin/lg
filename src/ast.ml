@@ -70,6 +70,8 @@ and edesc =
     (* direct OCaml library call: positional args plus `~lbl:e` / `~opt:e`
        (optional params supplied by value emit as ~opt:v) in signature
        order grouped positional-first *)
+  | EOcamlGet of expr * string
+    (* record label access on an opaque handle: `x/lbl r` -> `r.lbl` *)
 
 and try_catch =
   | CatchAll of binder * expr

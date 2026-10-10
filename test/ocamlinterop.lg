@@ -65,3 +65,12 @@
 (def rs (rnd/make (arr/of_list '(1 2 3))))
 (println (rnd/int rs 100))
 (println (rnd/int rs 100))
+;; record labels are projections, not functions: `x/lbl r` -> `r.lbl`.
+;; `(std/contents r)` reads the ref's field; unapplied it is a first-class
+;; fn `(fun r -> r.contents)`.
+(def rr (std/ref 42))
+(println (std/contents rr))
+(let [f std/contents] (println (f rr)))
+(def rs2 (std/ref "hi"))
+(println (std/contents rs2))
+(println (mapv (fn [x] (+ x 1)) (olist/map std/contents (olist/map std/ref '(1 2 3)))))

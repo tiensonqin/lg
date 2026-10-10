@@ -145,7 +145,12 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
      | Some (q, k) ->
        let xs = List.init k (fun i -> "__x" ^ string_of_int i) in
        buf_add b ("(fun " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ " -> " ^ ctor_qual q ^ " " ^ (if k = 1 then "__x0" else "(" ^ String.concat ", " xs ^ ")") ^ ")")
-     | None -> if m = !cur_mod then buf_add b n else buf_add b (m ^ "." ^ n))
+     | None ->
+       if m = !cur_mod then buf_add b n
+       else if Hashtbl.mem Infer.ocaml_gets (m ^ "." ^ n) then
+         (* record label used as a fn value -> (fun r -> r.lbl) *)
+         buf_add b ("(fun r__lbl -> r__lbl." ^ n ^ ")")
+       else buf_add b (m ^ "." ^ n))
   | EBuiltin name -> buf_add b (emit_builtin_value name e.ety)
   | EFun fn ->
     (match fn.Ast.fself, (if !oxcaml then None else fbip_pick fn) with
@@ -243,6 +248,10 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
           buf_add b (" ~" ^ k ^ ":(" ^ conv pty a.ety (arg_str ~local:false a) ^ ")"))
       oargs;
     buf_add b ")"
+  | EOcamlGet (a, f) ->
+    buf_add b "(";
+    emit_expr b a;
+    buf_add b ("." ^ f ^ ")")
   | EIf (c, t, x) ->
     (* cond: bool passes through, `any` goes through dyn truthiness, and
        any other statically typed value is truthy but must still be
@@ -1178,6 +1187,7 @@ and occurs_bid bid e =
   | ECall (c, xs) -> List.exists (occurs_bid bid) (c :: xs)
   | EOCamlCall (c, oas) ->
     List.exists (occurs_bid bid) (c :: List.map oarg_expr oas)
+  | EOcamlGet (a, _) -> occurs_bid bid a
   | EIf (a, x, y) -> List.exists (occurs_bid bid) [ a; x; y ]
   | EDo xs | ETuple xs | EVecLit xs | EListLit xs | ESetLit xs ->
     List.exists (occurs_bid bid) xs
@@ -2474,7 +2484,7 @@ let rec refs_in acc e =
   | EMapLit ps -> List.fold_left (fun a (k, v) -> refs_in (refs_in a k) v) acc ps
   | EMatchOpt (a, _, x, y) | EDynVec (a, _, x, y) | EDynMap (a, _, x, y) ->
     refs_in (refs_in (refs_in acc a) x) y
-  | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a -> refs_in acc a
+  | EUnbox (a, _) | EUnboxOpt (a, _) | EBox a | EOcamlGet (a, _) -> refs_in acc a
   | EOpt (Some a) -> refs_in acc a
   | EOpt None -> acc
   | EVariant (a, _, _, x, y) -> refs_in (refs_in (refs_in acc a) x) y

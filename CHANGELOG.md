@@ -195,6 +195,16 @@ compiling to OCaml via `Clj_core` data structures.
   any non-builtin TCon silently fell back to `DStr` and produced
   ill-typed OCaml (compilable-by-construction violation).
 
+## OCaml record label access (2026-10-10)
+
+- `(x/lbl r)` resolves OCaml record labels (Type_record declarations in
+  the cmi) and emits `r.lbl`: `(std/contents r)` reads a ref's field.
+  Applied once it projects; unapplied it is `(fun r -> r.lbl)` for HOF
+  use (`olist/map std/contents`). Wrong record type → E101
+  (`should_fail/ocaml_lbl`).
+- `Osig_shim.record_lbls` added on both toolchain shims; mutation via
+  `r.lbl <- v` intentionally not surfaced (v0.3).
+
 ## LSP completion + diagnostics (2026-10-10)
 
 - `lg lsp` now pushes `textDocument/publishDiagnostics` on

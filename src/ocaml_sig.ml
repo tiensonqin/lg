@@ -513,3 +513,39 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
       | _ :: tl -> find tl
     in
     find items)
+
+(* record labels are projections, not Sig_value functions — `(x/lbl r)`
+   resolves here and emits `r.lbl`. Returns (record_ty, field_ty). *)
+let lookup_label modpath name : (ty * ty) option =
+  Hashtbl.reset var_tbl;
+  match signature_of modpath with
+  | None -> None
+  | Some (items, unit, rest) ->
+    (match walk_submodules items (unit, []) rest with
+     | None -> None
+     | Some (items, naming) ->
+       cur_unit_path := flat_path naming;
+       let rec find = function
+         | [] -> None
+         | Types.Sig_type (tid, td, _, _) :: tl ->
+           (match Osig_shim.record_lbls td with
+            | Some lds ->
+              (match
+                  List.find_opt
+                    (fun ld -> Ident.name ld.Types.ld_id = name)
+                    lds
+                with
+               | Some ld ->
+                 let emod = flat_path naming in
+                 let rty =
+                   TCon
+                     ( emod ^ "." ^ Ident.name tid
+                     , List.map ty_of_te td.Types.type_params )
+                 in
+                 (try Some (rty, ty_of_te ~depth:1 ld.Types.ld_type)
+                  with Unsupported _ -> find tl)
+               | None -> find tl)
+            | None -> find tl)
+         | _ :: tl -> find tl
+       in
+       find items)
