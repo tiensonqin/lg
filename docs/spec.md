@@ -193,9 +193,9 @@ convert args/results against the callee's stored scheme.
 `EBox`-boxed to `dyn`; equal types pass through. `(if c x)` is
 `(option <x>)`. There is no `nil` literal: `()` is `unit` and
 `None` is the absent option — `(let [x (cond … :else ())])` produces an option the
-type checker tracks — `(+ x 1)` on it is a static E101, and a
-unit value in a condition reads as falsy (still evaluated for
-order).
+type checker tracks — `(+ x 1)` on it is a static E101. A `unit`
+value is not a condition operand: `(if () …)` is E101; truthiness
+is `bool`/`dyn` only.
 
 **`match` patterns.** Literal atoms (int/float/bool/char/string/
 keyword/`()`), `_`/symbol (bind), `[p…]` vectors (count-guard +
