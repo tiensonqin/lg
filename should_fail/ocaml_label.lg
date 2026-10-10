@@ -1,0 +1,2 @@
+(ns f3 (:require [ocaml.String :as str]))
+(println (str/starts_with "abc" :bogus "a"))

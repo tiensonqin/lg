@@ -1,0 +1,2 @@
+(ns f2 (:require [ocaml.String :as str]))
+(println (str/no_such_fn 1))

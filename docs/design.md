@@ -452,3 +452,46 @@ project. `lg doc` prints each top's inferred scheme as markdown —
 `.lgi`-gated defs keep their exported signature. `lg version` reports
 the embedded version. `tools/release.sh` + `.github/workflows/release.yml`
 build os/arch tarballs on `v*` tags.
+
+## 17. OCaml interop (`ocaml.*` requires)
+
+`src/ocaml_sig.ml` reads installed `.cmi` files so any OCaml module or
+findlib package is callable directly from lg (native + oxcaml backends
+only — melange/wasm reject `ocaml.*` requires with E100).
+
+Require forms in `(:require ...)`:
+
+- `[ocaml.Mod :as m]` / `[ocaml.Mod.Sub :as m]` — bind alias `m` to the
+  module path; `m/f` calls compile to `Mod.f` / `Mod.Sub.f`.
+- `[ocaml.Mod :refer [f g]]` — also imports bare `f`, `g` names.
+- `[ocaml.pkg/name]` — package registration only: `ocamlfind query` the
+  package for its cmi dirs and add it to the `-package`/`-linkpkg` line.
+  Required before requiring a package's modules when the package is not
+  on the default cmi path (e.g. `[ocaml.pkg/eio]` then
+  `[ocaml.Eio.Fiber :as fiber]`).
+
+Cmi resolution (`cmi_candidates` + `find_cmi`) covers: flat `<path>.cmi`,
+`<last-seg>.cmi`, wrapped stdlib `stdlib__X.cmi`, findlib subdir
+`<pkg>/<pkg>.cmi`, dune-wrapped `pkg__Mod.cmi`, longest-prefix fallback to
+`ocamlfind query <first-seg>`, then `walk_submodules` descends remaining
+segments through `Sig_module` decls, following `Mty_alias` into the
+aliased unit's cmi.
+
+Calls: `m/f` resolves the alias to a real OCaml path (kept on `EGlobal`,
+so emit prints the qualified name verbatim — no `Stdlib.` prefixing).
+`lookup` returns `(param types, labels, result, is_ctor)`; labels are
+`ONo | OLbl s | OOpt s` from the arrow decomposition. Trailing `:kw v`
+call-site pairs match `OLbl`/`OOpt` params by name — unknown or duplicate
+labels and missing required `~lbl`s are E100/E102 compile errors.
+Positional args are arity-checked against `ONo` params; a trailing
+`unit` param synthesizes `()` so `(m/f)` calls a `unit -> t` correctly.
+Under-application returns the remaining `TFun` (partial application).
+Constructors (`is_ctor`, incl. `m/Ctor` for multi-seg paths) emit
+`Mod.Ctor` calls with an exact field count.
+
+Types: `ty_of_te` maps `Types.type_expr` onto lg's `ty` (int/float/bool/
+string/char/unit/list/option/array/seq/result/ref/tuple/fn/tvar); an
+unknown constructor (abstract types, objects, records, first-class
+modules) raises `Unsupported`, surfaced as `type not expressible in lg`.
+Mode analysis treats every `EOCamlCall` argument as escaping — cmi
+signatures carry no borrow metadata.

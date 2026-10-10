@@ -78,6 +78,17 @@ let sig_tbl : (string, ty) Hashtbl.t = Hashtbl.create 97
 (* variant ctor lookup: "Mod.munged" -> ("Mod.Ctor", nfields) *)
 let cur_v : (string, string * int) Hashtbl.t = Hashtbl.create 16
 
+(* lg defvariant ctors plus ocaml.* ctors resolved from cmi signatures;
+   an ocaml ctor's qualified name is "<unit>.<name>" — its real
+   compilation unit *)
+let find_ctor m n =
+  match Hashtbl.find_opt cur_v (m ^ "/" ^ n) with
+  | Some r -> Some r
+  | None ->
+    (match Hashtbl.find_opt Infer.ocaml_ctors (m ^ "/" ^ n) with
+     | Some k -> Some (m ^ "." ^ n, k)
+     | None -> None)
+
 (* qualify a "Mod.Ctor" name: bare inside its own module *)
 let ctor_qual q =
   let pfx = !cur_mod ^ "." in
@@ -101,7 +112,7 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
   | ENil -> buf_add b (if is_any e.ety then "(Lg_rt.DUnit)" else "()")
   | ELocal bd -> buf_add b (sanitize bd.bname ^ "__" ^ string_of_int bd.bid)
   | EGlobal (m, n, _) ->
-    (match Hashtbl.find_opt cur_v (m ^ "/" ^ n) with
+    (match find_ctor m n with
      | Some (q, 0) -> buf_add b (ctor_qual q)
      | Some (q, k) ->
        let xs = List.init k (fun i -> "__x" ^ string_of_int i) in
@@ -148,6 +159,20 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
      | Some sb -> buf_add b (" in " ^ sanitize sb.bname ^ "__" ^ string_of_int sb.bid ^ ")")
      | None -> ())
   | ECall (ce, args) -> emit_call b e ce args
+  | EOCamlCall (ce, oargs) ->
+    (* direct OCaml call: positional args first, then ~lbl:v — optional
+       params supplied by value emit the same (~opt:v) *)
+    buf_add b "(";
+    emit_expr b ce;
+    List.iter
+      (fun oa ->
+        match oa with
+        | OPos (pty, a) ->
+          buf_add b (" " ^ conv pty a.ety (arg_str ~local:false a))
+        | OLbl (k, pty, a) | OOpt (k, pty, a) ->
+          buf_add b (" ~" ^ k ^ ":(" ^ conv pty a.ety (arg_str ~local:false a) ^ ")"))
+      oargs;
+    buf_add b ")"
   | EIf (c, t, x) ->
     (* cond: bool passes through, `any` goes through dyn truthiness, and
        any other statically typed value is truthy but must still be
@@ -287,12 +312,19 @@ and emit_call b (e : expr) ce args =
   in
   match ce.desc with
   | EBuiltin name -> emit_builtin_call ~call_local b ret name args
-  | EGlobal (m, n, _) when Hashtbl.mem cur_v (m ^ "/" ^ n) ->
-    let q, _ = Hashtbl.find cur_v (m ^ "/" ^ n) in
+  | EGlobal (m, n, _) when find_ctor m n <> None ->
+    let q, k = match find_ctor m n with Some r -> r | None -> assert false in
     (* variant constructor: a direct allocation site — stack_ when the
        result need only be local *)
+    let call_local = call_local && k > 0 in
     if call_local then buf_add b "(stack_ ";
-    buf_add b ("(" ^ ctor_qual q ^ " " ^ (if List.length args = 1 then arg_str (List.hd args) else "(" ^ String.concat ", " (List.map (fun a -> arg_str ~local:(arg_local a) a) args) ^ ")") ^ ")");
+    buf_add b
+      (match args with
+       | [] -> "(" ^ ctor_qual q ^ ")"
+       | [ a ] -> "(" ^ ctor_qual q ^ " " ^ arg_str a ^ ")"
+       | _ ->
+         "(" ^ ctor_qual q ^ " (" ^
+         String.concat ", " (List.map (fun a -> arg_str ~local:(arg_local a) a) args) ^ "))");
     if call_local then buf_add b ")"
   | _ ->
     (* box args into dyn when the callee's formal param is `any`. For an
@@ -1734,7 +1766,10 @@ let rec ocaml_ty t =
 and tcon_name n =
   match Hashtbl.find_opt Infer.all_type_mods n with
   | Some m when m <> !cur_mod -> m ^ "." ^ munge n
-  | _ -> munge n
+  | _ ->
+    (* ocaml.* ctor result types carry a real OCaml path
+       ("Unix.sockaddr") — emit it verbatim *)
+    if String.contains n '.' then n else munge n
 
 and paren_ty s = if String.contains s ' ' then "(" ^ s ^ ")" else s
 
@@ -1894,6 +1929,8 @@ let rec refs_in acc e =
   | ENil | ELocal _ | EGlobal _ | EBuiltin _ -> acc
   | EFun fn -> refs_in acc fn.body
   | ECall (c, xs) -> List.fold_left refs_in (refs_in acc c) xs
+  | EOCamlCall (c, oas) ->
+    List.fold_left (fun a oa -> refs_in a (oarg_expr oa)) (refs_in acc c) oas
   | EIf (a, x, y) -> refs_in (refs_in (refs_in acc a) x) y
   | EDo xs -> List.fold_left refs_in acc xs
   | ELet (bs, x) -> List.fold_left (fun a (_, ex) -> refs_in a ex) (refs_in acc x) bs

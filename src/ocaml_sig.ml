@@ -26,14 +26,27 @@ let packages : string list ref = ref []
 (* directories searched for cmi files: stdlib + ocaml.pkg query dirs *)
 let cmi_dirs : string list ref = ref []
 
-let run_lines cmd =
+(* emit backend selected on the lg command line; ocaml.* requires are
+   native-only ("ocaml"/"oxcaml"), set by bin/lg.ml *)
+let backend = ref "ocaml"
+
+(* modpath -> real compilation unit name: "Eio.Fiber" -> "Eio__Fiber",
+   from the basename of the cmi file we actually resolved *)
+let unit_paths : (string, string) Hashtbl.t = Hashtbl.create 17
+
+exception Unknown_package of string
+
+let run_lines_st cmd =
   let ic = Unix.open_process_in cmd in
   let rec go acc =
     match input_line ic with
     | s -> go (s :: acc)
-    | exception End_of_file -> close_in ic; List.rev acc
+    | exception End_of_file -> List.rev acc
   in
-  go []
+  let lines = go [] in
+  (lines, Unix.close_process_in ic)
+
+let run_lines cmd = fst (run_lines_st cmd)
 
 let init () =
   if !cmi_dirs = [] then
@@ -47,6 +60,9 @@ let init () =
 let add_package pkg =
   init ();
   if not (List.mem pkg !packages) then begin
+    (match run_lines_st (Printf.sprintf "ocamlfind query %s 2>/dev/null" pkg) with
+     | [], _ -> raise (Unknown_package pkg)
+     | _ -> ());
     packages := pkg :: !packages;
     (* recursive include dirs so wrapped/sub libraries resolve *)
     let ds =
@@ -56,55 +72,97 @@ let add_package pkg =
     cmi_dirs := !cmi_dirs @ List.map String.trim ds
   end
 
-(* Eio.Fiber -> search dirs for fiber.cmi / eio__Fiber.cmi / eio.Fiber.cmi *)
+(* candidate cmi file names for a module path. Covers stdlib wrap
+   (String -> stdlib__String.cmi), dune-style package wrap
+   (Eio.Fiber -> eio__Fiber.cmi), package dirs (unix -> unix/unix.cmi)
+   and literal unit names (Eio__Fiber.cmi from an Mty_alias path) *)
 let cmi_candidates modpath =
-  let last =
-    match String.rindex_opt modpath '.' with
-    | Some i -> String.sub modpath (i + 1) (String.length modpath - i - 1)
-    | None -> modpath
+  let segs = String.split_on_char '.' modpath in
+  let last = List.hd (List.rev segs) in
+  let flat =
+    String.lowercase_ascii (String.map (fun c -> if c = '.' then '_' else c) modpath)
   in
-  let flat = String.lowercase_ascii (String.map (fun c -> if c = '.' then '_' else c) modpath) in
-  [ String.lowercase_ascii last ^ ".cmi"; flat ^ ".cmi";
-    String.map (fun c -> if c = '.' then '/' else c) (String.lowercase_ascii modpath) ^ ".cmi";
-    flat ^ ".cmi" ]
+  let wrap =
+    match segs with
+    | [ n ] -> [ "stdlib__" ^ n ^ ".cmi" ]
+    | pkg :: rest ->
+      [ String.lowercase_ascii pkg ^ "__" ^ String.concat "__" rest ^ ".cmi" ]
+    | [] -> []
+  in
+  let subdir =
+    match segs with
+    | [ n ] ->
+      (* findlib convention: <libdir>/<pkg>/<pkg>.cmi *)
+      [ String.lowercase_ascii n ^ "/" ^ String.lowercase_ascii n ^ ".cmi" ]
+    | _ -> []
+  in
+  [ modpath ^ ".cmi";
+    String.lowercase_ascii last ^ ".cmi";
+    flat ^ ".cmi";
+    String.map (fun c -> if c = '.' then '/' else c) (String.lowercase_ascii modpath)
+    ^ ".cmi" ]
+  @ wrap @ subdir
 
+(* find the longest prefix of modpath that resolves to a cmi. Returns
+   (cmi path, number of leading segments consumed); remaining segments
+   are nested modules inside that unit *)
 let find_cmi modpath =
   init ();
-  let rec search dirs =
-    match dirs with
-    | [] -> None
-    | d :: tl ->
-      (match
-         List.find_map
-           (fun c -> let p = Filename.concat d c in if Sys.file_exists p then Some p else None)
-           (cmi_candidates modpath)
-       with
-       | Some p -> Some p
-       | None ->
-         (* wrapped packages: Eio.Fiber may live in <dir>/eio/fiber.cmi *)
-         (match String.index_opt modpath '.' with
-          | Some i ->
-            let pkg = String.lowercase_ascii (String.sub modpath 0 i) in
-            let rest = String.sub modpath (i + 1) (String.length modpath - i - 1) in
-            let p = Filename.concat (Filename.concat d pkg)
-                      (String.lowercase_ascii rest ^ ".cmi") in
-            if Sys.file_exists p then Some p else search tl
-          | None -> search tl))
+  let segs = String.split_on_char '.' modpath in
+  let nsegs = List.length segs in
+  let find_in dirs prefix =
+    List.find_map
+      (fun d ->
+        List.find_map
+          (fun c ->
+            let p = Filename.concat d c in
+            if Sys.file_exists p then Some p else None)
+          (cmi_candidates prefix))
+      dirs
   in
-  search !cmi_dirs
+  let prefix k = String.concat "." (List.filteri (fun i _ -> i < k) segs) in
+  let rec try_prefix dirs k =
+    if k = 0 then None
+    else
+      match find_in dirs (prefix k) with
+      | Some p -> Some (p, k)
+      | None -> try_prefix dirs (k - 1)
+  in
+  match try_prefix !cmi_dirs nsegs with
+  | Some r -> Some r
+  | None ->
+    (* findlib fallback: treat the first segment as a package name *)
+    let pkg = String.lowercase_ascii (List.hd segs) in
+    (match run_lines (Printf.sprintf "ocamlfind query %s 2>/dev/null" pkg) with
+     | d :: _ ->
+       let d = String.trim d in
+       if not (List.mem d !cmi_dirs) then cmi_dirs := !cmi_dirs @ [d];
+       try_prefix [d] nsegs
+     | [] -> None)
 
-let sig_cache : (string, Types.signature_item list) Hashtbl.t = Hashtbl.create 17
+let sig_cache : (string, Types.signature_item list * string * string list) Hashtbl.t =
+  Hashtbl.create 17
 
+(* modpath -> (signature items of the resolved cmi, unit name, remaining
+   nested-module segments) *)
 let signature_of modpath =
   match Hashtbl.find_opt sig_cache modpath with
   | Some s -> Some s
   | None ->
     (match find_cmi modpath with
      | None -> None
-     | Some file ->
+     | Some (file, k) ->
        let cmi = Cmi_format.read_cmi file in
-       Hashtbl.replace sig_cache modpath cmi.Cmi_format.cmi_sign;
-       Some cmi.Cmi_format.cmi_sign)
+       let unit =
+         String.capitalize_ascii
+           (Filename.chop_extension (Filename.basename file))
+       in
+       let segs = String.split_on_char '.' modpath in
+       let rest = List.filteri (fun i _ -> i >= k) segs in
+       let r = (cmi.Cmi_format.cmi_sign, unit, rest) in
+       Hashtbl.replace unit_paths modpath (String.concat "." (unit :: rest));
+       Hashtbl.replace sig_cache modpath r;
+       Some r)
 
 (* Types.type_expr -> (param tys, labels, ret ty) + lg conversion *)
 exception Unsupported of string
@@ -171,12 +229,41 @@ let decompose te : (ty list) * ocaml_lbl list * ty =
   in
   go [] [] te
 
+(* descend nested-module segments of a modpath through Sig_module decls
+   (Mty_signature), following Mty_alias through the aliased unit's cmi *)
+let rec walk_submodules items = function
+  | [] -> Some items
+  | seg :: tl ->
+    (match
+       List.find_map
+         (fun it ->
+           match it with
+           | Types.Sig_module (id, _, md, _, _) when Ident.name id = seg ->
+             (match md.Types.md_type with
+              | Types.Mty_signature s -> Some (Some s)
+              | Types.Mty_alias p ->
+                (match find_cmi (Path.name p) with
+                 | Some (f, _) ->
+                   let cmi = Cmi_format.read_cmi f in
+                   Some (Some cmi.Cmi_format.cmi_sign)
+                 | None -> Some None)
+              | _ -> Some None)
+           | _ -> None)
+         items
+     with
+     | Some (Some inner) -> walk_submodules inner tl
+     | _ -> None)
+
 (* look up `name` in modpath's signature: either a value or a variant
    constructor. Returns (param tys, labels, result ty, is_ctor). *)
 let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
+  Hashtbl.reset var_tbl;
   match signature_of modpath with
   | None -> None
-  | Some items ->
+  | Some (items, unit, rest) ->
+    (match walk_submodules items rest with
+     | None -> None
+     | Some items ->
     let rec find = function
       | [] -> None
       | Types.Sig_value (id, vd, _) :: tl ->
@@ -196,9 +283,12 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
               (match cd.Types.cd_args with
                | Types.Cstr_tuple ts ->
                  let rt =
+                   let emod = String.concat "." (unit :: rest) in
                    match td.Types.type_manifest with
-                   | Some m -> (try ty_of_te m with Unsupported _ -> TCon (Ident.name tid, []))
-                   | None -> TCon (Ident.name tid, [])
+                   | Some m ->
+                     (try ty_of_te m
+                      with Unsupported _ -> TCon (emod ^ "." ^ Ident.name tid, []))
+                   | None -> TCon (emod ^ "." ^ Ident.name tid, [])
                  in
                  Some (List.map ty_of_te ts, List.map (fun _ -> ONo) ts, rt, true)
                | Types.Cstr_record _ -> find tl)
@@ -206,4 +296,4 @@ let lookup modpath name : (ty list * ocaml_lbl list * ty * bool) option =
          | _ -> find tl)
       | _ :: tl -> find tl
     in
-    find items
+    find items)

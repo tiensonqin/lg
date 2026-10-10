@@ -1,0 +1,2 @@
+(ns f5 (:require [ocaml.String :as str]))
+(println (str/length "a" "b"))

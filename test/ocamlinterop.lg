@@ -1,0 +1,18 @@
+(ns ocamlinterop
+  (:require [ocaml.Stdlib :as std]
+            [ocaml.String :as str]
+            [ocaml.List :as olist]
+            [ocaml.Unix :as unix]
+            [ocaml.String :refer [uppercase_ascii]]
+            [ocaml.pkg/eio]))
+
+(println (std/abs -42))
+(println (str/length "hello"))
+(println (str/starts_with "hello" :prefix "he"))
+(println (str/starts_with "hello" :prefix "lo"))
+(println (str/split_on_char \| "a|b|c"))
+(println (str/concat "-" '("a" "b" "c")))
+(println (olist/map (fn [x] (+ x 1)) '(1 2 3)))
+(def sa (unix/ADDR_UNIX "/tmp/x"))
+(println (> (unix/getpid) 0))
+(println (uppercase_ascii "refer"))

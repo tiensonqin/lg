@@ -34,12 +34,22 @@ type ctx = {
   variants : (string, vctor) Hashtbl.t;          (* defvariant ctor name -> info *)
   vtypes : (string, string list) Hashtbl.t;      (* defvariant type name -> ctor names *)
   multi_arity : (string, unit) Hashtbl.t;        (* multi-arity defn names — value use is a static error *)
+  oaliases : (string * string) list ref;         (* ocaml.* requires: alias -> OCaml module path *)
+  orefes : (string * string) list ref;           (* ocaml.* :refer entries: name -> OCaml module path *)
 
 }
 and vctor = { vc_ocaml : string; vc_scheme : scheme; vc_nfields : int }
 
 (* ns -> (name * dict type) entries exported via (:implicits true) *)
 let module_implicits : (string, (string * ty) list) Hashtbl.t = Hashtbl.create 16
+
+(* ocaml.* interop: "<unit>.<oname>" -> cmi signature entry — populated by
+   resolve_ocaml_value, consulted by infer_app_no_macro *)
+let ocaml_fns : (string, ty list * Ocaml_sig.ocaml_lbl list * ty * bool) Hashtbl.t = Hashtbl.create 16
+
+(* "<unit>/<oname>" -> field count for OCaml variant ctors — parallel to
+   Emit.cur_v so ctor calls emit Unit.Ctor (a, b) *)
+let ocaml_ctors : (string, int) Hashtbl.t = Hashtbl.create 16
 
 (* --strict: heterogeneous literals must carry an explicit ^any-family
    annotation. [strict_ok] is set while descending into a meta form whose
@@ -437,7 +447,7 @@ let rec infer_program (forms : form list) (mname : string) (path : string) (glob
   let variants = Hashtbl.create 16 and vtypes = Hashtbl.create 8 in
   Hashtbl.iter (Hashtbl.replace variants) all_variants;
   Hashtbl.iter (Hashtbl.replace vtypes) all_vtypes;
-  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes; multi_arity = Hashtbl.create 7 } in
+  let ctx = { modl = m; globals; env = []; implicits = []; mimplicits = ref []; externs = Hashtbl.create 7; declared = Hashtbl.create 7; variants; vtypes; multi_arity = Hashtbl.create 7; oaliases = ref []; orefes = ref [] } in
   List.iter (infer_top ctx) forms;
   check_builtin_values m;
   if !(ctx.mimplicits) <> [] then
@@ -456,6 +466,9 @@ and check_builtin_values m =
     | ECall (c, args) ->
       (match c.desc with EBuiltin _ -> () | _ -> walk c);
       List.iter walk args
+    | EOCamlCall (c, oargs) ->
+      walk c;
+      List.iter (fun oa -> walk (oarg_expr oa)) oargs
     | EFun fn -> walk fn.body
     | EIf (c, t, x) -> walk c; walk t; walk x
     | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.iter walk es
@@ -617,6 +630,9 @@ and require_spec ctx l spec =
   match spec with
   | Vector (_, els) when Array.length els >= 1 ->
     (match els.(0) with
+     | Atom (_, Symbol ns)
+       when String.length ns > 6 && String.sub ns 0 6 = "ocaml." ->
+       require_ocaml ctx l ns els
      | Atom (_, Symbol ns) ->
        let rec opts i alias implicits =
          if i >= Array.length els then (alias, implicits)
@@ -643,6 +659,49 @@ and require_spec ctx l spec =
         | false -> ())
      | _ -> type_error l "unsupported :require spec (want [ns] or [ns :as alias] :implicits true)")
   | _ -> type_error l "unsupported :require spec (want a vector)"
+
+(* [ocaml.Mod :as a] / [ocaml.Mod :refer [f ...]] — alias/bare-name access
+   to an OCaml module via its cmi. [ocaml.pkg/name] registers an ocamlfind
+   package (cmi dirs + link line) and binds nothing. Native backends only. *)
+and require_ocaml ctx l ns els =
+  (match !(Ocaml_sig.backend) with
+   | "ocaml" | "oxcaml" -> ()
+   | b ->
+     type_error l
+       (Printf.sprintf "ocaml.* requires the native or oxcaml backend (--backend=%s)" b));
+  let rest = String.sub ns 6 (String.length ns - 6) in
+  (match String.index_opt rest '/' with
+   | Some i ->
+     let pkg = String.sub rest (i + 1) (String.length rest - i - 1) in
+     (try Ocaml_sig.add_package pkg
+      with Ocaml_sig.Unknown_package p ->
+        type_error l (Printf.sprintf "ocamlfind: package %s not found" p))
+   | None ->
+     let modpath = rest in
+     let alias =
+       ref
+         (match String.rindex_opt modpath '.' with
+          | Some i -> String.sub modpath (i + 1) (String.length modpath - i - 1)
+          | None -> modpath)
+     in
+     let rec opts i =
+       if i < Array.length els then
+         match els.(i), (if i + 1 < Array.length els then Some els.(i + 1) else None) with
+         | Atom (_, Keyword "as"), Some (Atom (_, Symbol a)) -> alias := a; opts (i + 2)
+         | Atom (_, Keyword "refer"), Some (Vector (_, rfs)) ->
+           Array.iter
+             (fun rf ->
+               match rf with
+               | Atom (_, Symbol n) -> ctx.orefes := (n, modpath) :: !(ctx.orefes)
+               | _ -> type_error l "ocaml.* :refer expects a vector of symbols")
+             rfs;
+           opts (i + 2)
+         | _ -> type_error l "unsupported ocaml.* :require option (want :as alias or :refer [f ...])"
+     in
+     opts 1;
+     if List.mem_assoc !alias !(ctx.oaliases) || List.mem_assoc !alias ctx.modl.requires then
+       type_error l (Printf.sprintf "duplicate require alias %s" !alias);
+     ctx.oaliases := (!alias, modpath) :: !(ctx.oaliases))
 
 and add_implicit ctx l name key =
   ctx.mimplicits := (name, key) :: !(ctx.mimplicits);
@@ -1135,19 +1194,22 @@ and resolve_unmarked ctx l s =
   match String.index_opt s '/' with
   | Some i when i > 0 ->
     let ns = String.sub s 0 i and n = String.sub s (i + 1) (String.length s - i - 1) in
-    let target = match List.assoc_opt ns ctx.modl.requires with Some full -> full | None -> ns in
-    if target = ctx.modl.mname then infer_symbol ctx l n
-    else (
-      match Hashtbl.find_opt ctx.globals target with
-      | Some tbl ->
-        (match Hashtbl.find_opt tbl n with
-         | Some { gsch = sch; gexp = true; _ } ->
-           if Hashtbl.mem ctx.multi_arity (target ^ "/" ^ n) then
-             type_error l (Printf.sprintf "%s is multi-arity — call it with a matching argument count" s)
-           else mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
-         | Some _ -> type_error l (Printf.sprintf "%s is not exported by module %s" s target)
-         | None -> type_error l (Printf.sprintf "unresolved symbol %s (no such var in %s)" s target))
-      | None -> type_error l (Printf.sprintf "unresolved symbol %s (module %s not loaded)" s target))
+    (match List.assoc_opt ns !(ctx.oaliases) with
+     | Some modpath -> resolve_ocaml_value ctx l s modpath n
+     | None ->
+       let target = match List.assoc_opt ns ctx.modl.requires with Some full -> full | None -> ns in
+       if target = ctx.modl.mname then infer_symbol ctx l n
+       else (
+         match Hashtbl.find_opt ctx.globals target with
+         | Some tbl ->
+           (match Hashtbl.find_opt tbl n with
+            | Some { gsch = sch; gexp = true; _ } ->
+              if Hashtbl.mem ctx.multi_arity (target ^ "/" ^ n) then
+                type_error l (Printf.sprintf "%s is multi-arity — call it with a matching argument count" s)
+              else mk l (instantiate sch) (EGlobal (ocaml_mod_of_ns target, munge n, s))
+            | Some _ -> type_error l (Printf.sprintf "%s is not exported by module %s" s target)
+            | None -> type_error l (Printf.sprintf "unresolved symbol %s (no such var in %s)" s target))
+         | None -> type_error l (Printf.sprintf "unresolved symbol %s (module %s not loaded)" s target)))
   | _ ->
     (match lookup ctx.env s with
      | Some { vscheme = sch; vkind = KGlobal (m, n); _ } -> mk l (instantiate sch) (EGlobal (m, n, s))
@@ -1161,9 +1223,12 @@ and resolve_unmarked ctx l s =
            | Some { gsch = sch; _ } -> mk l (instantiate sch) (EGlobal (ctx.modl.ocaml_name, munge s, s))
            | None -> unbound_err ctx l s)
         | _ ->
-          (match Hashtbl.find_opt builtin_table s with
-           | Some _ -> mk l (instantiate_builtin_ty s) (EBuiltin s)
-           | None -> unbound_err ctx l s)))
+          (match List.assoc_opt s !(ctx.orefes) with
+           | Some modpath -> resolve_ocaml_value ctx l s modpath s
+           | None ->
+             (match Hashtbl.find_opt builtin_table s with
+              | Some _ -> mk l (instantiate_builtin_ty s) (EBuiltin s)
+              | None -> unbound_err ctx l s))))
 
 and unbound_err ctx l s =
   let cand =
@@ -1891,6 +1956,157 @@ and infer_fn_form ?(hints = []) ctx l f : expr option =
     Some (infer_fn ~hints ctx l (Some n) ps body)
   | _ -> None
 
+(* resolve `n` inside OCaml module `modpath` through its cmi signature.
+   The emitted EGlobal carries the real compilation unit (Eio__Fiber), so
+   the emitter writes Unit.name without knowing package structure. *)
+and resolve_ocaml_value _ctx l s modpath n : expr =
+  let open Ocaml_sig in
+  let try_name nm =
+    match lookup modpath nm with
+    | Some r -> Some (nm, r)
+    | None -> None
+    | exception Unsupported t ->
+      Err.err l "E102"
+        (Printf.sprintf "ocaml.%s.%s: type not expressible in lg (%s)" modpath n t)
+        []
+  in
+  (match
+     match try_name (munge n) with
+     | Some _ as r -> r
+     | None ->
+       (match try_name n with
+        | Some _ as r -> r
+        | None ->
+          (match try_name (String.capitalize_ascii n) with
+           | Some _ as r -> r
+           | None -> try_name (String.capitalize_ascii (munge n))))
+   with
+   | Some (oname, (ps, ls, rt, is_ctor)) ->
+     let unit =
+       match Hashtbl.find_opt unit_paths modpath with
+       | Some u -> u
+       | None -> modpath
+     in
+     let ty = match ps with [] -> rt | _ -> TFun (ps, rt) in
+     Hashtbl.replace ocaml_fns (unit ^ "." ^ oname) (ps, ls, rt, is_ctor);
+     (match is_ctor with
+      | true -> Hashtbl.replace ocaml_ctors (unit ^ "/" ^ oname) (List.length ps)
+      | false -> ());
+     mk l ty (EGlobal (unit, oname, s))
+   | None ->
+     (match signature_of modpath with
+      | Some _ ->
+        Err.err l "E102" (Printf.sprintf "ocaml.%s.%s: not found" modpath n) []
+      | None ->
+        Err.err l "E102"
+          (Printf.sprintf
+             "ocaml.%s: module not found — check the module path or require its package first ([ocaml.pkg/<name>])"
+             modpath)
+          []))
+
+(* `(m/f pos... :lbl v ...)` against an ocaml.* alias: positional args
+   bind the signature's unlabelled params in order; keywords find their
+   labelled/optional param (required labels must all be supplied, optional
+   ones may be omitted — partial application over remaining positional
+   params yields a plain TFun). Constructors go out as plain ECall. *)
+and infer_ocaml_call ctx l s ce ps ls rt is_ctor args =
+  let open Ocaml_sig in
+  let rec classify pos labs = function
+    | Atom (kl, Keyword k) :: vf :: rest -> classify pos ((k, kl, vf) :: labs) rest
+    | Atom (kl, Keyword _) :: [] -> type_error kl "label keyword needs a value"
+    | f :: rest -> classify (f :: pos) labs rest
+    | [] -> (List.rev pos, List.rev labs)
+  in
+  let pos_fs, lbl_fs = classify [] [] args in
+  if is_ctor && lbl_fs <> [] then
+    type_error l (Printf.sprintf "ocaml.%s: constructor fields are positional only" s);
+  let combined = List.combine ps ls in
+  let ono_params =
+    List.filter_map (fun (t, lb) -> match lb with ONo -> Some t | _ -> None) combined
+  in
+  (* `(m/f)` over a `unit -> ...` signature applies the () argument *)
+  let synth_unit =
+    match pos_fs, ono_params with
+    | [], t :: _ -> (match repr t with TUnit -> true | _ -> false)
+    | _ -> false
+  in
+  let npos = List.length pos_fs + (if synth_unit then 1 else 0) in
+  if List.length pos_fs > List.length ono_params then
+    type_error l
+      (Printf.sprintf "ocaml.%s: too many positional arguments (expects %d)"
+         s (List.length ono_params));
+  let pos_args =
+    List.mapi (fun i f -> (List.nth ono_params i, f)) pos_fs
+    @ (if synth_unit then [ (List.hd ono_params, Atom (l, Nil)) ] else [])
+  in
+  let pos_exprs =
+    List.map
+      (fun (pty, f) ->
+        let e = infer_expr ctx f in
+        unify e.loc pty e.ety;
+        (pty, e))
+      pos_args
+  in
+  let seen_lbl = Hashtbl.create 5 in
+  let lbl_exprs =
+    List.map
+      (fun (k, kl, vf) ->
+        if Hashtbl.mem seen_lbl k then
+          type_error kl (Printf.sprintf "duplicate label :%s" k);
+        Hashtbl.replace seen_lbl k ();
+        let rec find = function
+          | [] -> None
+          | (t, OLbl n) :: _ when n = k -> Some (t, false)
+          | (t, OOpt n) :: _ when n = k -> Some (t, true)
+          | _ :: tl -> find tl
+        in
+        (match find combined with
+         | None ->
+           let avail =
+             List.filter_map
+               (fun (_, lb) -> match lb with OLbl n | OOpt n -> Some (":" ^ n) | ONo -> None)
+               combined
+           in
+           type_error kl
+             (Printf.sprintf "ocaml.%s: unknown label :%s%s" s k
+                (match avail with [] -> "" | _ -> " — have " ^ String.concat ", " avail))
+         | Some (pty, is_opt) ->
+           let e = infer_expr ctx vf in
+           unify e.loc pty e.ety;
+           if is_opt then Ast.OOpt (k, pty, e) else Ast.OLbl (k, pty, e)))
+      lbl_fs
+  in
+  (* every required ~lbl must be supplied — a partial over an unsupplied
+     labelled param is not expressible *)
+  let missing =
+    List.filter_map
+      (fun (_, lb) ->
+        match lb with
+        | OLbl n -> if Hashtbl.mem seen_lbl n then None else Some (":" ^ n)
+        | _ -> None)
+      combined
+  in
+  (match missing with
+   | [] -> ()
+   | _ ->
+     type_error l
+       (Printf.sprintf "ocaml.%s: missing required labeled argument(s) %s"
+          s (String.concat ", " missing)));
+  (match is_ctor with
+   | true ->
+     if npos <> List.length ps then
+       type_error l
+         (Printf.sprintf "ocaml.%s: constructor takes %d field(s), got %d"
+            s (List.length ps) npos);
+     mk l rt (ECall (ce, List.map snd pos_exprs))
+   | false ->
+     let remaining =
+       List.filteri (fun i _ -> i >= npos) ono_params
+     in
+     let result_ty = match remaining with [] -> rt | _ -> TFun (remaining, rt) in
+     let oargs = List.map (fun (pty, e) -> Ast.OPos (pty, e)) pos_exprs @ lbl_exprs in
+     mk l result_ty (EOCamlCall (ce, oargs)))
+
 and infer_app_no_macro ctx l s args =
   (* multi-arity dispatch: (f x y) where `f` was defined with arity 2
      resolves to the `f__a2` global. *)
@@ -1913,6 +2129,14 @@ and infer_app_no_macro ctx l s args =
     match target with Some s2 -> s2 | None -> s
   in
   let ce = infer_symbol ctx l s in
+  (match ce.desc with
+   | EGlobal (m, n, _) ->
+     (match Hashtbl.find_opt ocaml_fns (m ^ "." ^ n) with
+      | Some (ps, ls, rt, is_ctor) -> infer_ocaml_call ctx l s ce ps ls rt is_ctor args
+      | None -> infer_lg_call ctx l s ce args)
+   | _ -> infer_lg_call ctx l s ce args)
+
+and infer_lg_call ctx l s ce args =
   (* higher-order call convention: when the callee is an `(fn ...)`
      literal, infer the collection argument FIRST and pre-bind the fn's
      parameters to its element type — otherwise inference of the fn

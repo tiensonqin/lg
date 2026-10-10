@@ -113,6 +113,7 @@ let () =
     (try
        if !backend = "oxcaml" then Lgc.Emit.oxcaml := true;
        if !backend = "melange" then Lgc.Emit.melange := true;
+       Lgc.Ocaml_sig.backend := !backend;
        let target = if !backend = "melange" then Lgc.Reader.TJs else Lgc.Reader.TNative in
        (match !cmd with
         | Some "fmt" ->
@@ -254,9 +255,16 @@ let () =
                  Printf.eprintf "lg: warning: ocamlfind is not an OxCaml toolchain — `local_`/`stack_` annotations will not compile (run inside `eval $(opam env --switch=oxcaml)`)\n%!"
              end;
              let pkgs =
-               if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
-                 "clj-core,rrbvec,unix,str,ctypes.foreign"
-               else "clj-core,rrbvec,unix,str"
+               let base =
+                 if List.exists (fun (m : Lgc.Ast.modl) -> m.uses_ctypes) mods then
+                   "clj-core,rrbvec,unix,str,ctypes.foreign"
+                 else "clj-core,rrbvec,unix,str"
+               in
+               (* [ocaml.pkg/name] requires append their ocamlfind
+                  packages to the per-unit compile (-I dirs) and the link *)
+               match !(Lgc.Ocaml_sig.packages) with
+               | [] -> base
+               | ps -> base ^ "," ^ String.concat "," (List.sort_uniq String.compare ps)
              in
              let extra = try Sys.getenv "LG_EXTRA_LINK" with Not_found -> "" in
              (* incremental compile: one OCaml unit per lg module under

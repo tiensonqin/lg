@@ -89,6 +89,8 @@ let expr_types m : (int * int, string) Hashtbl.t =
     match e.Ast.desc with
     | Ast.EIf (a, b, c) -> walk a; walk b; walk c
     | Ast.ECall (f, xs) -> walk f; List.iter walk xs
+    | Ast.EOCamlCall (f, oas) ->
+      walk f; List.iter (fun oa -> walk (Ast.oarg_expr oa)) oas
     | Ast.ELet (bs, x) -> List.iter (fun (_, i) -> walk i) bs; walk x
     | Ast.EFun fn -> walk fn.Ast.body
     | Ast.EDo xs | Ast.ETuple xs | Ast.EVecLit xs | Ast.ESetLit xs | Ast.EListLit xs -> List.iter walk xs

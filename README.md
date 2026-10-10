@@ -184,6 +184,25 @@ unresolved), E2xx reader.
   `(extern-type h)` declares an opaque handle type. Bindings are
   first-class typed values that cross modules and `.lgi` exports.
   `any` never crosses the boundary. See `docs/ffi.md`.
+- **OCaml interop (`ocaml.*` requires, native/oxcaml only).** Require any
+  OCaml module or findlib package and call its values directly, with
+  labeled/optional arguments mapped onto trailing `:kw v` pairs:
+
+  ```clojure
+  (ns app (:require [ocaml.String :as str]
+                    [ocaml.Unix :as unix]
+                    [ocaml.String :refer [uppercase_ascii]]
+                    [ocaml.pkg/eio]))     ; package only — adds eio to -linkpkg
+
+  (str/starts_with "hello" :prefix "he") ; → String.starts_with ~prefix:"he"
+  (unix/ADDR_UNIX "/tmp/x")              ; constructors qualify too
+  ```
+
+  Signatures are read from `.cmi` files (wrapped stdlib units, findlib
+  package dirs, and dune-wrapped `pkg__Mod` units all resolve). Types that
+  lg cannot express — abstract types, objects, records — fail at compile
+  time with `type not expressible in lg`. Unknown package, value, or label
+  is a plain compile error listing what is available.
 
 ## Pipeline
 

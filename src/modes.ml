@@ -25,6 +25,8 @@ let rec occurs_anywhere p e =
   | ELocal b -> b.bid = p.bid
   | EFun fn -> occurs_anywhere p fn.body
   | ECall (c, args) -> occurs_anywhere p c || List.exists (occurs_anywhere p) args
+  | EOCamlCall (c, oas) ->
+    occurs_anywhere p c || List.exists (fun oa -> occurs_anywhere p (oarg_expr oa)) oas
   | EIf (c, t, x) -> occurs_anywhere p c || occurs_anywhere p t || occurs_anywhere p x
   | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.exists (occurs_anywhere p) es
   | EMapLit kes -> List.exists (fun (k, v) -> occurs_anywhere p k || occurs_anywhere p v) kes
@@ -58,6 +60,8 @@ let is_escaping_use b es : bool =
     | ELocal b' when b'.bid = b.bid -> if in_closure then found := true
     | EFun fn -> if fn.fname <> Some b.bname then List.iter (go true) [ fn.body ]
     | ECall (ce, args) -> go false ce; List.iter (go false) args
+    | EOCamlCall (ce, oas) ->
+      go false ce; List.iter (fun oa -> go false (oarg_expr oa)) oas
     | EIf (c, t, x) -> go false c; go in_closure t; go in_closure x
     | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.iter (go in_closure) es
     | EMapLit kes -> List.iter (fun (k, v) -> go in_closure k; go in_closure v) kes
@@ -311,6 +315,10 @@ let rec local_uses_ok (p : binder) ~(self_b : binder option) ~(self_name : strin
       | ECall (ce, args) ->
         if occurs_anywhere p ce then bad := true
         else List.iteri (fun i a -> go (arg_ok ce i a e) a) args
+      | EOCamlCall (ce, oas) ->
+        (* no borrow metadata on an OCaml signature — args escape *)
+        if occurs_anywhere p ce then bad := true
+        else List.iter (fun oa -> go false (oarg_expr oa)) oas
       | EIf (c, t, x) ->
         (* the condition only reads truthiness: empty-checks borrow on
            collections, prim comparisons are fine on scalars — but
@@ -393,6 +401,11 @@ let rec analyze_expr ~(region_ret : bool) (e : expr) : unit =
   e.emode <- (if region_ret then Shared else Local);
   (match e.desc with
    | EFun fn -> analyze_fn fn
+   | EOCamlCall (ce, oas) ->
+     (* OCaml library call: no borrow/local-param info — every argument
+        escapes into the callee *)
+     analyze_expr ~region_ret:true ce;
+     List.iter (fun oa -> analyze_expr ~region_ret:true (oarg_expr oa)) oas
    | ECall (ce, args) ->
      let escs = arg_escapes ce in
      let conv_bad i =
@@ -528,6 +541,9 @@ let rec collect_value_refs e =
     (* the callee itself is a callee-position use; args are value uses *)
     (match ce.desc with EFun fn -> collect_value_refs fn.body | _ -> ());
     List.iter collect_value_refs args
+  | EOCamlCall (ce, oas) ->
+    (match ce.desc with EFun fn -> collect_value_refs fn.body | _ -> ());
+    List.iter (fun oa -> collect_value_refs (oarg_expr oa)) oas
   | EIf (c, t, x) -> collect_value_refs c; collect_value_refs t; collect_value_refs x
   | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es ->
     List.iter collect_value_refs es
@@ -607,6 +623,8 @@ let count_modes m =
     (match e.desc with
      | EFun fn -> walk fn.body
      | ECall (c, args) -> walk c; List.iter walk args
+     | EOCamlCall (c, oas) ->
+       walk c; List.iter (fun oa -> walk (oarg_expr oa)) oas
      | EIf (c, t, x) -> walk c; walk t; walk x
      | EDo es | EVecLit es | EListLit es | ESetLit es | ETuple es -> List.iter walk es
      | EMapLit kes -> List.iter (fun (k, v) -> walk k; walk v) kes

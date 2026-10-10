@@ -1,0 +1,2 @@
+(ns f1 (:require [ocaml.pkg/nonexistent-pkg-xyz]))
+(println 1)

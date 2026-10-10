@@ -30,7 +30,11 @@ let scan_ns (forms : form list) : string option * string list =
             match spec with
             | Vector (_, els) when Array.length els >= 1 ->
               (match els.(0) with
-               | Atom (_, Symbol rn) -> reqs := rn :: !reqs
+               | Atom (_, Symbol rn) ->
+                 (* ocaml.* specs name OCaml libraries, not lg modules —
+                    no dependency edge *)
+                 if String.length rn < 6 || String.sub rn 0 6 <> "ocaml." then
+                   reqs := rn :: !reqs
                | _ -> raise (Compile_error (l, "unsupported :require spec")))
             | _ -> raise (Compile_error (l, "unsupported :require spec")))
           specs
@@ -45,7 +49,11 @@ let scan_ns (forms : form list) : string option * string list =
                   match spec with
                   | Vector (_, els) when Array.length els >= 1 ->
                     (match els.(0) with
-                     | Atom (_, Symbol rn) -> reqs := rn :: !reqs
+                     | Atom (_, Symbol rn) ->
+                       (* ocaml.* specs name OCaml libraries, not lg
+                          modules — no dependency edge *)
+                       if String.length rn < 6 || String.sub rn 0 6 <> "ocaml." then
+                         reqs := rn :: !reqs
                      | _ -> raise (Compile_error (l, "unsupported :require spec")))
                   | _ -> raise (Compile_error (l, "unsupported :require spec")))
                 specs

@@ -64,6 +64,17 @@ and edesc =
   | EDynMap of expr * binder * expr * expr (* match on `any`: DMap b -> t | _ -> e *)
   | EVariant of expr * string * binder list * expr * expr
     (* match se with Mod.Ctor (b..) -> t | _ -> e *)
+  | EOCamlCall of expr * oarg list
+    (* direct OCaml library call: positional args plus `~lbl:e` / `~opt:e`
+       (optional params supplied by value emit as ~opt:v) in signature
+       order grouped positional-first *)
+
+(* one argument of an ocaml.* call, with the callee's parameter type for
+   dyn-boundary conversion *)
+and oarg =
+  | OPos of ty * expr
+  | OLbl of string * ty * expr
+  | OOpt of string * ty * expr
 
 let binder_id = ref 0
 let fresh_binder name = incr binder_id; { bname = name; bid = !binder_id; bty = TUnit; bmode = Shared; bused = 0; blit = false }
@@ -74,6 +85,8 @@ let is_lit e =
   | _ -> false
 
 let mk loc ty desc = { loc; ety = ty; emode = Shared; desc }
+
+let oarg_expr = function OPos (_, e) | OLbl (_, _, e) | OOpt (_, _, e) -> e
 
 (* A top-level definition in a module. *)
 type topdef = {
