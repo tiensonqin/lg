@@ -1128,7 +1128,7 @@ and infer_fn ?(hints = []) ctx l name params body : expr =
   ctx.env <- saved; ctx.implicits <- saved_imp;
   let body_e =
     match body_es with
-    | [] -> mk l TAny ENil
+    | [] -> mk l TUnit ENil
     | [ e ] -> e
     | es -> mk l (last es).ety (EDo es)
   in
@@ -1153,7 +1153,7 @@ and infer_expr ctx f : expr =
      | Char c -> mk l TChar (EChar c)
      | Str s -> mk l TString (EStr s)
      | Keyword k -> mk l TKeyword (EKeyword k)
-     | Nil -> mk l TAny ENil
+     | Nil -> mk l TUnit ENil
      | Symbol "None" -> mk l (TOption (fresh_var ())) (EOpt None)
      | Symbol s -> infer_symbol ctx l s)
   | Vector (l, items) ->

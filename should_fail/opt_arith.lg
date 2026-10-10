@@ -1,0 +1,5 @@
+;; (+ x 1) where x : (option int) must be a static type error —
+;; previously nil was `any`, so the option-join never fired and the
+;; dyn unwrap failed at runtime.
+(let [x (cond false 9 :else nil)]
+  (println (+ x 1)))

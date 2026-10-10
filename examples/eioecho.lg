@@ -41,10 +41,9 @@
                               (std/exit 0))))
                         :sw s)
             (net/accept_fork sk :sw s :on_error (fn [e] (println "conn error"))
-              (fn [conn]
-                (fn [_addr]
-                  (let [b (cs/create 64)
-                        nr (flow/single_read conn b)
-                        line (cs/to_string (cs/sub b 0 nr))]
-                    (println (str "srv got: " line))
-                    (flow/copy_string (str "echo: " line) conn)))))))))))
+              (fn [conn _addr]
+                (let [b (cs/create 64)
+                      nr (flow/single_read conn b)
+                      line (cs/to_string (cs/sub b 0 nr))]
+                  (println (str "srv got: " line))
+                  (flow/copy_string (str "echo: " line) conn))))))))))

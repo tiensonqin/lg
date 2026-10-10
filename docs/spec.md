@@ -177,7 +177,11 @@ convert args/results against the callee's stored scheme.
 `unit` against a concrete `t` widens to `(option t)` with
 `Some`/`None` emitted per arm; `any` wins and non-`any` arms are
 `EBox`-boxed to `dyn`; equal types pass through. `(if c x)` is
-`(option <x>)`.
+`(option <x>)`. The `nil` literal has type `unit` (not `any`), so
+`(let [x (cond … :else nil)])` really does produce an option the
+type checker tracks — `(+ x 1)` on it is a static E101, and a
+unit value in a condition reads as falsy (still evaluated for
+order).
 
 **`match` patterns.** Literal atoms (int/float/bool/char/string/
 keyword/`nil`), `_`/symbol (bind), `[p…]` vectors (count-guard +

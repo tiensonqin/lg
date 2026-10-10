@@ -8,4 +8,9 @@
 (println (str (case 2 1 "one" 2 "two" "other") (case 9 1 "one" "other")))
 (do (println "do1") (println "do2"))
 (println (str (do 1 2 3)))
+;; a nil else-branch joins the concrete branch into (option t)
+(let [x (cond false 9 :else nil)]
+  (println (if (none? x) "none" "some")))
+(let [y (if true 7 nil)]
+  (println (match y nil "none" v (str "some" (str v)))))
 (exit 0)

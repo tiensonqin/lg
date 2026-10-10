@@ -402,7 +402,7 @@ let sb_freeze b = Clj_core.Set.of_list (Hashtbl.fold (fun k _ acc -> k :: acc) b
 
 end
 module Dynmatch = struct
-let go = (let rec go__2 = (fun n__1 -> (Lg_rt.as_unit (if ((n__1 <= 0) = true) then (Lg_rt.DUnit) else (if ((n__1 <= 0) = false) then (ignore ((if (n__1 = 1) then (print_endline ((Lg_rt.str_string "one"))) else (go__2 (n__1 - 1)))); Lg_rt.DUnit) else (Lg_rt.no_match ()))))) in go__2)
+let go = (let rec go__2 = (fun n__1 -> (if ((n__1 <= 0) = true) then () else (if ((n__1 <= 0) = false) then (if (n__1 = 1) then (print_endline ((Lg_rt.str_string "one"))) else (go__2 (n__1 - 1))) else (Lg_rt.no_match ())))) in go__2)
 let () = (ignore ((go 3)))
 let () = (ignore ((print_endline ((Lg_rt.str_string "done")))))
 let go2 = (let rec go2__4 = (fun n__3 -> (if (n__3 = 0) then "zero" else (go2__4 (n__3 - 1)))) in go2__4)

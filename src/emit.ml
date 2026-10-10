@@ -234,11 +234,13 @@ let rec emit_expr ?(local = false) (b : Buffer.t) (e : expr) : unit =
     (match repr c.ety with
      | TAny -> buf_add b "(if (Lg_rt.dyn_truthy "
      | TBool -> buf_add b "(if "
+     | TUnit -> buf_add b "(if (let __ = "
      | _ -> buf_add b "(if (let __ = ");
     emit_expr b c;
     (match repr c.ety with
      | TAny -> buf_add b ")"
      | TBool -> ()
+     | TUnit -> buf_add b " in false)"
      | _ -> buf_add b " in true)");
     buf_add b " then ";
     buf_add b (conv e.ety t.ety (arg_str ~local:(local && conv e.ety t.ety "x" = "x") t));
