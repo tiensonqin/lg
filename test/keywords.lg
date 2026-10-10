@@ -1,0 +1,10 @@
+;; OCaml reserved words as lg identifiers: the emitter munges them with a
+;; trailing `_` so generated code always parses. Covers def names, variant
+;; type names, ctor names, locals, and fn params.
+(defvariant val (type [x int]) (match [s string]))
+(def val (type 7))
+(defn in [^val v] (match v (type x) x _ 0))
+(println (in val))
+(let [let 42] (println let))
+(defn mod [^int match] (+ match 1))
+(println (mod 1))

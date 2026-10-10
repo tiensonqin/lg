@@ -67,6 +67,18 @@ let lookup env n = List.assoc_opt n env
 
 (* ---------- name mangling ---------- *)
 
+(* OCaml reserved words — a munged name matching one of these gets a
+   trailing `_` so emitted identifiers always parse *)
+let ocaml_keywords =
+  [ "and"; "as"; "assert"; "asr"; "begin"; "class"; "constraint"; "do";
+    "done"; "downto"; "else"; "end"; "exception"; "external"; "false";
+    "for"; "fun"; "function"; "functor"; "if"; "in"; "include"; "inherit";
+    "initializer"; "land"; "lazy"; "let"; "lor"; "lsl"; "lsr"; "lxor";
+    "match"; "method"; "mod"; "module"; "mutable"; "new"; "nonrec";
+    "object"; "of"; "open"; "or"; "private"; "rec"; "sig"; "struct";
+    "then"; "to"; "true"; "try"; "type"; "val"; "virtual"; "when";
+    "while"; "with" ]
+
 let munge name =
   let b = Buffer.create (String.length name) in
   String.iter
@@ -87,11 +99,16 @@ let munge name =
   (* OCaml value identifiers can't start with a capital (ctor/module
      namespace) — lowercase a leading capital *)
   let s = Buffer.contents b in
-  if String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z' then (
-    let bs = Bytes.of_string s in
-    Bytes.set bs 0 (Char.lowercase_ascii s.[0]);
-    Bytes.to_string bs)
-  else s
+  let s =
+    if String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z' then (
+      let bs = Bytes.of_string s in
+      Bytes.set bs 0 (Char.lowercase_ascii s.[0]);
+      Bytes.to_string bs)
+    else s
+  in
+  (* OCaml reserved words can't appear as identifiers — a user-chosen
+     name like `val`/`type`/`module` would emit unparseable OCaml *)
+  if List.mem s ocaml_keywords then s ^ "_" else s
 
 let ocaml_mod_of_ns ns =
   String.split_on_char '.' ns
