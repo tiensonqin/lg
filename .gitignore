@@ -12,3 +12,4 @@ _build/
 dist/
 .lg-obj/
 *.assets/
+examples/markdown.html

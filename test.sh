@@ -112,6 +112,17 @@ else
   echo "FAIL(example) wfreq"; fail=1
 fi
 
+# markdown-lite dogfood: render the sample doc, diff the html golden
+if "$LG" build examples/markdown.lg -I lib -I examples -o .test-bin/ex_markdown >/dev/null 2>&1 \
+   && .test-bin/ex_markdown examples/markdown.md >/dev/null 2>&1 \
+   && diff -u test/markdown.golden.html examples/markdown.html > /dev/null 2>&1; then
+  echo "ok example-markdown"
+else
+  echo "FAIL(example) markdown"
+  diff -u test/markdown.golden.html examples/markdown.html | head -20
+  fail=1
+fi
+
 # compat corpus: frozen v1 programs — add-only, must stay green forever
 for src in test/compat/*.lg; do
   [ -e "$src" ] || continue

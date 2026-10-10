@@ -13,10 +13,10 @@
 ;; ---------- line classification ----------
 
 (defn heading-level [line]
-  (let [m (re-matches "^#{1,6}" line)]
-    (match m
-      (Some hashes) (count hashes)
-      None 0)))
+  ;; re-matches is a full-string match; "#" followed by "#*" then space
+  (match (re-find "^#+ " line)
+    (Some m) (- (count m) 1)
+    None 0))
 
 (defn bullet? [line]
   (or (starts-with? line "- ") (starts-with? line "* ")))
@@ -28,6 +28,9 @@
 
 ;; walk the lines once; `acc` is a reversed list of blocks, `buf` the
 ;; reversed lines of the open paragraph/list/code block.
+;; acc is threaded through self-calls; declare its type so it stays a
+;; concrete (list block) instead of widening to dyn.
+(declare ^(fn [(list block) string (list string)] (list block)) flush)
 (defn flush [acc kind buf]
   (match kind
     "para" (conj acc (para (join " " (reverse buf))))
@@ -43,34 +46,34 @@
                         more (rest ls)]
                     (if (fence? line)
                       (if (= kind "code")
-                        (self more (flush acc kind buf) "none" [])
-                        (self more (flush acc kind buf) "code" []))
+                        (self more (flush acc kind buf) "none" (list))
+                        (self more (flush acc kind buf) "code" (list)))
                       (if (= kind "code")
                         (self more acc "code" (conj buf line))
                         (let [lvl (heading-level line)]
                           (cond
-                            (blank? line) (self more (flush acc kind buf) "none" [])
+                            (blank? line) (self more (flush acc kind buf) "none" (list))
                             (> lvl 0) (self more (conj (flush acc kind buf)
                                                      (heading lvl (trim (subs line lvl)))) "none" [])
                             (bullet? line) (self more acc "list" (conj buf (trim (subs line 2))))
                             (= kind "para") (self more acc "para" (conj buf line))
-                            :else (self more (flush acc kind buf) "para" [line]))))))))]
-    (recur lines [] "none" [])))
+                            :else (self more (flush acc kind buf) "para" (list line)))))))))]
+    (recur lines (list) "none" (list))))
 
 ;; ---------- inline rendering ----------
 
 (defn escape-html [s]
-  (re-replace ">" "&gt;"
-    (re-replace "<" "&lt;"
-      (re-replace "&" "&amp;" s))))
+  (re-replace ">" (re-replace "<" (re-replace "&" s "&amp;") "&lt;") "&gt;"))
 
-;; order matters: bold before em so `**` is consumed first
+;; nested calls apply inside-out: ** must be consumed before * sees it
 (defn inline [s]
-  (re-replace "\\[([^]]+)\\]\\(([^)]+)\\)" "<a href=\"\\2\">\\1</a>"
-    (re-replace "`([^`]+)`" "<code>\\1</code>"
-      (re-replace "\\*\\*([^*]+)\\*\\*" "<strong>\\1</strong>"
-        (re-replace "\\*([^*]+)\\*" "<em>\\1</em>"
-          (escape-html s))))))
+  (re-replace "\\[\\([^]]+\\)\\](\\([^)]+\\))"
+    (re-replace "`\\([^`]+\\)`"
+      (re-replace "\\*\\([^*]+\\)\\*"
+        (re-replace "\\*\\*\\([^*]+\\)\\*\\*" (escape-html s) "<strong>\\1</strong>")
+        "<em>\\1</em>")
+      "<code>\\1</code>")
+    "<a href=\"\\2\">\\1</a>"))
 
 ;; ---------- block rendering ----------
 
@@ -88,10 +91,10 @@
 
 (defn render-md [src]
   (str "<!DOCTYPE html>\n<html><body>\n"
-       (join "\n" (map render (group (split "\n" src))))
+       (join "\n" (map render (group (split src "\n"))))
        "\n</body></html>"))
 
 (let [path (match (first (argv)) (Some p) p None "examples/markdown.md")]
-  (spit (str (re-replace "\\.md$" "" path) ".html")
+  (spit (str (re-replace "\\.md$" path "") ".html")
         (render-md (slurp path)))
   (println (str "markdown: rendered " path)))

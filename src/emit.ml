@@ -389,14 +389,24 @@ and emit_call b (e : expr) ce args =
     (* variant constructor: a direct allocation site — stack_ when the
        result need only be local *)
     let call_local = call_local && k > 0 in
+    (* ctor fields take the declared field type — a (seq t) argument
+       into a (list t) field conv-realizes, a concrete arg into an
+       'a field boxes just like fn params do *)
+    let ftys =
+      match repr ce.ety with TFun (ts, _) -> ts | _ -> []
+    in
+    let carg i a =
+      let p = if i < List.length ftys then List.nth ftys i else TAny in
+      conv p a.ety (arg_str ~local:(arg_local a) a)
+    in
     if call_local then buf_add b "(stack_ ";
     buf_add b
       (match args with
        | [] -> "(" ^ ctor_qual q ^ ")"
-       | [ a ] -> "(" ^ ctor_qual q ^ " " ^ arg_str a ^ ")"
+       | [ a ] -> "(" ^ ctor_qual q ^ " " ^ carg 0 a ^ ")"
        | _ ->
          "(" ^ ctor_qual q ^ " (" ^
-         String.concat ", " (List.map (fun a -> arg_str ~local:(arg_local a) a) args) ^ "))");
+         String.concat ", " (List.mapi carg args) ^ "))");
     if call_local then buf_add b ")"
   | _ ->
     (* box args into dyn when the callee's formal param is `any`. For an
@@ -449,7 +459,13 @@ and emit_call b (e : expr) ce args =
                 let p = if i < List.length pts then List.nth pts i else TAny in
                 buf_add b (conv p a.ety (arg_str ~local:false a)))
             args
-        | None -> List.iter (fun a -> buf_add b " "; buf_add b (arg_str a)) args);
+        | None ->
+          List.iteri
+            (fun i a ->
+              buf_add b " ";
+              let p = if i < List.length pts then List.nth pts i else TAny in
+              buf_add b (conv p a.ety (arg_str ~local:false a)))
+            args);
        buf_add b ")"
      | _ ->
        let pts = match repr ce.ety with TFun (ts, _) -> ts | _ -> [] in
@@ -550,6 +566,15 @@ and box_deep ety es =
   | _ -> "(Lg_rt." ^ dyn_ctor ety ^ " " ^ es ^ ")"
 
 and box_of e = box_deep e.ety (arg_str e)
+
+(* a seq-valued builtin whose declared result is a concrete collection
+   is realized back to that collection kind; seq/any results stay lazy *)
+and realize ret s =
+  match repr ret with
+  | TList _ -> "(Clj_core.Seq.to_list " ^ s ^ ")"
+  | TVec _ -> "(Clj_core.Vec.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
+  | TSet _ -> "(Clj_core.Set.of_list (Clj_core.Seq.to_list " ^ s ^ "))"
+  | _ -> s
 
 (* box a user defvariant value into dyn: per-ctor match -> DVariant.
    Poly ('a) fields box as a literal marker — an OCaml 'a is not a dyn. *)
@@ -1726,9 +1751,9 @@ and emit_builtin_call ?(call_local = false) b ret name args =
               | EBuiltin ("println" | "print"), (TSeq el | TVec el | TList el | TSet el) -> "(fun x -> print_endline (" ^ gen_printer el ^ " x))"
               | EBuiltin ("str" | "pr-str"), (TSeq el | TVec el | TList el | TSet el) -> "(fun x -> (" ^ gen_printer el ^ " x))"
               | _ -> a 0) in
-     buf_add b ("(" ^ sfn "map" ^ " " ^ f ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "filter" -> buf_add b ("(" ^ sfn "filter" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "remove" -> buf_add b ("(" ^ sfn "remove" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+     buf_add b (realize ret ("(" ^ sfn "map" ^ " " ^ f ^ " " ^ as_seq (List.nth args 1) ^ ")"))
+   | "filter" -> buf_add b (realize ret ("(" ^ sfn "filter" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
+   | "remove" -> buf_add b (realize ret ("(" ^ sfn "remove" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
    | "reduce" ->
      (* bind the collection once: emitting `a 2` both as a match scrutinee
         and inside the fold call would duplicate its effects *)
@@ -1845,8 +1870,8 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | "neg?" -> buf_add b ("(" ^ unb ^ " < 0)")
       | "even?" -> buf_add b ("(" ^ unb ^ " mod 2 = 0)")
       | _ -> buf_add b ("(" ^ unb ^ " mod 2 <> 0)"))
-   | "take" -> buf_add b ("(" ^ sfn "take" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "drop" -> buf_add b ("(" ^ sfn "drop" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "take" -> buf_add b (realize ret ("(" ^ sfn "take" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
+   | "drop" -> buf_add b (realize ret ("(" ^ sfn "drop" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
    | "take-while" -> buf_add b ("(" ^ sfn "take-while" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "drop-while" -> buf_add b ("(" ^ sfn "drop-while" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "range" ->
@@ -1863,11 +1888,11 @@ and emit_builtin_call ?(call_local = false) b ret name args =
      if List.length args = 1 then buf_add b ("(" ^ sfn "repeatedly" ^ " (fun () -> " ^ a 0 ^ " ())")
      else buf_add b ("(" ^ sfn "take" ^ " " ^ a 0 ^ " (" ^ sfn "repeatedly" ^ " (fun () -> " ^ a 1 ^ " ())))")
    | "cycle" -> buf_add b ("(" ^ sfn "cycle" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "interleave" -> buf_add b ("(" ^ sfn "interleave" ^ " " ^ as_seq (List.nth args 0) ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "interleave" -> buf_add b (realize ret ("(" ^ sfn "interleave" ^ " " ^ as_seq (List.nth args 0) ^ " " ^ as_seq (List.nth args 1) ^ ")"))
    | "map-indexed" -> buf_add b ("(" ^ sfn "map-indexed" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "keep" | "filter-map" -> buf_add b ("(" ^ sfn "filter-map" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "keep" | "filter-map" -> buf_add b (realize ret ("(" ^ sfn "filter-map" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
    | "take-nth" -> buf_add b ("(" ^ sfn "take-nth" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "partition" -> buf_add b ("(" ^ sfn "partition" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
+   | "partition" -> buf_add b (realize ret ("(" ^ sfn "partition" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
    | "partition-all" -> buf_add b ("(" ^ sfn "partition-all" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
    | "nthrest" -> buf_add b ("(" ^ sfn "nthrest" ^ " " ^ as_seq (List.nth args 0) ^ " " ^ a 1 ^ ")")
    | "drop-last" -> buf_add b ("(" ^ sfn "drop-last" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
@@ -1875,12 +1900,12 @@ and emit_builtin_call ?(call_local = false) b ret name args =
    | "split-at" -> buf_add b ("(let (x, y) = (Clj_core.Seq.split_at " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ") in (Clj_core.Vec.of_list [x; y]))")
    | "split-with" -> buf_add b ("(let (x, y) = (Clj_core.Seq.split_with " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ") in (Clj_core.Vec.of_list [x; y]))")
    | "reductions" -> buf_add b ("(" ^ sfn "reductions" ^ " " ^ a 0 ^ " " ^ a 1 ^ " " ^ as_seq (List.nth args 2) ^ ")")
-   | "dedupe" -> buf_add b ("(" ^ sfn "dedupe" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+   | "dedupe" -> buf_add b (realize ret ("(" ^ sfn "dedupe" ^ " " ^ as_seq (List.nth args 0) ^ ")"))
    | "not-empty" -> buf_add b ("(let s = " ^ as_seq (List.nth args 0) ^ " in if " ^ "Clj_core.Seq.is_empty" ^ " s then None else " ^ (if call_local then "(stack_ (Some s))" else "Some s") ^ ")")
    | "lazy-seq" -> buf_add b ("(" ^ sfn "lazy-seq" ^ " (fun () -> " ^ as_seq (List.nth args 0) ^ "))")
    | "doall" -> buf_add b (as_list (List.nth args 0))
    | "dorun" -> buf_add b ("(" ^ "Clj_core.Seq.iter" ^ " (fun _ -> ()) " ^ as_seq (List.nth args 0) ^ ")")
-   | "concat" -> buf_add b ("(" ^ sfn "concat" ^ " (Clj_core.Seq.of_list [" ^ String.concat "; " (List.map as_seq args) ^ "]))")
+   | "concat" -> buf_add b (realize ret ("(" ^ sfn "concat" ^ " (Clj_core.Seq.of_list [" ^ String.concat "; " (List.map as_seq args) ^ "]))"))
    | "apply" -> buf_add b (emit_apply args)
    | "atom" ->
      if is_any ret then buf_add b ("(Clj_core.Atom.atom " ^ box_of (List.nth args 0) ^ ")")
@@ -1978,13 +2003,13 @@ and emit_builtin_call ?(call_local = false) b ret name args =
           | _ -> "Clj_core.Seq.of_list")
        | _ -> "Clj_core.Seq.of_list"
      in
-     buf_add b ("(" ^ sfn "mapcat" ^ " (fun x -> " ^ coerce ^ " (" ^ a 0 ^ " x)) " ^ as_seq (List.nth args 1) ^ ")")
-   | "interpose" -> buf_add b ("(" ^ sfn "interpose" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")")
-   | "reverse" -> buf_add b ("(" ^ "Clj_core.Seq.reverse" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "distinct" -> buf_add b ("(" ^ sfn "distinct" ^ " " ^ as_seq (List.nth args 0) ^ ")")
+     buf_add b (realize ret ("(" ^ sfn "mapcat" ^ " (fun x -> " ^ coerce ^ " (" ^ a 0 ^ " x)) " ^ as_seq (List.nth args 1) ^ ")"))
+   | "interpose" -> buf_add b (realize ret ("(" ^ sfn "interpose" ^ " " ^ a 0 ^ " " ^ as_seq (List.nth args 1) ^ ")"))
+   | "reverse" -> buf_add b (realize ret ("(" ^ "Clj_core.Seq.reverse" ^ " " ^ as_seq (List.nth args 0) ^ ")"))
+   | "distinct" -> buf_add b (realize ret ("(" ^ sfn "distinct" ^ " " ^ as_seq (List.nth args 0) ^ ")"))
    | "second" -> buf_add b ("(" ^ "Clj_core.Seq.second" ^ " " ^ as_seq (List.nth args 0) ^ ")")
    | "last" -> buf_add b ("(" ^ "Clj_core.Seq.last" ^ " " ^ as_seq (List.nth args 0) ^ ")")
-   | "butlast" -> buf_add b ("(" ^ "Clj_core.Seq.drop_last" ^ " 1 " ^ as_seq (List.nth args 0) ^ ")")
+   | "butlast" -> buf_add b (realize ret ("(" ^ "Clj_core.Seq.drop_last" ^ " 1 " ^ as_seq (List.nth args 0) ^ ")"))
    | "min" ->
      buf_add b
        (if is_any (t 0) || is_any (t 1) then
