@@ -58,7 +58,7 @@ Dispatched in `infer_call` (src/infer.ml). `(a)` unless noted.
 | `if-let`, `when-let` | a | binds the payload of an `option`; `when-let` else is `nil` (unit) |
 | `quote` | a | heterogeneous quoted literals degrade to `any`, same as bracket literals. |
 | `(:k m)`, `(:k m d)` | a | keyword in call position = `get` |
-| `loop`/`recur`, `set!`, `throw`/`try` | c | **listed in design.md §1 but not implemented** — calls silently parse as applications and fail at symbol resolution. Cut from the v1 surface (§6) or implement. |
+| `loop`/`recur`, `set!`, `throw`/`try` | a | **absent by design** (design.md §1) — calls parse as applications and fail at symbol resolution (E102); that rejection is the frozen behavior. |
 
 #### 1.2.1 Binding/destructuring forms — `(a)`
 
@@ -85,7 +85,7 @@ to `{:kw pat}` form — spec.
 | bare top-level `(:require …)` | a | routed through `require_spec` + `scan_ns` — loads deps, registers aliases. |
 | `alias/f`, `full.ns/f` references | a | first `/` splits ns from name |
 | dep-first load order, transitive requires | a | |
-| all top-level defs public | a | until `.lgi` lands (v2 §2) — `.lgi` is additive, not breaking |
+| top-level defs public unless `.lgi`-unlisted | a | `.lgi` shipped (v2) — listed = exported, unlisted = private |
 | `:refer` / `:use` / `:import` | c | absent; adding is non-breaking |
 
 Open: ns `foo-bar` and `foo_bar` both munge to OCaml module `Foo_bar` —
@@ -93,8 +93,9 @@ collision, currently unhandled.
 
 ### 1.4 `^meta`
 
-`split_meta` (src/infer.ml) reads metadata. The traps below are verified:
-an unparseable annotation is **silently dropped** instead of erroring.
+`split_meta` (src/infer.ml) reads metadata. Malformed `^{:sig …}` forms
+and unknown `^{:key …}` keys are compile errors with carets — nothing is
+silently dropped.
 
 | Meta | Class | Notes |
 |---|---|---|
@@ -109,36 +110,27 @@ an unparseable annotation is **silently dropped** instead of erroring.
 
 ### 1.5 Builtins
 
-95 names are registered in `builtin_table` (src/infer.ml): 74 via `reg`
-calls plus two `List.iter` batches (the 12 numeric/comparison ops and
-`first next rest seq get nth conj range apply`). `is_special_builtin`
-has 59 entries; four of them — `vector`, `hash-map`, `hash-set`,
-`kw-get` — are *not* in `builtin_table`, so `(vector 1 2)` fails
-`unresolved symbol vector`. `kw-get` is internal (emitted by
-destructuring); `dyn-eq` and `no-match` are internal too and never
-user-visible — they stay unfrozen.
+127 `reg` calls register the builtin table (src/infer.ml) plus the
+numeric/comparison batches; `is_special_builtin` has 115 entries. Four
+specials — `vector`, `hash-map`, `hash-set`, `kw-get` — are *not* in
+`builtin_table`, so `(vector 1 2)` fails `unresolved symbol vector`.
+`kw-get` is internal (emitted by destructuring); `dyn-eq` and `no-match`
+are internal too and never user-visible — they stay unfrozen.
 
-Two systemic hazards cut across the table:
+Both systemic hazards are **resolved**:
 
-1. **Ill-typed emission on `any` operands.** `check` accepts, `build`
-   fails in OCaml. Verified: `(= x 3)` on `x : any` emits `dyn = int`;
-   `(not x)` on `any` emits `not dyn`; `<` etc. on `any` unbox `as_int`
-   only (`DFloat` → `invalid_arg` at runtime); `Some`/`None` match
-   patterns on an `any` scrutinee emit `match dyn with Some …`. Freeze
-   requires: each `any`-touching builtin either does a defined dyn
-   operation or is a static error — never ill-typed output.
-   `(int :a)`, `(name 5)`, `(float #{})` are the same class: the emit
-   fallthrough returns the arg unchanged while claiming `int`/`string`.
-   Fix: static error or explicit `failwith`, never identity.
-2. **Collection dispatch is per-call-site.** `map`/`first`/`count`/… pick
-   an implementation by the *static* type of the coll argument. Used as
-   a first-class value (`(map first vecs)`), builtins take the
-   `emit_builtin_value` fallback — which is list-shaped at best
-   (`first` as a value only matches OCaml lists) or
-   `failwith "builtin as value"` for ~55 names. Verified:
-   `(map first [[1 2] [3 4]])` checks OK, fails at build. Freeze
-   requires: per-builtin decision — generate a real dispatch closure or
-   statically reject non-call use.
+1. **`any` operands → defined dyn operations.** `(= x y)` on `any`
+   emits `Lg_rt.dyn_eq`; `not` routes through `dyn_truthy`; the ordering
+   ops `<` `<=` `>` `>=` on `any` use `dyn_cmp` (handles mixed
+   int/float, fails loudly on non-scalars); `int`/`float`/`name` on a
+   non-convertible *static* type is a compile error (E100), on `any` a
+   checked `as_*` unbox.
+2. **Builtins as first-class values.** 116 builtins emit real dispatch
+   closures (see `emit_builtin_value`): `(map first [[1 2] [3 4]])`
+   compiles and runs. Any other special builtin in value position is a
+   static error (E100 `cannot be used as a first-class value`) —
+   enforced by `check_builtin_values` in infer.ml, never a runtime
+   `failwith`.
 
 Per-builtin classification (`(a)` = frozen-now):
 
@@ -166,33 +158,35 @@ Per-builtin classification (`(a)` = frozen-now):
 - `comp juxt` (2-ary only), `partial` (n fixed + 1 trailing)
 - `empty? count` (all collection kinds + string)
 
-**(b) — needs one change before freeze (29 builtins):**
+**(b) — all resolved; the rows below record the landed semantics:**
 
-| Builtin(s) | Issue |
+| Builtin(s) | Frozen semantics |
 |---|---|
-| `=` `not=` | on `any` operand → ill-typed OCaml; also OCaml `=` on `dyn` collections compares internal RRB-tree shape, not logical content — needs a defined `dyn` equality (or static rejection). Also verify rigid-var args can't materialize as dyn (design.md §3). |
-| `not` | `any` operand → ill-typed OCaml |
-| `<` `<=` `>` `>=` | `any` operand assumed `as_int` — a `DFloat` fails at runtime; variadic form chains correctly but spec it |
-| `get` | 2-ary returns `option` on map (`Map.get`), vec (`Vec.get`), list (`List.nth_opt`), set; on `any`/het-key maps routes through dyn-nest — spec each kind's missing-key behavior |
-| `update` | `(update m k f)` **failwith on missing key** — verified emission `failwith "update: missing key"`. Clojure calls `f nil`. Decide: keep fail-fast (spec it), take a default arg, or return `option`. |
-| `take` `drop` | return declared as *same type as input* but on set/string emit a list — ill-typed OCaml. Fix type to `(list elem)` or restrict to vec/list. |
-| `seq` | returns `TList`, never `option` — empty is `[]` not `nil`, so `(if-let [x (seq c)] …)` is a type error. Spec the `[]`-is-empty convention vs switching to `option`. |
-| `first` `next` `rest` | on map yield `(k v)` tuples in `Map.seq` order — spec that order's guarantees (unspecified today) |
-| `into` | dst-driven; on `any` dst assumes vec; spec |
-| `int` `float` `name` | identity fallthrough on wrong input → ill-typed OCaml (hazard 1) |
-| `contains?` | on string → runtime `failwith`; make static error or implement |
-| `apply` | 2-ary only, callee fixed-arity or list-last — spec; `apply` on a multi-arity name is open |
-| `get-in` `assoc-in` `select-keys` | require/force `(map keyword any)` — calling them on a *typed* map widens the result to `any`-valued. Spec the widening or restrict to dyn maps. |
-| `sort` `sort-by` | `sort`'s 2-ary comparator takes `fn[a a -> int]` — spec the sign convention (`Stdlib.compare`) and which kinds are sortable |
-| `min` `max` | int-or-float only; on other types unify forces int → `Stdlib.min` on non-numeric is a type lie. Restrict statically. |
-| `some` | returns `bool` (`List.exists`), not Clojure's first-truthy value — keep + spec, or rename `exists?` before freeze (a rename after is MAJOR). Flag for maintainer. |
+| `=` `not=` | `dyn_eq` on `any`/mixed reprs; `Vec/Map/Set.equal` per kind; `=` on scalars — all checked in `test/parity.lg` |
+| `not` | `dyn_truthy` on `any`; `not` on bool; statically-truthy otherwise |
+| `<` `<=` `>` `>=` | numeric only statically (int or float); `any` operands → `Lg_rt.dyn_cmp` (mixed int/float OK, `invalid_arg` on non-scalars) |
+| `get` | `option` on map (`Map.get`), vec (`Vec.get`), list (`List.nth_opt`), set (`Some x`/None); `any`/het-key maps via dyn-nest; OOB → `None` — spec'd in design.md §11 |
+| `update` | 3-ary missing key → `failwith` (no nil to feed f — deliberate divergence); 4-ary inserts default — spec'd in §11 |
+| `take` `drop` | return `(seq elem)` on every kind (lazy seq semantics, §12) |
+| `seq` | returns `option` — `None` on empty, `Some seq` else (`if-let` works) |
+| `first` `next` `rest` | on map yield `(k v)` tuples in the map's key order (the `Clj_core.Map` compare order) |
+| `into` | dst-driven; `any` dst is a static error (E100) |
+| `int` `float` `name` | convertible static set only (numeric/char/string for `int`/`float`; keyword/symbol/string for `name`), else E100; `any` → checked `as_*` unbox |
+| `contains?` | string → static error; others per-kind `mem`/`contains_` |
+| `apply` | 2-ary, fixed-arity callee; multi-arity name → static error |
+| `get-in` `assoc-in` `update-in` `select-keys` | work on typed and dyn maps; semantics spec'd in design.md §11 |
+| `sort` `sort-by` | 1-ary `sort` ascends via `Stdlib.compare`; 2-ary comparator is `fn[a a -> int]` returning compare-sign (negative = a first); `sort-by` compares key-fn results via `Stdlib.compare` |
+| `min` `max` | int-or-float only; other static types are compile errors (E101) |
+| `some` | returns `bool` (`Seq.exists` — not Clojure's first-truthy); **kept + spec'd** |
 
 **(c) — experimental / dead (4 + syntax):**
 
 | Item | Reason |
 |---|---|
 | `vector` `hash-map` `hash-set` `kw-get` | in `is_special_builtin` but not `builtin_table` — unreachable as symbols; literals cover the first three and `kw-get` is internal. Cut the dead dispatch. |
-| `& rest` variadic defn | implemented (`rest : 'a list`, call sites wrap extras in a list literal) but v2.md §7 still lists varargs as future work — mark experimental until spec'd. |
+
+`& rest` varargs moved to (a): implemented (`rest : 'a list`, call sites
+wrap extras in a list literal) and spec'd in README/design §10.
 
 Note §6 argues ~18 of the (a) names (`second butlast interpose distinct
 frequencies group-by zipmap mapcat juxt comp partial take-while
@@ -225,8 +219,8 @@ be (a) now.
 
 ## 2. Stability policy
 
-Version the **language** (`lg` version, stamped by `lg --version` — flag
-currently absent, add it) separately from the compiler build.
+Version the **language** (`lg` version, stamped by `lg version`)
+separately from the compiler build.
 
 - **MAJOR**: removing/renaming anything in §1's frozen set; grammar
   changes that reject previously-accepted programs; type-rule changes
@@ -247,18 +241,18 @@ Programs must not `open Lg_rt` or depend on emitted names; OCaml-level
 interiority is the escape hatch and is explicitly unstable until an FFI
 story exists.
 
-**Experimental gating:** features in flight land behind `-Xname`
-compiler flags (e.g. `-Xstrict`, `-Ximplicits`, later `-Xoxcaml`). A
-`-X` flag may turn on reader extensions, new forms, or looser typing;
-using a gated feature without its flag is a defined error at the phase
-that introduces it (read-time for syntax, infer-time for semantics).
-`-X` features carry no compat promise; graduating a feature removes the
-flag in a MINOR bump. `^{:experimental …}` meta is *not* the gate —
-meta can't guard reader syntax.
+**Experimental gating:** the `-Xname` flag mechanism described here was
+never implemented — shipped features (`--strict`, implicit params,
+`--backend=oxcaml`) landed as ordinary flags/backends instead. If a
+gating mechanism is added later, a `-X` flag may turn on reader
+extensions, new forms, or looser typing and carries no compat promise;
+`^{:experimental …}` meta is *not* the gate — meta can't guard reader
+syntax.
 
 ## 3. Spec skeleton (normative spec for lg v1 core)
 
-Writable **now**: sections 1–9. **Blocked** on v2 work: 10–12.
+Writable **now**: sections 1–9 and 11–12 (`.lgi` and implicit params
+shipped in v2). Section 10 stays informative until OxCaml settles.
 
 1. Reader grammar — literals, delimiters, comments, `^`/`'`/`` ` ``/`~`/`@`/`#_`. ← reader.ml is the de facto grammar; write it down including the open items in §1.1.
 2. Forms and the `form`/`mval` data model — what macros see. ← syntax.ml.
@@ -269,9 +263,14 @@ Writable **now**: sections 1–9. **Blocked** on v2 work: 10–12.
 7. `any`/`dyn` boundary — when `any` enters (`^any`, hetero literals), `Lg_rt.dyn` tags, checked unbox sites, `dyn_truthy`, dyn equality (once §1.5's `=` decision lands).
 8. Modules — file=module, `ns` form, `:require` shapes, search order, visibility (all-public in v1).
 9. Macros — `defmacro` grammar, eval subset, hygiene guarantees, expansion order, error behavior.
-10. Modes — **blocked**: current modes are advisory comments; freezing semantics before OxCaml would bake in guesswork. Spec section stays "informative" until v2 §3.
-11. `.lgi` interface files — **blocked**: format lands with v2 §2.
-12. Implicit parameters — **blocked**: v2 §1.
+10. Modes — **informative**: `Local` lowers to real OxCaml annotations
+    (design.md §10 three tiers); `Owned`/`unique_` has no expression
+    syntax in OxCaml 5.4. Spec section stays non-normative until the
+    OxCaml surface settles.
+11. `.lgi` interface files — shipped (v2): listed = exported, unlisted
+    = private, `(private n)` preserved across `lg lgi` regeneration.
+12. Implicit parameters — shipped (v2): `^:implicit`/`^{:implicit T}`
+    resolved by type at call sites, elaborated to ordinary OCaml args.
 
 The spec for 1–9 can be written against current behavior + the §1
 decisions; sections 10–12 should exist as stubs that say "not part of the
@@ -283,12 +282,15 @@ Today `test.sh` runs `check → build → run → diff` over `test/*.lg` +
 `*.out`, and `should_fail/*.lg` assert exit-status only. To certify a
 release:
 
-1. **Emitted-OCaml typecheck gate (the big one).** Every test must
-   additionally pass `ocamlc -c` on its emitted `.ml` — today
-   `lg check` green + `ocamlfind` red is a real failure class (five
-   instances verified: `=`/`not`/cmp on `any`, `take`/`drop` on set &
-   string, `int`/`name` identity fallthrough, `Some`-pattern on `any`,
-   builtin-as-value). This is the single highest-value harness change.
+1. **Emitted-OCaml typecheck gate — DONE.** `test/emit_matrix.py`
+   compiles every `lg check`-accepted builtin×type combo through OCaml
+   (386 cases, CI enforces 0 emit FAILs), and `test.sh` builds+runs
+   every golden. The five verified instances (`=`/`not`/cmp on `any`,
+   `take`/`drop` on set & string, `int`/`name` identity fallthrough,
+   `Some`-pattern on `any`, builtin-as-value) are all fixed: `any` ops
+   go through `dyn_*` helpers or are static errors, `take`/`drop`/`seq`
+   return lazy seqs, `int`/`float`/`name` reject non-convertible
+   static types, builtins lacking value closures are E100.
 2. **Builtin × collection-kind matrix.** `map`/`first`/`count`/`get`/`conj`/`take`/`drop`/`into`/`seq`/`reverse`/`sort`/`contains?` dispatch by static coll type (vec/list/set/map/string) — golden-test each cell that's allowed and assert each forbidden cell is a static error, not a build failure.
 3. **Emit snapshots.** `lg emit` output diffed per test — catches codegen
    regressions invisible to `.out` diffs. Requires deterministic emit
@@ -298,10 +300,9 @@ release:
    `.err` glob check per feature (arity, mismatch, unbound, private-ref
    post-`.lgi`, macro arg misuse, `TAny`-leak sites) so a regression that
    fails for the wrong reason is caught.
-5. **Macro corpus.** No golden test exercises `defmacro` today (the only
-   one lives in `examples/hello.lg`, which `test.sh` doesn't run) —
-   hygiene capture attempts, nested `squote`, `~@`, cross-module macros,
-   gensym collisions.
+5. **Macro corpus — DONE.** `test/hyg.lg` (hygiene/capture attempts),
+   `test/macros.lg` (defmacro incl. `~@`/nested squote), and
+   `test/_hyglib.lg` (cross-module macro module) run in `test.sh`.
 6. **Cross-backend parity.** `lg build` already falls back ocamlopt →
    ocamlc; run the same `.out` diffs on native *and* byte, and add a
    melange/js_of_ocaml lane when the runtime is wired (clj-core already

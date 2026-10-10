@@ -72,23 +72,22 @@ unresolved), E2xx reader.
   derived from the path. An `(ns ...)` form is optional. Cross-file
   dependencies are declared with `(:require [ns :as alias])` and resolved
   transitively via `-I` include dirs.
-- **Multi-arity `defn`, destructuring, `match` (incl. variant ctor patterns)
-* `(declare n)` — forward declaration for mutual recursion; consecutive
-  `defn`s emit as one `let rec .. and ..` group
-* `(defvariant shape (circle [r float]) (square [w float] [h float]) point)`
-  — OCaml variant types; parameterized via `(defvariant (tree a) ...)`.
-  Ctors are fns `(circle 1.0)`, matchable as `(circle r)` patterns/`case`, named-fn
-  recursion, `defrecord`.**
+- **Multi-arity `defn`, destructuring, `match`, variants, records.**
   `(defn f ([x] …) ([x y] …))` dispatches on arity (each arity is its own
   checked definition). `let`/`fn`/parameters destructure vectors
   `[a [b c]]` and maps `{:keys [..] :strs [..] :as s :or {..}}` plus
   explicit `{sym :kw}` / `{sym "s"}` bindings. `match` is a special form:
   literals, quoted literals, `[…]` (arity-checked), `{…}`, `(Some x)` /
   `None`, `_` and symbol binding — on typed *and* `any` scrutinees;
-  `case` is literal-dispatch sugar over it. `(fn f [x] … (f …))` binds
-  `f` to itself (emitted `let rec`) — the recursion idiom. `(defrecord
-  Point [x y])` generates a map-backed `->Point` constructor and a
-  `Point?` predicate. `& rest` varargs on `fn`/`defn`.
+  `case` is literal-dispatch sugar over it. `(declare n)` is a forward
+  declaration for mutual recursion; consecutive `defn`s emit as one
+  `let rec .. and ..` group. `(defvariant shape (circle [r float])
+  (square [w float] [h float]) point)` declares OCaml variant types —
+  parameterized via `(defvariant (tree a) …)`, ctors are fns
+  `(circle 1.0)`, matchable as `(circle r)` patterns. `(fn f [x] … (f …))`
+  binds `f` to itself (emitted `let rec`) — the recursion idiom.
+  `(defrecord Point [x y])` generates a map-backed `->Point` constructor
+  and a `Point?` predicate. `& rest` varargs on `fn`/`defn`.
 - **A confined `any` boundary.** Mixed-type literals and `^any` produce
   `dyn`-boxed values (`Lg_rt.dyn`, a closed variant — no `Obj.magic`).
   `any` never leaks into surrounding inference (it unifies as a no-op);
@@ -126,11 +125,13 @@ unresolved), E2xx reader.
   - `Owned`: uniquely-referenced values — deterministic destruction and
     FBIP-style reuse (OxCaml `unique` / Perceus).
   - `Shared`: everything else — falls back to the ordinary OCaml GC heap.
-  - In **v0**, an escape analysis pass infers the mode of every binding.
-    On the vanilla OCaml backend the modes are emitted as comments and
-    surfaced by `lg modes` (a per-binding report). The planned OxCaml
-    backend lowers `Local`/`Owned` to real `@local`/`unique` mode
-    annotations, re-checked by the OxCaml typechecker.
+  - An escape analysis pass infers the mode of every binding. On the
+    vanilla OCaml backend modes are emitted as comments and surfaced by
+    `lg modes` (a per-binding report). The OxCaml backend lowers `Local`
+    to real `@ local` parameters, `local_` binders, and `stack_`
+    allocation sites, re-checked by the OxCaml typechecker; `Owned`'s
+    `unique_` remains a comment (OxCaml 5.4 has no expression syntax for
+    it).
 - **`.lgi` interface files (mli-style).** A per-module sidecar lists each
   exported definition's type and per-parameter `:escapes` modes, plus
   `defvariant`/`extern-type` declarations. What a `.lgi` lists is the
@@ -153,13 +154,17 @@ unresolved), E2xx reader.
   chains — emit `Lg_rt` growable builders plus a single freeze instead
   of persistent-structure copies. Everything else stays persistent.
 - **OxCaml emit (`--backend=oxcaml`).** Verified end-to-end on an
-  OxCaml (flambda2) switch — emit → `ocamlfind ocamlopt` → run, 28/28
-  test programs green (test/oxcaml_smoke.sh). The lowering is
-  conservative: non-escaping primitive params of top-level defns emit
-  real `local_` annotations (checked by the OxCaml typechecker); coll
-  `stack_`/`unique_`/binding `local_` remain comments until clj-core's
-  borrow surface (`@ local` params) exists. Vanilla `ocaml` stays the
-  default backend.
+  OxCaml (flambda2, `ocaml-variants.5.4.0+ox`) switch — emit →
+  `ocamlfind ocamlopt` → run, 28/28 test programs green
+  (test/oxcaml_smoke.sh). Lowering, in three tiers: `(param @ local)`
+  on non-escaping params; `let x @ local` binders whose uses stay in
+  borrow positions (strict consumers pick `Seq.*_local`/`Vec.*_local`
+  twins by argument mode; lazy producers select their `_local` twins
+  when the call's own mode is Local); and `stack_` on direct
+  allocation sites (vec/list literals, tuples, `Some`, cons cells).
+  Requires the `ox` branches of clj-core/rrbvec (`@ local` borrow
+  annotations on non-retaining readers); `unique_` stays a comment.
+  Vanilla `ocaml` stays the default backend.
 - **wasm (`--backend=wasm`).** `ocamlc` bytecode → `wasm_of_ocaml`
   → `<exe>.js` + `<exe>.assets/*.wasm`, runnable under `node`. Verified:
   pure language, collections, lazy seqs, `println`, `env`,
@@ -247,8 +252,10 @@ the non-native OCaml backends reachable later.
 bin/        lg CLI entry point
 src/        compiler: syntax → reader → macro → infer → modes → emit
 runtime/    Lg_rt prelude (printers/helpers) embedded into emitted files
-lib/        standard library in lg (test/ test framework)
-examples/   hello.lg, util.lg, features.lg
+lib/        standard library in lg (test/ test framework, qc/ property tests)
+examples/   hello.lg+util.lg, features.lg, csv.lg, json.lg (ADT encoder),
+            jsonp.lg (recursive-descent parser), stopwatch.lg (ffi),
+            wfreq/ (multi-module CLI), impdemo/ (implicit params)
 test/       golden tests (.lg + .out); should_fail/ negative tests
 test.sh     runner: check → build → run → diff
 test/emit_matrix.py

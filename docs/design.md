@@ -51,8 +51,8 @@ Special forms (v2): `def`, `defn`, `defmacro`, `fn`, `let`, `if`, `do`,
   each required `.lg` file is read, expanded, inferred, and emitted to
   its own OCaml module inside the same output file. `-I dir` adds include
   roots.
-- **All top-level definitions are public** in v0; a private API surface
-  arrives with the `.lgi` sidecar in v1 (§8).
+- **Top-level definitions are public** unless a `.lgi` sidecar omits
+  them — `.lgi` files define the module's export surface (§10).
 - Emitted reference: `alias/f` in lg becomes a cross-module call
   (`Alias.f`) in OCaml.
 
@@ -112,10 +112,10 @@ Special forms (v2): `def`, `defn`, `defmacro`, `fn`, `let`, `if`, `do`,
 
 Three modes, inferred — never annotated:
 
-| Mode | Meaning | v0 backend | Planned OxCaml backend |
+| Mode | Meaning | ocaml backend | OxCaml backend |
 |------|---------|------------|------------------------|
-| `Local` | value does not escape its region | comment + report | `@local`, stack allocation |
-| `Owned` | uniquely referenced, deterministic lifetime | comment + report | `unique`, FBIP/Perceus reuse |
+| `Local` | value does not escape its region | comment + report | real `@ local` params, `local_` binders, `stack_` allocations |
+| `Owned` | uniquely referenced, deterministic lifetime | comment + report | comment only — `unique_` has no expression syntax in OxCaml 5.4 |
 | `Shared` | everything else | ordinary GC heap | ordinary GC heap |
 
 v0 rules (escape analysis after inference, over the typed AST):
@@ -132,12 +132,12 @@ v0 rules (escape analysis after inference, over the typed AST):
 - Inference is intra-file in v0; cross-module calls conservatively assume
   arguments and results may escape.
 
-Reporting: `lg modes <file.lg>` (a.k.a. the mode report / `--mode-report`
-path in the driver) prints every binding with its inferred mode and the
-reason it was assigned. On the vanilla OCaml backend the same
-information lands in the emitted `.ml` as comments (e.g.
+Reporting: `lg modes <file.lg>` prints every binding with its inferred
+mode and the reason it was assigned. On the vanilla OCaml backend the
+same information lands in the emitted `.ml` as comments (e.g.
 `(* mode: local *)`), so the inference is auditable without an OxCaml
-toolchain.
+toolchain; on the OxCaml backend `Local` lowers to real mode annotations
+(§10) that the OxCaml typechecker re-verifies.
 
 ## 6. Emission contract
 
@@ -236,8 +236,8 @@ structures — never hand-rolled collections, never vendored copies, never
   are bugs, not control flow, and they stay uncatchable from lg.
 - **Keep `dyn` confined.** `any` only enters via explicit `^any` and
   mixed-type literals; it never propagates through unification, and
-  every use at the boundary is a checked unbox. A future `--strict`
-  mode can require annotations even on hetero literals.
+  every use at the boundary is a checked unbox. `--strict` requires an
+  annotation even on heterogeneous literals (§10).
 
 ## 10. v2 shipped
 
@@ -289,12 +289,14 @@ All of docs/v2.md landed (detail lives there):
   and emits `let rec`; `loop`/`recur` was deliberately dropped (named
   `fn` covers it; OCaml TCO is native).
 
-Deferred: nominal `TCon` record types (defrecord stays map-backed);
-deeper OxCaml coverage needs a clj-core borrow-annotation pass (`@ local`
-on non-retaining params) so collection `stack_`/`local_` can flow —
-see §OxCaml notes. Building clj-core/rrbvec under OxCaml also requires
-stripping their `melange`/`js_of_ocaml` stanzas (the ox patch set) plus
-two locality fixes (`Seq.iter` partial-application, `List.mem` mli mode).
+Deferred: nominal `TCon` record types (defrecord stays map-backed) and
+`unique_` lowering (no expression syntax in OxCaml 5.4). The clj-core
+borrow-annotation pass is done on the `ox` branches (`@ local` params on
+non-retaining readers plus `*_local` twins for element-returning ops);
+those branches also strip `melange`/`js_of_ocaml` stanzas. Two hard
+walls remain by design: `'a Seq.t` thunks are global (no local-element
+seq producers) and Map/Set store a global `cmp` (element-level ops stay
+global; `Map.to_list_local`/`Set.to_list_local` are the only twins).
 
 ## 11. Standard library + semantic notes
 
