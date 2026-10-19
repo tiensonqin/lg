@@ -1,0 +1,25 @@
+;; checked map destructuring: :keys!/:strs!/:syms! + req! + & doc keys
+(defn greet [{:keys! [a b] :as m}] (+ a b (get m :c 0)))
+(println (greet {:a 1 :b 2 :c 3}))
+(let [{:strs! [s] :or {s "x"}} {"s" "hi"}] (println s))
+;; :or defaults skip the check entirely
+(let [{:keys! [missing] :or {missing 7}} {:other 1}] (println missing))
+;; opaque map -> runtime raise, catchable
+(defn dynf [m] (let [{:keys! [zz]} m] zz))
+(println (try (str (dynf {:a 1})) (catch e (exn-message e))))
+(println (try (str (dynf {:zz 9})) (catch e "nope")))
+;; req!: bare value or raise
+(println (req! {:x 5} :x))
+(println (try (str (req! {:x 5} :y)) (catch e (exn-message e))))
+(println (try (str (req! {"k" 8} "k")) (catch e "bad")))
+;; & doc-only keys: not bound, present key is fine
+(let [{:keys [a] & [doc-key]} {:a 1 :doc-key 2}] (println a))
+;; & doc key missing on an opaque map -> runtime raise
+(defn docf [m] (let [{:keys [a] & [dk]} m] a))
+(println (try (str (docf {:a 1})) (catch e (exn-message e))))
+(println (docf {:a 1 :dk 0}))
+;; :syms unchecked parity
+(let [{:syms [x]} (quote {x 9})] (println x))
+;; fn-param destructure checked path
+(defn kv [{:keys! [k]}] (str k))
+(println (kv {:k "ok"}))

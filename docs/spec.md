@@ -146,7 +146,7 @@ non-matching exception re-raises automatically.
 patterns), `should_fail/try_{join,binder,throw_type,pat}`.
 
 **Anchors**: `test/core.lg`, `test/control.lg`,
-`test/loopcase.lg` (case/named fn), `test/destructure.lg`,
+`test/loopcase.lg` (case/named fn), `test/destructure.lg`, `test/checkedkeys.lg`,
 `test/match.lg`, `test/multiarity.lg`, `test/varargs.lg` (`&`
 edges), `test/lispi.lg` (large program exercising all of the
 above).
@@ -232,15 +232,28 @@ are resolved by type at call sites and elaborated to ordinary
 arguments; `(:require [ns :implicits true])` merges a module's
 implicit defs. **Destructure**: `let`/`fn`/`defn` binding
 positions accept `[a [b c]]` vectors and `{:keys [..] :strs [..]
-:as s :or {..}}`/`{sym :kw}`/`{sym "s"}` maps; nested and
+:syms [..] :as s :or {..}}`/`{sym :kw}`/`{sym "s"}` maps; nested and
 `any`-valued patterns unbox recursively.
+
+**Checked keys.** The `!` variants `:keys!`/`:strs!`/`:syms!` make a
+missing key an error instead of an option: when the source map is a
+literal with a known keyset a miss is a compile-time E101 with a
+did-you-mean suggestion; over opaque/`any` maps each key emits a
+runtime check that raises `missing key :k` (a `Failure` exn, catchable
+via `try`/`catch`). `:or` defaults win — a defaulted key is never
+checked — and `:as` composes normally. The same three levels exist
+outside destructuring: `get` returns `(option v)`, `req!` returns the
+bare `v` or raises, and `!` destructuring checks. A `& [k …]` entry in
+a map pattern marks doc-only keys: they bind nothing and are verified
+the same way (static miss → E101, opaque map → runtime raise). `&` is
+never a valid binding name (E100).
 
 **Anchors**: `test/polydyn.lg`, `test/dyn.lg`,
 `test/collmatrix.lg` (builtin×coll-kind matrix incl. `any`
 edges), `test/dynmatch.lg` (dyn-arm join coercion),
-`test/destructure.lg`, `test/implicit.lg`,
+`test/destructure.lg`, `test/checkedkeys.lg`, `test/implicit.lg`,
 `test/sigimplicit.lg`, `test/keywords.lg` (keyword identifiers),
-`should_fail/cm_*.err` (static rejections), `should_fail/marity.lg`.
+`should_fail/cm_*.err` (static rejections), `should_fail/marity.lg`, `should_fail/ckeys_*.err`, `should_fail/amp_*.err`.
 
 ## 5. Macros and compile-time evaluation
 
@@ -298,7 +311,7 @@ not in scope — `(join …)` is E102 with a `did you mean` hint.
   functions are never boxed). Numeric `zero? pos? neg? even? odd?`
   unbox `any` via `as_int`/`as_float`.
 - **Collections**: `count nth first rest next second nthrest conj
-  cons assoc dissoc get get-in keys vals select-keys merge update
+  cons assoc dissoc get req! get-in keys vals select-keys merge update
   update-in assoc-in contains? empty? seq vec list set zipmap
   into` — see the dispatch matrix below and `test/parity.lg` for
   Clojure-parity edge rules (`get-in` 2-ary `None` on missing

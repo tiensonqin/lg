@@ -1,0 +1,1 @@
+(let [{:keys [a] & x} {:a 1}] (println a))

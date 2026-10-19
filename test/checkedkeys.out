@@ -1,0 +1,13 @@
+6
+hi
+7
+Failure("missing key :zz")
+9
+5
+Failure("missing key :y")
+8
+1
+Failure("missing key :dk")
+1
+9
+ok

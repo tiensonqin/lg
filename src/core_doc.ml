@@ -148,6 +148,7 @@ let builtins : (string * string option * string) list =
     "fn?", None, "True when the argument is a function.";
     "frequencies", Some "(frequencies coll)", "Map from element to occurrence count.";
     "get", Some "(get m k default?)", "Value at key/index; default (or None-typed miss) when absent. Vectors index by position.";
+    "req!", Some "(req! m k)", "Value at key as a bare (non-option) result; raises `missing key :k` when absent. The raising sibling of `get`.";
     "get-in", Some "(get-in m [k…] default?)", "Nested get along the key path.";
     "group-by", Some "(group-by f coll)", "Map from (f x) to the list of elements sharing it.";
     "identity", None, "The argument unchanged.";

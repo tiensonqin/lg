@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Checked map destructuring: `:keys!`/`:strs!`/`:syms!` treat a missing
+  key as an error — compile-time E101 with did-you-mean when the
+  source map has a known keyset, or a catchable `missing key :k`
+  `Failure` raise over opaque maps. `:or` defaults skip the check;
+  `:as` composes normally.
+- `req!` builtin: `(req! m k)` returns the bare value or raises —
+  the non-option sibling of `get`.
+- `&` doc-only keys in map patterns (`{:keys [a] & [doc]}`): bound to
+  nothing, verified like checked keys; `&` itself is not bindable.
+- `:syms` destructuring for symbol-keyed maps.
+
+## Unreleased
+
 - **Constructor-pattern catch**: `(catch (Ctor a…) h…)` emits a
   real OCaml `with` pattern alongside `(catch e h…)` —
   `(catch (Not_found) h)` catches `ocaml.*` exceptions by

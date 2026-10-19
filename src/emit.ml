@@ -1743,6 +1743,30 @@ and emit_builtin_call ?(call_local = false) b ret name args =
       | _ ->
         if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
         else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")"))
+   | "req!" ->
+     (* (req! m k): bare value, or `Failure "missing key ..."` — the
+        explicit non-option sibling of `get` *)
+     let kn =
+       match (List.nth args 1).desc with
+       | EKeyword s -> ":" ^ s
+       | EStr s -> String.escaped ("\"" ^ s ^ "\"")
+       | ESymbol s -> "'" ^ s
+       | EInt i -> string_of_int i
+       | _ -> "<key>"
+     in
+     (match repr (t 0) with
+      | TMap (k, _) when is_any k ->
+        buf_add b
+          ("(match " ^ dyn_map_get (a 0) (box_of (List.nth args 1))
+           ^ " with Some v -> v | None -> failwith \"missing key " ^ kn ^ "\")")
+      | TAny ->
+        buf_add b
+          ("(match " ^ dyn_map_get (flat_map_arg (List.nth args 0)) (box_of (List.nth args 1))
+           ^ " with Some v -> v | None -> failwith \"missing key " ^ kn ^ "\")")
+      | _ ->
+        buf_add b
+          ("(match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
+           ^ " with Some v -> v | None -> failwith \"missing key " ^ kn ^ "\")"))
    | "vec" ->
      let flows =
        match repr (List.nth args 0).ety with
@@ -2198,6 +2222,7 @@ and emit_builtin_value name ty =
   | "println" -> "(fun x -> print_endline (" ^ gen_printer (arg 0) ^ " x))"
   | "print" -> "(fun x -> print_string (" ^ gen_printer (arg 0) ^ " x))"
   | "exit" -> "Stdlib.exit"
+  | "req!" -> "(fun m__r k__r -> match Clj_core.Map.get m__r k__r with Some v -> v | None -> failwith \"missing key\")"
   | "exn" -> "(fun s -> Stdlib.Failure s)"
   | "exn-message" -> "Printexc.to_string"
   | "throw" -> "(fun e -> raise e)"
