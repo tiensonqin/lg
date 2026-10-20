@@ -339,6 +339,21 @@ let () =
   reg "assoc" (fun () -> let c = v () and k = v () and x = v () in f [ c; k; x ] c);
   reg "dissoc" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k ] (TMap (k, x)));
   reg "req!" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k ] x);
+  reg "find" (fun () -> let k = v () and x = v () in f [ TMap (k, x); k ] (TOption (TVec TAny)));
+  reg "dissoc-in" (fun () -> let k = v () and x = v () in f [ TMap (k, x); v () ] (TMap (k, x)));
+  reg "seq->map" (fun () -> f [ v () ] (TMap (TAny, TAny)));
+  reg "merge-with" (fun () -> let k = v () and x = v () in f [ f [ x; x ] x; TMap (k, x); TMap (k, x) ] (TMap (k, x)));
+  reg "update-keys" (fun () -> let k = v () and k2 = v () and x = v () in f [ f [ k ] k2; TMap (k, x) ] (TMap (k2, x)));
+  reg "update-vals" (fun () -> let k = v () and x = v () and y = v () in f [ f [ x ] y; TMap (k, x) ] (TMap (k, y)));
+  reg "rename-keys" (fun () -> let k = v () and x = v () in f [ TMap (k, x); TMap (k, k) ] (TMap (k, x)));
+  reg "submap?" (fun () -> let k = v () and x = v () in f [ TMap (k, x); TMap (k, x) ] TBool);
+  reg "some-vals" (fun () -> let k = v () and x = v () in f [ TMap (k, TOption x) ] (TMap (k, x)));
+  reg "namespace" (fun () -> f [ v () ] (TOption TString));
+  reg "qualified-keyword?" (fun () -> f [ v () ] TBool);
+  reg "simple-keyword?" (fun () -> f [ v () ] TBool);
+  reg "map-entry?" (fun () -> f [ v () ] TBool);
+  reg "opt->map" (fun () -> let a = v () and k = v () and x = v () in f [ TOption a ] (TMap (k, x)));
+  reg "opt->vec" (fun () -> let a = v () and e = v () in f [ TOption a ] (TVec e));
   reg "contains?" (fun () -> f [ v (); v () ] TBool);
   reg "map?" (fun () -> f [ v () ] TBool);
   reg "merge" (fun () -> let k = v () and x = v () in f [ TMap (k, x); TMap (k, x) ] (TMap (k, x)));
@@ -492,7 +507,7 @@ let is_special_builtin = function
   | "split-at" | "split-with" | "reductions" | "dedupe" | "remove" | "not-empty"
   | "int?" | "float?" | "bool?" | "char?" | "string?" | "keyword?" | "symbol?"
   | "unit?" | "list?" | "vec?" | "set?" | "coll?" | "seq?" | "number?" | "fn?"
-  | "zero?" | "pos?" | "neg?" | "even?" | "odd?" -> true
+  | "zero?" | "pos?" | "neg?" | "even?" | "odd?" | "keyword" | "symbol" -> true
   | _ -> false
 
 (* ---------- inference ---------- *)
@@ -1620,15 +1635,43 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
             in
             bind_pattern ctx vl (Atom (vl, Symbol s)) tail))
   | Map (ml, kvs) ->
+    (* seq values coerce to a map first, per Clojure
+       `seq-to-map-for-destructuring`: empty -> {}, single element ->
+       first (a map), otherwise alternating [k v] pairs. `any` values
+       get the same treatment inside `as_map` at runtime. *)
     let rhs =
       match repr rhs.ety with
       | TAny -> mk ml (TMap (TAny, TAny)) (EUnbox (rhs, TMap (TAny, TAny)))
+      | TSeq el | TList el ->
+        (match repr el with
+         | TVec _ | TTuple [ _; _ ] | TAny ->
+           mk ml (TMap (TAny, TAny))
+             (ECall (mk ml (TFun ([ rhs.ety ], TMap (TAny, TAny))) (EBuiltin "seq->map"), [ rhs ]))
+         | _ -> type_error ml "map destructure on a seq requires [k v] pair elements")
       | _ -> rhs
     in
     let tmp = fresh_binder "dm" in
     tmp.bty <- rhs.ety;
     let tmp_e = mk ml rhs.ety (ELocal tmp) in
-    (* :or defaults are collected before the other entries are bound *)
+    (* map-level directives *)
+    let floc = function
+      | Atom (fl, _) | List (fl, _) | Vector (fl, _) | Map (fl, _) | Set (fl, _)
+      | Meta (fl, _, _) | Quote (fl, _) -> fl
+    in
+    let dir_sym name =
+      List.find_map
+        (fun (k, v) ->
+          match k, v with
+          | Atom (_, Keyword n), Atom (_, Symbol s) when n = name -> Some s
+          | Atom (_, Keyword n), _ when n = name ->
+            type_error (floc v) (Printf.sprintf ":%s expects a symbol" name)
+          | _ -> None)
+        kvs
+    in
+    let select_sym = dir_sym "select"
+    and all_sym = dir_sym "all"
+    and excess_sym = dir_sym "excess"
+    and missing_sym = dir_sym "missing" in
     let or_defaults =
       match
         List.find_map
@@ -1636,60 +1679,83 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
           kvs
       with
       | Some (Map (_, ds)) -> ds
-      | _ -> []
+      | Some f -> type_error (floc f) ":or expects a map"
+      | None -> []
     in
-    let default_for kname =
-      List.find_map
-        (fun (dk, dv) ->
-          match dk with
-          | Atom (_, Keyword k) when k = kname -> Some dv
-          | Atom (_, Symbol k) when k = kname -> Some dv
-          | _ -> None)
+    (* each default is evaluated once into a temp (Clojure binds all of
+       them before the map itself); uses see `ELocal gdef` *)
+    let gdefs =
+      List.map
+        (fun (dk, df) ->
+          let de = infer_expr ctx df in
+          let b = fresh_binder "_df" in
+          b.bty <- de.ety;
+          (dk, de, b))
         or_defaults
     in
-    (* (:kw m) or (:kw m default) *)
+    let default_local sn =
+      List.find_map
+        (fun (dk, de, b) ->
+          match dk with
+          | Atom (_, Symbol k) when k = sn -> Some (mk ml de.ety (ELocal b))
+          | _ -> None)
+        gdefs
+    in
+    let default_key disp =
+      List.find_map
+        (fun (dk, de, b) ->
+          match dk with
+          | Atom (_, Keyword k) when ":" ^ k = disp -> Some (mk ml de.ety (ELocal b))
+          | Atom (_, Str s) when "\"" ^ s ^ "\"" = disp -> Some (mk ml de.ety (ELocal b))
+          | _ -> None)
+        gdefs
+    in
+    (* namespaced symbols: `:ns/keys [a]` -> key :ns/a; `ns/name` entry ->
+       key :ns/name bound to local `name` *)
+    let local_name sn =
+      match String.rindex_opt sn '/' with
+      | Some i -> String.sub sn (i + 1) (String.length sn - i - 1)
+      | None -> sn
+    in
+    let sym_ns sn =
+      match String.rindex_opt sn '/' with
+      | Some i -> Some (String.sub sn 0 i)
+      | None -> None
+    in
+    (* (:kw m) / (get m "s") / (get m 's), optional default *)
     let kw_get kw def =
       let kw_e = mk ml TKeyword (EKeyword kw) in
       let vt = fresh_var () in
       unify ml rhs.ety (TMap (TKeyword, vt));
       match def with
       | Some df ->
-        let de = infer_expr ctx df in
-        unify ml de.ety vt;
-        mk ml vt (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt); vt ], vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e; de ]))
+        unify ml df.ety vt;
+        mk ml vt (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt); vt ], vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e; df ]))
       | None ->
         mk ml (TOption vt) (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt) ], TOption vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e ]))
     in
-    (* (get m "s" def) — string keys *)
     let str_get skey def =
       let sk_e = mk ml TString (EStr skey) in
       let vt = fresh_var () in
       unify ml rhs.ety (TMap (TString, vt));
       match def with
       | Some df ->
-        let de = infer_expr ctx df in
-        unify ml de.ety vt;
-        mk ml vt (ECall (mk ml (TFun ([ TString; TMap (TString, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; de ]))
+        unify ml df.ety vt;
+        mk ml vt (ECall (mk ml (TFun ([ TString; TMap (TString, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; df ]))
       | None ->
         mk ml (TOption vt) (ECall (mk ml (TFun ([ TString; TMap (TString, vt) ], TOption vt)) (EBuiltin "get"), [ tmp_e; sk_e ]))
     in
-    (* (get m 's def) — symbol keys *)
     let sym_get skey def =
       let sk_e = mk ml TSymbol (ESymbol skey) in
       let vt = fresh_var () in
       unify ml rhs.ety (TMap (TSymbol, vt));
       match def with
       | Some df ->
-        let de = infer_expr ctx df in
-        unify ml de.ety vt;
-        mk ml vt (ECall (mk ml (TFun ([ TSymbol; TMap (TSymbol, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; de ]))
+        unify ml df.ety vt;
+        mk ml vt (ECall (mk ml (TFun ([ TSymbol; TMap (TSymbol, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; df ]))
       | None ->
         mk ml (TOption vt) (ECall (mk ml (TFun ([ TSymbol; TMap (TSymbol, vt) ], TOption vt)) (EBuiltin "get"), [ tmp_e; sk_e ]))
     in
-    (* checked keys (:keys!/:strs!/:syms!) and `&` doc-only keys:
-       a literal-RHS keyset makes misses a compile error; anything
-       opaque raises `missing key` at runtime. `:or` wins — a defaulted
-       key is never checked. *)
     let keyset =
       match rhs.desc with
       | EMapLit es ->
@@ -1714,104 +1780,426 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
          | None -> Err.err sl "E101" (Printf.sprintf "missing required key %s" disp) [])
       | _ -> ()
     in
-    (* (req! m k) — raises `missing key` at runtime *)
-    let req_get kty ke _disp =
+    let req_get kty ke =
       let vt = fresh_var () in
       unify ml rhs.ety (TMap (kty, vt));
       mk ml vt
-        (ECall
-           ( mk ml (TFun ([ TMap (kty, vt); kty ], vt)) (EBuiltin "req!")
-           , [ tmp_e; ke ] ))
+        (ECall (mk ml (TFun ([ TMap (kty, vt); kty ], vt)) (EBuiltin "req!"), [ tmp_e; ke ]))
     in
-    (* a doc-only `&` key: not bound; static miss -> E101, else a
-       runtime contains?-or-throw check bound to a discarded temp *)
-    let doc_check sl kty ke disp =
-      match keyset with
-      | Some _ -> miss_check sl disp; []
-      | None ->
-        let vt = fresh_var () in
-        unify ml rhs.ety (TMap (kty, vt));
-        let has =
-          mk ml TBool
-            (ECall
-               ( mk ml (TFun ([ TMap (kty, vt); kty ], TBool)) (EBuiltin "contains?")
-               , [ tmp_e; ke ] ))
-        in
-        let thr =
-          mk ml TUnit
-            (ECall
-               ( mk ml (TFun ([ TCon ("exn", []) ], TUnit)) (EBuiltin "throw")
-               , [ mk ml (TCon ("exn", []))
-                     (ECall
-                        ( mk ml (TFun ([ TString ], TCon ("exn", []))) (EBuiltin "exn")
-                        , [ mk ml TString (EStr ("missing key " ^ disp)) ] )) ] ))
-        in
-        let cb = fresh_binder "_dc" in
-        cb.bty <- TUnit;
-        [ (cb, mk ml TUnit (EIf (has, mk ml TUnit ENil, thr))) ]
+    (* bookkeeping for :select/:all/:excess/:missing *)
+    let sel_keys = ref [] in
+    let b2k = Hashtbl.create 8 in
+    let mkt = fresh_var () in
+    let miss_cur : binder option ref = ref None in
+    let subsel = ref [] and suba = ref [] and subex = ref [] and submiss = ref [] in
+    (* soft check under :missing: `(get m k)` -> option; on None the key
+       lands in the missing map with a `()` value (Clojure uses nil) *)
+    let soft_req kty ke =
+      let vt = fresh_var () in
+      unify ml rhs.ety (TMap (kty, vt));
+      unify ml mkt kty;
+      let init, prev_e =
+        match !miss_cur with
+        | Some b -> [], mk ml (TMap (mkt, TUnit)) (ELocal b)
+        | None ->
+          let b0 = fresh_binder "_m" in
+          b0.bty <- TMap (mkt, TUnit);
+          miss_cur := Some b0;
+          ( [ (b0, mk ml (TMap (mkt, TUnit)) (EMapLit [])) ]
+          , mk ml (TMap (mkt, TUnit)) (ELocal b0) )
+      in
+      let gt = fresh_binder "_gt" in
+      gt.bty <- TOption vt;
+      let get_e =
+        mk ml (TOption vt)
+          (ECall (mk ml (TFun ([ TMap (kty, vt); kty ], TOption vt)) (EBuiltin "get"), [ tmp_e; ke ]))
+      in
+      let gt_e = mk ml (TOption vt) (ELocal gt) in
+      let mn = fresh_binder "_m" in
+      mn.bty <- TMap (mkt, TUnit);
+      let has =
+        mk ml TBool
+          (ECall (mk ml (TFun ([ TOption vt ], TBool)) (EBuiltin "some?"), [ gt_e ]))
+      in
+      let upd =
+        mk ml (TMap (mkt, TUnit))
+          (ECall
+             ( mk ml (TFun ([ TMap (mkt, TUnit); mkt; TUnit ], TMap (mkt, TUnit))) (EBuiltin "assoc")
+             , [ prev_e; ke; mk ml TUnit ENil ] ))
+      in
+      let upd_e = mk ml (TMap (mkt, TUnit)) (EIf (has, prev_e, upd)) in
+      miss_cur := Some mn;
+      (init @ [ (gt, get_e); (mn, upd_e) ], gt_e)
     in
-    (* shared checked/unchecked key walker *)
-    let keys_walk checked entry kty key_e disp get syms =
+    (* nested sub-patterns: `{{:keys [a]} :sub}` — the (get m :sub)
+       result is (option vt); a missing key destructures against {}
+       (Clojure: nil destructures to nil bindings), a present one
+       coerces via as_map/as_vec so dyn seqs fold too *)
+    let nest_wrap pat ge =
+      match pat with
+      | Map _ ->
+        (match repr ge.ety with
+         | TOption _ ->
+           let kt = fresh_var () and vt = fresh_var () in
+           mk ml (TMap (kt, vt))
+             (ECall (mk ml (TFun ([ ge.ety ], TMap (kt, vt))) (EBuiltin "opt->map"), [ ge ]))
+         | _ -> ge)
+      | Vector _ | List _ ->
+        (match repr ge.ety with
+         | TOption _ ->
+           let el = fresh_var () in
+           mk ml (TVec el)
+             (ECall (mk ml (TFun ([ ge.ety ], TVec el)) (EBuiltin "opt->vec"), [ ge ]))
+         | _ -> ge)
+      | _ -> ge
+    in
+    (* Clojure push1: bind `pat` to the value at key `ke`; req = `!` *)
+    let push1 sl pat kty ke disp req getfn =
+      sel_keys := ke :: !sel_keys;
+      (match pat with
+       | Atom (_, Symbol s) -> Hashtbl.replace b2k (local_name s) ke
+       | _ -> ());
+      (* namespaced binding symbols localize to their name part:
+         `:keys [ns/name]` / `{ns/x :k}` bind `name`, not `ns/name` *)
+      let pat =
+        match pat with
+        | Atom (pl, Symbol s) -> Atom (pl, Symbol (local_name s))
+        | _ -> pat
+      in
+      let dl =
+        match pat with
+        | Atom (_, Symbol s) -> default_local (local_name s)
+        | _ ->
+          (* key-named :or default for non-symbol patterns:
+             `{:q [x y] :or {q [..]}}` looks up `q` *)
+          let n = String.length disp in
+          (match disp.[0] with
+           | ':' -> default_local (String.sub disp 1 (n - 1))
+           | '"' | '\'' -> default_local (String.sub disp 1 (n - 2))
+           | _ -> None)
+      in
+      let dk = default_key disp in
+      match dl, dk with
+      | Some _, Some _ ->
+        type_error sl (Printf.sprintf "Multiple :or defaults for same key: %s" disp)
+      | Some de, _ | _, Some de ->
+        if req then
+          type_error sl
+            (Printf.sprintf "Can't supply default value for required key: %s" disp)
+        else bind_pattern ctx sl pat (nest_wrap pat (getfn (Some de)))
+      | None, None ->
+        if req then
+          (match missing_sym with
+           | Some _ ->
+             let aux, ge = soft_req kty ke in
+             aux @ bind_pattern ctx sl pat (nest_wrap pat ge)
+           | None ->
+             miss_check sl disp;
+             bind_pattern ctx sl pat (req_get kty ke))
+        else bind_pattern ctx sl pat (nest_wrap pat (getfn None))
+    in
+    (* one :keys-style directive vector; pre-& entries bind, post-&
+       entries are doc keys (checked under `!`, never bound) *)
+    let keys_walk ns dir req kty key_e disp getfn items =
+      let rec go acc preamp = function
+        | [] -> List.rev acc
+        | Atom (sl, Symbol "&") :: rest ->
+          if not preamp then
+            type_error sl (Printf.sprintf "& can only appear once in :%s" dir);
+          go acc false rest
+        | f :: rest ->
+          if not preamp then begin
+            let ke, d =
+              match f, kty with
+              | Atom (sl, Keyword s), TKeyword ->
+                let k = match ns with Some n -> n ^ "/" ^ s | None -> s in
+                mk sl TKeyword (EKeyword k), ":" ^ k
+              | Atom (sl, Str s), TString -> mk sl TString (EStr s), "\"" ^ s ^ "\""
+              | Atom (sl, Symbol s), TSymbol -> mk sl TSymbol (ESymbol s), "'" ^ s
+              | Atom (_, Symbol s), _ ->
+                type_error (floc f)
+                  (Printf.sprintf "'%s' - binding symbols can only appear before '&', use keys after" s)
+              | _ -> type_error (floc f) "& entries must be keys (keyword/string/symbol)"
+            in
+            sel_keys := ke :: !sel_keys;
+            if req then begin
+              match missing_sym with
+              | Some _ ->
+                let aux, ge = soft_req kty ke in
+                let gb = fresh_binder "_dc" in
+                gb.bty <- ge.ety;
+                go (List.rev_append aux ((gb, ge) :: acc)) false rest
+              | None ->
+                miss_check (floc f) d;
+                let gb = fresh_binder "_dc" in
+                let e = req_get kty ke in
+                gb.bty <- e.ety;
+                go ((gb, e) :: acc) false rest
+            end
+            else go acc false rest
+          end
+          else
+            (match f with
+             | Atom (sl, Symbol sn) ->
+               let ln = local_name sn in
+               let kn =
+                 match ns, sym_ns sn with
+                 | Some dn, None -> dn ^ "/" ^ ln
+                 | _ -> sn
+               in
+               let ke = key_e sl kn in
+               go (List.rev_append (push1 sl f kty ke (disp kn) req (getfn kn)) acc) preamp rest
+             | _ -> type_error (floc f) (Printf.sprintf ":%s entries must be symbols" dir))
+      in
+      go [] true (Array.to_list items)
+    in
+    (* nested propagation: when an outer :select/:all/:excess/:missing is
+       set, inject the directive into sub-map patterns lacking it so
+       their result maps merge outward; a sub that already has one
+       contributes that user-named binding instead *)
+    let sub_n = ref 0 in
+    let inject_dirs pf =
+      match pf with
+      | Map (sml, skvs)
+        when select_sym <> None || all_sym <> None || excess_sym <> None || missing_sym <> None ->
+        let sub_dir n =
+          List.find_map
+            (fun (k, v) ->
+              match k, v with
+              | Atom (_, Keyword x), Atom (_, Symbol s) when x = n -> Some s
+              | _ -> None)
+            skvs
+        in
+        let want =
+          List.concat
+            [ (match select_sym with Some _ -> [ "select" ] | _ -> [])
+            ; (match all_sym with Some _ -> [ "all" ] | _ -> [])
+            ; (match excess_sym with Some _ -> [ "excess" ] | _ -> [])
+            ; (match missing_sym with Some _ -> [ "missing" ] | _ -> [])
+            ]
+        in
+        let injected =
+          List.map
+            (fun n ->
+              match sub_dir n with
+              | Some s -> (n, s, false)
+              | None ->
+                incr sub_n; (n, Printf.sprintf "_sub_%d" !sub_n, true))
+            want
+        in
+        ( Map
+            ( sml
+            , skvs
+              @ List.map
+                  (fun (n, un, add) ->
+                    if add then (Atom (sml, Keyword n), Atom (sml, Symbol un))
+                    else (Atom (sml, Keyword n), Atom (sml, Symbol un)))
+                  injected )
+        , List.map (fun (n, un, _) -> (n, un)) injected )
+      | _ -> pf, []
+    in
+    let merge2 a b =
+      let kt = fresh_var () and vt = fresh_var () in
+      unify ml a.ety (TMap (kt, vt));
+      unify ml b.ety (TMap (kt, vt));
+      mk ml (TMap (kt, vt))
+        (ECall (mk ml (TFun ([ TMap (kt, vt); TMap (kt, vt) ], TMap (kt, vt))) (EBuiltin "merge"), [ a; b ]))
+    in
+    let map_amp = ref 0 in
+    (* entry normalization shared by the dispatch below and the
+       unknown-directive fallthrough: Clojure's canonical direction is
+       `{bf :k}` (pattern left, key right); `{:k bf}` / `{"s" bf}` are
+       kept for compatibility *)
+    let entry kf pf =
+      let patf, keyf =
+        match kf, pf with
+        | (Atom (_, Symbol _) | Map _ | Vector _ | List _), _ -> (kf, pf)
+        | (Atom (_, Keyword _) | Atom (_, Str _)), _ -> (pf, kf)
+        | _ -> type_error l "unsupported map destructuring entry"
+      in
+      let kty, ke, disp, getf =
+        match keyf with
+        | Atom (sl, Keyword k) -> TKeyword, mk sl TKeyword (EKeyword k), ":" ^ k, kw_get k
+        | Atom (sl, Str k) -> TString, mk sl TString (EStr k), "\"" ^ k ^ "\"", str_get k
+        | Atom (sl, Symbol k) -> TSymbol, mk sl TSymbol (ESymbol k), "'" ^ k, sym_get k
+        | _ -> type_error (floc keyf) "map destructuring key must be a keyword/string/symbol"
+      in
+      let pf', injected = inject_dirs patf in
+      let pairs = push1 ml pf' kty ke disp false getf in
+      List.iter
+        (fun (n, un) ->
+          match List.find_opt (fun (b, _) -> b.bname = un) pairs with
+          | Some (b, _) ->
+            let le = mk ml b.bty (ELocal b) in
+            (match n with
+             | "select" -> subsel := (ke, le) :: !subsel
+             | "all" -> suba := (ke, le) :: !suba
+             | "excess" -> subex := (ke, le) :: !subex
+             | _ -> submiss := (ke, le) :: !submiss)
+          | None -> ())
+        injected;
+      pairs
+    in
+    let entry_binds =
       List.concat
         (List.map
-           (fun sf ->
-             match sf with
-             | Atom (sl, Symbol sn) ->
-               if sn = "&" then type_error sl "'&' cannot be bound — it marks doc-only keys ({... & [k]})";
-               (match default_for sn with
-                | Some df -> bind_pattern ctx sl sf (get sn (Some df))
-                | None ->
-                  (match checked with
-                   | true ->
-                     miss_check sl (disp sn);
-                     bind_pattern ctx sl sf (req_get kty (key_e sn) (disp sn))
-                   | false -> bind_pattern ctx sl sf (get sn None)))
-             | _ -> type_error l (Printf.sprintf ":%s entries must be symbols" entry))
-           (Array.to_list syms))
+           (fun (kf, pf) ->
+             match kf, pf with
+             | Atom (_, Keyword "req!"), Vector (_, items) ->
+               (* {:req! [[pat key] ...]} — entry-level required bindings *)
+               List.concat
+                 (List.map
+                    (fun it ->
+                      match it with
+                      | Vector (vl, [| pf'; kf' |]) ->
+                        let kty, ke, disp, getf =
+                          match kf' with
+                          | Atom (sl, Keyword k) -> TKeyword, mk sl TKeyword (EKeyword k), ":" ^ k, kw_get k
+                          | Atom (sl, Str k) -> TString, mk sl TString (EStr k), "\"" ^ k ^ "\"", str_get k
+                          | Atom (sl, Symbol k) -> TSymbol, mk sl TSymbol (ESymbol k), "'" ^ k, sym_get k
+                          | _ -> type_error (floc kf') ":req! keys must be keyword/string/symbol"
+                        in
+                        push1 vl pf' kty ke disp true getf
+                      | _ -> type_error (floc it) ":req! entries must be [pattern key] vectors")
+                    (Array.to_list items))
+                          | Atom (_, Keyword d), Vector (_, items) ->
+               let ns, base =
+                 match String.rindex_opt d '/' with
+                 | Some i -> Some (String.sub d 0 i), String.sub d (i + 1) (String.length d - i - 1)
+                 | None -> None, d
+               in
+               (match base with
+                | "keys" | "keys!" ->
+                  keys_walk ns base (base = "keys!") TKeyword
+                    (fun sl k -> mk sl TKeyword (EKeyword k)) (fun k -> ":" ^ k)
+                    (fun kn def -> kw_get kn def) items
+                | "strs" | "strs!" ->
+                  keys_walk ns base (base = "strs!") TString
+                    (fun sl k -> mk sl TString (EStr k)) (fun k -> "\"" ^ k ^ "\"")
+                    (fun kn def -> str_get kn def) items
+                | "syms" | "syms!" ->
+                  keys_walk ns base (base = "syms!") TSymbol
+                    (fun sl k -> mk sl TSymbol (ESymbol k)) (fun k -> "'" ^ k)
+                    (fun kn def -> sym_get kn def) items
+                | _ -> entry kf pf)
+| Atom (_, Symbol "&"), Vector (_, syms) ->
+               incr map_amp;
+               if !map_amp > 1 then type_error (floc kf) "& can only appear once";
+               (* map-level & doc-only keys: not bound; static misses are
+                  E101, opaque maps get a runtime contains?-or-throw *)
+               List.concat
+                 (List.map
+                    (fun sf ->
+                      match sf with
+                      | Atom (sl, Symbol sn) ->
+                        let vt = fresh_var () in
+                        unify ml rhs.ety (TMap (TKeyword, vt));
+                        (match keyset with
+                         | Some _ -> miss_check sl (":" ^ sn); []
+                         | None ->
+                           let ke = mk sl TKeyword (EKeyword sn) in
+                           sel_keys := ke :: !sel_keys;
+                           let has =
+                             mk ml TBool
+                               (ECall
+                                  ( mk ml (TFun ([ TMap (TKeyword, vt); TKeyword ], TBool)) (EBuiltin "contains?")
+                                  , [ tmp_e; ke ] ))
+                           in
+                           let thr =
+                             mk ml TUnit
+                               (ECall
+                                  ( mk ml (TFun ([ TCon ("exn", []) ], TUnit)) (EBuiltin "throw")
+                                  , [ mk ml (TCon ("exn", []))
+                                        (ECall
+                                           ( mk ml (TFun ([ TString ], TCon ("exn", []))) (EBuiltin "exn")
+                                           , [ mk ml TString (EStr ("missing key :" ^ sn)) ] )) ] ))
+                           in
+                           let cb = fresh_binder "_dc" in
+                           cb.bty <- TUnit;
+                           [ (cb, mk ml TUnit (EIf (has, mk ml TUnit ENil, thr))) ])
+                      | _ -> type_error (floc sf) "& entries must be symbols")
+                    (Array.to_list syms))
+             | Atom (_, Symbol "&"), _ -> type_error (floc kf) "'&' expects a vector of key names ({... & [k]})"
+             | Atom (_, Keyword ("select" | "all" | "excess" | "missing")), _ -> []
+             | Atom (_, Keyword "as"), Atom (sl, Symbol sn) ->
+               bind_pattern ctx sl (Atom (sl, Symbol sn)) (mk ml rhs.ety (ELocal tmp))
+             | Atom (_, Keyword "or"), Map _ -> []
+             | _ -> entry kf pf)
+           kvs)
     in
-    (tmp, rhs)
-    :: List.concat
-         (List.map
-            (fun (kf, pf) ->
-              match kf, pf with
-              | Atom (_, Keyword "keys"), Vector (_, syms) ->
-                keys_walk false "keys" TKeyword (fun sn -> mk ml TKeyword (EKeyword sn)) (fun sn -> ":" ^ sn) kw_get syms
-              | Atom (_, Keyword "keys!"), Vector (_, syms) ->
-                keys_walk true "keys!" TKeyword (fun sn -> mk ml TKeyword (EKeyword sn)) (fun sn -> ":" ^ sn) kw_get syms
-              | Atom (_, Keyword "strs"), Vector (_, syms) ->
-                keys_walk false "strs" TString (fun sn -> mk ml TString (EStr sn)) (fun sn -> "\"" ^ sn ^ "\"") str_get syms
-              | Atom (_, Keyword "strs!"), Vector (_, syms) ->
-                keys_walk true "strs!" TString (fun sn -> mk ml TString (EStr sn)) (fun sn -> "\"" ^ sn ^ "\"") str_get syms
-              | Atom (_, Keyword "syms"), Vector (_, syms) ->
-                keys_walk false "syms" TSymbol (fun sn -> mk ml TSymbol (ESymbol sn)) (fun sn -> "'" ^ sn) sym_get syms
-              | Atom (_, Keyword "syms!"), Vector (_, syms) ->
-                keys_walk true "syms!" TSymbol (fun sn -> mk ml TSymbol (ESymbol sn)) (fun sn -> "'" ^ sn) sym_get syms
-              | Atom (_, Symbol "&"), Vector (_, syms) ->
-                (* doc-only keys: not bound; static keyset misses are E101,
-                   opaque maps get a runtime contains?-or-throw check *)
-                List.concat
-                  (List.map
-                     (fun sf ->
-                       match sf with
-                       | Atom (sl, Symbol sn) ->
-                         doc_check sl TKeyword (mk sl TKeyword (EKeyword sn)) (":" ^ sn)
-                       | _ -> type_error l "& entries must be symbols")
-                     (Array.to_list syms))
-              | Atom (_, Symbol "&"), _ -> type_error l "'&' expects a vector of key names ({... & [k]})"
-              | Atom (_, Keyword "as"), Atom (sl, Symbol sn) -> bind_pattern ctx sl (Atom (sl, Symbol sn)) (mk ml rhs.ety (ELocal tmp))
-              | Atom (_, Keyword "or"), Map _ -> []
-              | Atom (_, Symbol sn), Atom (_, Keyword kw) -> bind_pattern ctx ml kf (kw_get kw (default_for sn))
-              | Atom (_, Symbol sn), Atom (_, Str sk) -> bind_pattern ctx ml kf (str_get sk (default_for sn))
-              (* {pat :kw} / {pat "s"}: :or keys by the bound symbol; a
-                 non-symbol sub-pattern falls back to the key name *)
-              | Atom (_, Keyword kw), _ ->
-                let d = (match pf with Atom (_, Symbol sn) -> default_for sn | _ -> default_for kw) in
-                bind_pattern ctx ml pf (kw_get kw d)
-              | Atom (_, Str sk), _ ->
-                let d = (match pf with Atom (_, Symbol sn) -> default_for sn | _ -> default_for sk) in
-                bind_pattern ctx ml pf (str_get sk d)
-              | _ -> type_error l "unsupported map destructuring entry")
-            kvs)
+    (* dm: :or defaults keyed by their looked-up key expr *)
+    let dm_pairs =
+      List.filter_map
+        (fun (dk, de, b) ->
+          match dk with
+          | Atom (_, Symbol s) ->
+            (match Hashtbl.find_opt b2k (local_name s) with
+             | Some ke -> Some (ke, mk ml de.ety (ELocal b))
+             | None ->
+               if select_sym <> None || all_sym <> None then
+                 type_error (floc dk)
+                   (Printf.sprintf "symbol %s in :or does not refer to a binding" s);
+               Some (mk ml TSymbol (ESymbol s), mk ml de.ety (ELocal b)))
+          | Atom (sl, Keyword k) -> Some (mk sl TKeyword (EKeyword k), mk ml de.ety (ELocal b))
+          | Atom (sl, Str s) -> Some (mk sl TString (EStr s), mk ml de.ety (ELocal b))
+          | _ -> None)
+        gdefs
+    in
+    let dm = mk ml (TMap (fresh_var (), fresh_var ())) (EMapLit dm_pairs) in
+    let subs_map lst =
+      mk ml (TMap (fresh_var (), fresh_var ())) (EMapLit lst)
+    in
+    let sel_vec = mk ml (TVec TAny) (EVecLit (List.rev !sel_keys)) in
+    let tail_binds =
+      List.concat
+        [ (match select_sym with
+           | Some sn ->
+             let merged = merge2 (merge2 dm tmp_e) (subs_map !subsel) in
+             let kt = fresh_var () and vt = fresh_var () in
+             unify ml merged.ety (TMap (kt, vt));
+             let se =
+               mk ml (TMap (kt, vt))
+                 (ECall
+                    ( mk ml (TFun ([ TMap (kt, vt); TVec TAny ], TMap (kt, vt))) (EBuiltin "select-keys")
+                    , [ merged; sel_vec ] ))
+             in
+             bind_pattern ctx ml (Atom (ml, Symbol sn)) se
+           | None -> [])
+        ; (match all_sym with
+           | Some sn ->
+             bind_pattern ctx ml (Atom (ml, Symbol sn)) (merge2 (merge2 dm tmp_e) (subs_map !suba))
+           | None -> [])
+        ; (match excess_sym with
+           | Some sn ->
+             let kt = fresh_var () and vt = fresh_var () in
+             unify ml tmp_e.ety (TMap (kt, vt));
+             let dis =
+               mk ml (TMap (kt, vt))
+                 (ECall
+                    ( mk ml (TFun ([ TMap (kt, vt); TVec TAny ], TMap (kt, vt))) (EBuiltin "dissoc-in")
+                    , [ tmp_e; sel_vec ] ))
+             in
+             let merged = if !subex = [] then dis else merge2 dis (subs_map !subex) in
+             bind_pattern ctx ml (Atom (ml, Symbol sn)) merged
+           | None -> [])
+        ; (match missing_sym with
+           | Some sn ->
+             let cur =
+               match !miss_cur with
+               | Some b -> mk ml (TMap (mkt, TUnit)) (ELocal b)
+               | None -> mk ml (TMap (mkt, TUnit)) (EMapLit [])
+             in
+             let merged = if !submiss = [] then cur else merge2 cur (subs_map !submiss) in
+             bind_pattern ctx ml (Atom (ml, Symbol sn)) merged
+           | None -> [])
+        ]
+    in
+    List.concat
+      [ List.map (fun (_, de, b) -> (b, de)) gdefs
+      ; [ (tmp, rhs) ]
+      ; entry_binds
+      ; tail_binds
+      ]
   | _ -> type_error l "unsupported destructuring pattern"
 
 and infer_let ctx l binds body =
@@ -2728,6 +3116,14 @@ and infer_special ctx l name ce arg_es =
     | t -> type_error l (Printf.sprintf "%s: unsupported collection type %s" name (string_of_ty t))
   in
   match name, ty_args with
+  | ("keyword" | "symbol"), [ t ] ->
+    unify l t TString;
+    mk l (if name = "keyword" then TKeyword else TSymbol) (ECall (ce, arg_es))
+  | ("keyword" | "symbol"), [ t1; t2 ] ->
+    (* (keyword "ns" "name") -> :ns/name — Clojure 2-arg ctor *)
+    unify l t1 TString;
+    unify l t2 TString;
+    mk l (if name = "keyword" then TKeyword else TSymbol) (ECall (ce, arg_es))
   | "kw-get", [ TKeyword; m ] | "kw-get", [ TKeyword; m; _ ] ->
     let vt = fresh_var () in
     unify l m (TMap (TKeyword, vt));

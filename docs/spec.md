@@ -232,21 +232,45 @@ are resolved by type at call sites and elaborated to ordinary
 arguments; `(:require [ns :implicits true])` merges a module's
 implicit defs. **Destructure**: `let`/`fn`/`defn` binding
 positions accept `[a [b c]]` vectors and `{:keys [..] :strs [..]
-:syms [..] :as s :or {..}}`/`{sym :kw}`/`{sym "s"}` maps; nested and
-`any`-valued patterns unbox recursively.
+:syms [..] :as s :or {..}}`/`{sym :kw}`/`{sym "s"}`/`{:kw bf}` maps;
+nested and `any`-valued patterns unbox recursively.
+
+**Result directives.** Beyond `:as` (the raw map), three directives
+bind processed views of the map after `:or` defaults are merged in:
+`:select s` binds `s` to the sub-map of only the destructured keys
+(`select-keys (merge defaults m)`), `:all s` binds `s` to
+`(merge defaults m)` (the whole map with defaults filled in),
+`:excess s` binds `s` to the map minus every destructured key —
+nesting a map pattern under `:excess` merges the inner excess into
+the outer one — and `:missing s` collects the keys a `!`-checked
+binding failed to find (`soft` semantics: the local binds None, `s`
+gains `key → ()`).
+
+**Namespaced keys.** `:ns/keys [a]` / `:ns/strs [s]` / `:ns/syms [s]`
+bind `a`/`s` to the qualified key `:ns/a`/`"ns/s"`/`'ns/s`; entry
+form `{x :ns/k}` looks up the qualified `:ns/k`.
+
+**Seq coercion.** Destructuring a seq source coerces it to a map:
+`(k v k v…)` pairs, empty → `{}`, a single map element → that map —
+a non-pair seq is a type error.
+
+**`:or` + `!`.** Supplying a default for a required key is a compile
+error `Can't supply default value for required key: :k` — the
+default could never hide a missing required key.
 
 **Checked keys.** The `!` variants `:keys!`/`:strs!`/`:syms!` make a
 missing key an error instead of an option: when the source map is a
 literal with a known keyset a miss is a compile-time E101 with a
 did-you-mean suggestion; over opaque/`any` maps each key emits a
 runtime check that raises `missing key :k` (a `Failure` exn, catchable
-via `try`/`catch`). `:or` defaults win — a defaulted key is never
-checked — and `:as` composes normally. The same three levels exist
+via `try`/`catch`). The same three levels exist
 outside destructuring: `get` returns `(option v)`, `req!` returns the
-bare `v` or raises, and `!` destructuring checks. A `& [k …]` entry in
-a map pattern marks doc-only keys: they bind nothing and are verified
-the same way (static miss → E101, opaque map → runtime raise). `&` is
-never a valid binding name (E100).
+bare `v` or raises, and `!` destructuring checks. `{:req! [[pat :k]
+…]}` applies required-check semantics to entry-style bindings. `&`
+may appear once in a `:keys`-style list; keys after it are doc-only —
+they bind nothing but are verified the same way (static miss → E101,
+opaque map → runtime raise). `&` is never a valid binding name (E100),
+and a binding symbol after `&` is an error.
 
 **Anchors**: `test/polydyn.lg`, `test/dyn.lg`,
 `test/collmatrix.lg` (builtin×coll-kind matrix incl. `any`

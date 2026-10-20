@@ -1,0 +1,58 @@
+;; full Clojure-1.13 destructure parity: :select/:all/:excess/:missing,
+;; namespaced keys, seq->map, :req! entries, both {bf :k} directions
+;; :select — only destructured keys + defaults
+(let [{:keys [a b] :or {b 9} :select sel} {:a 1 :b 2 :c 3}]
+  (println (str "sel " (pr-str sel))))
+(let [{:keys [a b] :or {b 9} :select sel} {:a 1 :c 3}]
+  (println (str "sel2 " (pr-str sel))))
+;; :all — whole map with defaults merged (unlike :as)
+(let [{:keys [a b] :or {b 9} :all whole :as orig} {:a 1 :c 3}]
+  (println (str "all " (pr-str whole) " as " (pr-str orig))))
+;; :excess — keys not destructured
+(let [{:keys [a] :excess rest} {:a 1 :c 3 :d 4}]
+  (println (str "exc " (pr-str rest))))
+;; :missing — soft check: absent ! keys land in miss, local gets option
+(let [{:keys! [a z] :missing miss} {:a 1}]
+  (println (str "miss " (pr-str miss))))
+(let [{:keys! [a z] :missing miss} {:a 1 :z 2}]
+  (println (str "miss2 " (pr-str miss) " z " (str (match z (Some v) v None -1)))))
+;; namespaced keys
+(let [{:user/keys [name age]} {:user/name "x" :user/age 3}]
+  (println (str "nsk " name ":" (str age))))
+(let [{:keys [user/name]} {:user/name "y"}]
+  (println (str "nse " name)))
+(let [{user/name :n} {:n "v"}]
+  (println (str "nsl " name)))
+(let [{:user/strs [s]} {"user/s" "sv"}]
+  (println (str "nss " s)))
+;; both entry directions
+(let [{x :px y :py} {:px 5 :py 6}] (println (str "lr " (str x) (str y))))
+(let [{:px x :py y} {:px 5 :py 6}] (println (str "rl " (str x) (str y))))
+;; nested sub-map with directive merge (:excess propagates)
+(let [{:keys [a] {:keys [b] :excess sube} :sub :excess top} {:a 1 :sub {:b 2 :extra 9} :more 8}]
+  (println (str "sube " (pr-str sube) " top " (pr-str top))))
+;; seq->map: list/seq of pairs
+(let [{:keys [p q]} (list [:p 1] [:q 2])]
+  (println (str "sq " (str p) (str q))))
+(let [{:keys [r]} (map (fn [k] [k 7]) (list :r))]
+  (println (str "sq2 " (str r))))
+;; :req! entry directive
+(let [{:req! [[v :k]]} {:k 3}] (println (str "rq " (str v))))
+(defn reqf [m] (let [{:req! [[v :k]]} m] v))
+(println (try (str (reqf {:x 1})) (catch e (exn-message e))))
+;; :or on a checked key is a compile error — see should_fail/or_req
+;; fn-param positions
+(defn selarg [{:keys [a] :select s}] (str (str a) (pr-str s)))
+(println (selarg {:a 1 :b 2}))
+;; new map builtins
+(println (str "find " (pr-str (find {:a 1 :b 2} :a)) " " (pr-str (find {:a 1} :z))))
+(println (str "mw " (pr-str (merge-with (fn [x y] (+ x y)) {:a 1} {:a 2 :b 3}))))
+(println (str "uk " (pr-str (update-keys (fn [k] (keyword "pre" (name k))) {:a 1}))))
+(println (str "uv " (pr-str (update-vals (fn [v] (* v 10)) {:a 1 :b 2}))))
+(println (str "rk " (pr-str (rename-keys {:a 1 :b 2} {:a :z}))))
+(println (str "sm " (str (submap? {:a 1} {:a 1 :b 2})) " " (str (submap? {:a 9} {:a 1}))))
+(println (str "sv " (pr-str (some-vals {:a (Some 1) :b None}))))
+(println (str "ns " (str (match (namespace :user/name) (Some s) s None "?")) " " (pr-str (namespace :plain))))
+(println (str "qk " (str (qualified-keyword? :a/b)) " " (str (qualified-keyword? :a)) " " (str (simple-keyword? :a)) " " (str (simple-keyword? :a/b))))
+(println (str "me " (str (map-entry? [1 2])) " " (str (map-entry? [1])) " " (str (map-entry? 3))))
+(println (str "kw2 " (pr-str (keyword "ns" "name")) " " (pr-str (symbol "ns" "name"))))

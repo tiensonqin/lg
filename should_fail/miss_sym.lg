@@ -1,0 +1,1 @@
+(let [{:keys [a] :missing 42} {:a 1}] a)

@@ -200,7 +200,42 @@ let rec dyn_eq (a : dyn) (b : dyn) : bool =
   | DMap x, DMap y -> Clj_core.Map.equal ~eq:dyn_eq x y
   | _ -> false
 
-let as_map = function DMap m -> m | _ -> invalid_arg "dyn: expected map"
+(* seq-to-map coercion for map destructuring (Clojure
+   seq-to-map-for-destructuring): an empty seq is {}, a single-element
+   seq whose element is a map is that map, otherwise elements are
+   alternating key/value pairs *)
+let seq_to_map xs =
+  match xs with
+  | [] -> Clj_core.Map.of_list []
+  | [ x ] ->
+    (match x with
+     | DMap m -> m
+     | _ -> invalid_arg "seq->map: single element must be a map")
+  | _ ->
+    let rec pairs acc = function
+      | k :: v :: rest -> pairs ((k, v) :: acc) rest
+      | [] -> List.rev acc
+      | _ -> invalid_arg "seq->map: odd element count"
+    in
+    Clj_core.Map.of_list (pairs [] xs)
+
+let as_map = function
+  | DMap m -> m
+  | DList l -> seq_to_map l
+  | DVec v -> seq_to_map (Clj_core.Vec.to_list v)
+  | _ -> invalid_arg "dyn: expected map"
+
+(* `namespace` on dyn: keywords and symbols may carry an ns prefix;
+   Keyword.to_string keeps the leading ':' — strip it *)
+let dyn_namespace = function
+  | DKw k ->
+    let s = Clj_core.Keyword.to_string k in
+    let s = if String.length s > 0 && s.[0] = ':' then String.sub s 1 (String.length s - 1) else s in
+    (match String.rindex_opt s '/' with Some i -> Some (String.sub s 0 i) | None -> None)
+  | DSym s ->
+    let s = Clj_core.Symbol.to_string s in
+    (match String.rindex_opt s '/' with Some i -> Some (String.sub s 0 i) | None -> None)
+  | _ -> None
 let as_set = function DSet s -> s | _ -> invalid_arg "dyn: expected set"
 
 (* merge dyn maps then re-assoc the values into a fresh (dyn, dyn) map —

@@ -12,6 +12,26 @@
 - `&` doc-only keys in map patterns (`{:keys [a] & [doc]}`): bound to
   nothing, verified like checked keys; `&` itself is not bindable.
 - `:syms` destructuring for symbol-keyed maps.
+- Full Clojure destructure parity: result directives `:select`
+  (`select-keys (merge defaults m)`), `:all` (`merge defaults m`),
+  `:excess` (map minus destructured keys; nested excess merges
+  outward), `:missing` (soft `!` — missing keys collected, locals
+  bind None); namespaced keys (`:ns/keys [a]` → `:ns/a`, `{x :ns/k}`);
+  seq→map coercion (pairs / empty → {} / single-map element);
+  `{:req! [[pat :k] …]}` entry-level required bindings; `&` must
+  appear at most once and a binding symbol after `&` is an error.
+- **Semantic fix**: `:or` supplying a default for a `!`-checked key
+  is now a compile error (`Can't supply default value for required
+  key`), matching Clojure push1 semantics.
+- Map API: `find`, `merge-with`, `update-keys`, `update-vals`,
+  `rename-keys`, `submap?`, `some-vals`, `keyword`/`symbol`
+  constructors (2-arity `ns/name` forms), `namespace`,
+  `qualified-keyword?`/`simple-keyword?`, `map-entry?`.
+- Destructure bugfixes: `:or` defaults for non-symbol patterns
+  (`{:q [x y] :or {q [..]}}`) resolve by key name; `{x :q}` Clojure
+  direction restored; `{:kw sub-pattern}` entries no longer
+  swallowed as directives; `:or` default types unify with map value
+  types.
 
 ## Unreleased
 

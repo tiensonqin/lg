@@ -1,9 +1,7 @@
 ;; checked map destructuring: :keys!/:strs!/:syms! + req! + & doc keys
 (defn greet [{:keys! [a b] :as m}] (+ a b (get m :c 0)))
 (println (greet {:a 1 :b 2 :c 3}))
-(let [{:strs! [s] :or {s "x"}} {"s" "hi"}] (println s))
-;; :or defaults skip the check entirely
-(let [{:keys! [missing] :or {missing 7}} {:other 1}] (println missing))
+(let [{:strs! [s]} {"s" "hi"}] (println s))
 ;; opaque map -> runtime raise, catchable
 (defn dynf [m] (let [{:keys! [zz]} m] zz))
 (println (try (str (dynf {:a 1})) (catch e (exn-message e))))

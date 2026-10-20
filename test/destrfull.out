@@ -1,0 +1,29 @@
+sel {:a 1, :b 2}
+sel2 {:a 1, :b 9}
+all {:a 1, :b 9, :c 3} as {:a 1, :c 3}
+exc {:c 3, :d 4}
+miss {:z ()}
+miss2 {} z 2
+nsk x:3
+nse y
+nsl v
+nss sv
+lr 56
+rl 56
+sube {:extra 9} top {:more 8, :sub {:extra 9}}
+sq 12
+sq2 7
+rq 3
+Failure("missing key :k")
+1{:a 1}
+find [:a 1] None
+mw {:a 3, :b 3}
+uk {:pre/a 1}
+uv {:a 10, :b 20}
+rk {:b 2, :z 1}
+sm true false
+sv {:a 1}
+ns user None
+qk true false true false
+me true false false
+kw2 :ns/name ns/name

@@ -1427,8 +1427,18 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         | TSymbol -> "(Clj_core.Symbol.name " ^ a 0 ^ ")"
         | TAny -> "(Lg_rt.as_name " ^ a 0 ^ ")"
         | _ -> a 0)
-   | "keyword" -> buf_add b ("(Clj_core.Keyword.of_string " ^ conv TString (t 0) (a 0) ^ ")")
-   | "symbol" -> buf_add b ("(Clj_core.Symbol.of_string " ^ conv TString (t 0) (a 0) ^ ")")
+   | "keyword" ->
+     if List.length args = 2 then
+       buf_add b
+         ("(Clj_core.Keyword.of_string (" ^ conv TString (t 0) (a 0) ^ " ^ \"/\" ^ "
+          ^ conv TString (t 1) (a 1) ^ "))")
+     else buf_add b ("(Clj_core.Keyword.of_string " ^ conv TString (t 0) (a 0) ^ ")")
+   | "symbol" ->
+     if List.length args = 2 then
+       buf_add b
+         ("(Clj_core.Symbol.of_string (" ^ conv TString (t 0) (a 0) ^ " ^ \"/\" ^ "
+          ^ conv TString (t 1) (a 1) ^ "))")
+     else buf_add b ("(Clj_core.Symbol.of_string " ^ conv TString (t 0) (a 0) ^ ")")
    | "str" | "pr-str" ->
      let parts = List.map (fun e -> printer_call e.ety e) args in
      buf_add b ("(" ^ String.concat " ^ " (if parts = [] then [ "\"\"" ] else parts) ^ ")")
@@ -1767,6 +1777,128 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         buf_add b
           ("(match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1
            ^ " with Some v -> v | None -> failwith \"missing key " ^ kn ^ "\")"))
+   | "seq->map" ->
+     (* seq coercion for map destructuring (Clojure
+        seq-to-map-for-destructuring): pair elements -> map; a dyn seq
+        goes through Lg_rt.seq_to_map (empty -> {}, single map -> itself,
+        alternating k/v otherwise) *)
+     (match repr (t 0) with
+      | TSeq el | TList el ->
+        (match repr el with
+         | TAny -> buf_add b ("(Lg_rt.seq_to_map " ^ as_dyn_list (List.nth args 0) ^ ")")
+         | TVec kv ->
+           (* Vec.get returns option — a malformed non-[k v] element
+              throws at runtime *)
+           let un i =
+             "(match Clj_core.Vec.get __p " ^ i
+             ^ " with Some __x -> __x | None -> invalid_arg \"seq->map: pair must be [k v]\")"
+           in
+           let bk = conv TAny kv (un "0") and bv = conv TAny kv (un "1") in
+           buf_add b
+             ("(Clj_core.Map.of_list (List.map (fun __p -> (" ^ bk ^ ", " ^ bv ^ ")) "
+              ^ as_list (List.nth args 0) ^ "))")
+         | TTuple [ kt'; vt' ] ->
+           buf_add b
+             ("(Clj_core.Map.of_list (List.map (fun __p -> (" ^ conv TAny kt' "(fst __p)" ^ ", "
+              ^ conv TAny vt' "(snd __p)" ^ ")) " ^ as_list (List.nth args 0) ^ "))")
+         | _ -> buf_add b "(failwith \"seq->map\")")
+      | _ -> buf_add b ("(Lg_rt.seq_to_map " ^ as_dyn_list (List.nth args 0) ^ ")"))
+   | "opt->map" ->
+     (* (option v) -> map: Some coerces via conv (as_map on dyn), None -> {} *)
+     (match repr (t 0) with
+      | TOption i ->
+        let kt, vt = match repr ret with TMap (k, v) -> (k, v) | _ -> (TAny, TAny) in
+        buf_add b
+          ("(match " ^ a 0 ^ " with Some v__o -> " ^ conv (TMap (kt, vt)) i "v__o"
+           ^ " | None -> Clj_core.Map.of_list [])")
+      | _ -> buf_add b "(failwith \"opt->map\")")
+   | "opt->vec" ->
+     (match repr (t 0) with
+      | TOption i ->
+        let el = match repr ret with TVec e -> e | _ -> TAny in
+        buf_add b
+          ("(match " ^ a 0 ^ " with Some v__o -> " ^ conv (TVec el) i "v__o"
+           ^ " | None -> Clj_core.Vec.of_list [])")
+      | _ -> buf_add b "(Clj_core.Vec.of_list [])")
+   | "dissoc-in" ->
+     (* (dissoc-in m ks): fold Map.dissoc over a collection of keys —
+        used by :excess; keys in the coll may be dyn while the map's
+        key type is concrete, so coerce each *)
+     let kt = match repr (t 0) with TMap (k, _) -> k | _ -> TAny in
+     buf_add b
+       ("(List.fold_left (fun m__d k__d -> Clj_core.Map.dissoc m__d " ^ conv kt TAny "k__d"
+        ^ ") " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+   | "find" ->
+     (* (find m k) -> Some [k v] | None *)
+     (match repr (t 0) with
+      | TMap (kt, vt) when not (is_any kt) ->
+        buf_add b
+          ("(match Clj_core.Map.get " ^ a 0 ^ " " ^ a 1 ^ " with Some v__f -> Some (Clj_core.Vec.of_list ["
+           ^ conv TAny kt (a 1) ^ "; " ^ conv TAny vt "v__f" ^ "]) | None -> None)")
+      | _ ->
+        buf_add b
+          ("(match " ^ dyn_map_get (flat_map_arg (List.nth args 0)) (box_of (List.nth args 1))
+           ^ " with Some v__f -> Some (Clj_core.Vec.of_list [" ^ box_of (List.nth args 1)
+           ^ "; v__f]) | None -> None)"))
+   | "merge-with" ->
+     buf_add b
+       ("(List.fold_left (fun acc__w (k__w, v__w) -> Clj_core.Map.assoc acc__w k__w (match Clj_core.Map.get acc__w k__w with Some o__w -> ("
+        ^ a 0 ^ ") o__w v__w | None -> v__w)) " ^ a 1 ^ " (Clj_core.Map.to_list " ^ a 2 ^ "))")
+   | "update-keys" ->
+     buf_add b
+       ("(Clj_core.Map.of_list (List.map (fun (k__u, v__u) -> ((" ^ a 0 ^ ") k__u, v__u)) (Clj_core.Map.to_list " ^ a 1 ^ ")))")
+   | "update-vals" ->
+     buf_add b
+       ("(Clj_core.Map.of_list (List.map (fun (k__u, v__u) -> (k__u, (" ^ a 0 ^ ") v__u)) (Clj_core.Map.to_list " ^ a 1 ^ ")))")
+   | "rename-keys" ->
+     buf_add b
+       ("(Clj_core.Map.of_list (List.map (fun (k__r, v__r) -> ((match Clj_core.Map.get " ^ a 1
+        ^ " k__r with Some nk__r -> nk__r | None -> k__r), v__r)) (Clj_core.Map.to_list " ^ a 0 ^ ")))")
+   | "submap?" ->
+     let vt = match repr (t 0) with TMap (_, v) -> v | _ -> TAny in
+     buf_add b
+       ("(List.for_all (fun (k__s, v__s) -> match Clj_core.Map.get " ^ a 1
+        ^ " k__s with Some v2__s -> Lg_rt.dyn_eq " ^ conv TAny vt "v__s" ^ " "
+        ^ conv TAny vt "v2__s" ^ " | None -> false) (Clj_core.Map.to_list " ^ a 0 ^ "))")
+   | "some-vals" ->
+     buf_add b
+       ("(Clj_core.Map.of_list (List.filter_map (fun (k__v, v__v) -> match v__v with Some x__v -> Some (k__v, x__v) | None -> None) (Clj_core.Map.to_list "
+        ^ a 0 ^ ")))")
+   | "namespace" ->
+     (match repr (t 0) with
+      | TKeyword ->
+        buf_add b
+          ("(let __s = Clj_core.Keyword.to_string " ^ a 0
+           ^ " in let __s = if String.length __s > 0 && __s.[0] = ':' then String.sub __s 1 (String.length __s - 1) else __s in match String.rindex_opt __s '/' with Some i -> Some (String.sub __s 0 i) | None -> None)")
+      | TSymbol ->
+        buf_add b
+          ("(let __s = Clj_core.Symbol.to_string " ^ a 0
+           ^ " in match String.rindex_opt __s '/' with Some i -> Some (String.sub __s 0 i) | None -> None)")
+      | _ -> buf_add b ("(Lg_rt.dyn_namespace " ^ box_of (List.nth args 0) ^ ")"))
+   | "qualified-keyword?" ->
+     (match repr (t 0) with
+      | TKeyword ->
+        buf_add b
+          ("(let __s = Clj_core.Keyword.to_string " ^ a 0 ^ " in match String.rindex_opt __s '/' with Some i -> i > 0 || __s.[0] <> ':' | None -> false)")
+      | _ ->
+        buf_add b
+          ("(match " ^ box_of (List.nth args 0)
+           ^ " with Lg_rt.DKw k -> (match String.rindex_opt (Clj_core.Keyword.to_string k) '/' with Some _ -> true | None -> false) | _ -> false)"))
+   | "simple-keyword?" ->
+     (match repr (t 0) with
+      | TKeyword ->
+        buf_add b
+          ("(let __s = Clj_core.Keyword.to_string " ^ a 0 ^ " in match String.rindex_opt __s '/' with Some i -> not (i > 0 || __s.[0] <> ':') | None -> true)")
+      | _ ->
+        buf_add b
+          ("(match " ^ box_of (List.nth args 0)
+           ^ " with Lg_rt.DKw k -> (match String.rindex_opt (Clj_core.Keyword.to_string k) '/' with Some _ -> false | None -> true) | _ -> false)"))
+   | "map-entry?" ->
+     (match repr (t 0) with
+      | TVec _ -> buf_add b ("(Clj_core.Vec.count " ^ a 0 ^ " = 2)")
+      | _ ->
+        buf_add b
+          ("(match " ^ box_of (List.nth args 0) ^ " with Lg_rt.DVec v -> Clj_core.Vec.count v = 2 | _ -> false)"))
    | "vec" ->
      let flows =
        match repr (List.nth args 0).ety with
@@ -1991,7 +2123,14 @@ and emit_builtin_call ?(call_local = false) b ret name args =
        buf_add b ("(Lg_rt.flat_of_nest (Clj_core.Map.select_keys " ^ dyn_map_arg (List.nth args 0)
                   ^ " (List.map (fun k -> Lg_rt.DKw k) " ^ as_list (List.nth args 1) ^ ")))")
      else
-       buf_add b ("(Clj_core.Map.select_keys " ^ a 0 ^ " " ^ as_list (List.nth args 1) ^ ")")
+       (* the key collection's element type may be `any` (destructure
+          :select builds a mixed key vec) — coerce each to the map's
+          key type *)
+       let kt = match repr (t 0) with TMap (k, _) -> k | _ -> TAny in
+       let ke = match repr (t 1) with TVec e | TList e | TSeq e -> e | _ -> TAny in
+       buf_add b
+         ("(Clj_core.Map.select_keys " ^ a 0 ^ " (List.map (fun __k -> " ^ conv kt ke "__k"
+          ^ ") " ^ as_list (List.nth args 1) ^ "))")
    | "update" ->
      (* flat_map_arg covers both the `any` map (as_map unwrap) and an
         open-coll map (already a flat (dyn,dyn) map); the result is a map

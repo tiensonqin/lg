@@ -149,6 +149,12 @@ let builtins : (string * string option * string) list =
     "frequencies", Some "(frequencies coll)", "Map from element to occurrence count.";
     "get", Some "(get m k default?)", "Value at key/index; default (or None-typed miss) when absent. Vectors index by position.";
     "req!", Some "(req! m k)", "Value at key as a bare (non-option) result; raises `missing key :k` when absent. The raising sibling of `get`.";
+    "keyword", Some "(keyword s) | (keyword ns n)", "Keyword constructor; 2-arity yields `:ns/name`.";
+    "symbol", Some "(symbol s) | (symbol ns n)", "Symbol constructor; 2-arity yields `ns/name`.";
+    "namespace", Some "(namespace kw)", "Namespace part of a qualified keyword/symbol as (option string); None when unqualified.";
+    "qualified-keyword?", None, "True for keywords carrying a `ns/` namespace part.";
+    "simple-keyword?", None, "True for keywords without a namespace part.";
+    "map-entry?", None, "True for a map entry (`(tuple k v)` or map-pair form).";
     "get-in", Some "(get-in m [k…] default?)", "Nested get along the key path.";
     "group-by", Some "(group-by f coll)", "Map from (f x) to the list of elements sharing it.";
     "identity", None, "The argument unchanged.";
@@ -179,6 +185,12 @@ let builtins : (string * string option * string) list =
     "mapv", Some "(mapv f coll)", "Vector of (f x) per element (eager).";
     "max", None, "Larger of the two arguments.";
     "merge", None, "Left-to-right union of maps; later keys win.";
+    "merge-with", Some "(merge-with f m…)", "Like merge but colliding values combine via `(f old new)`.";
+    "update-keys", Some "(update-keys f m)", "Map with each key replaced by `(f k)`; collisions keep the later entry.";
+    "update-vals", Some "(update-vals f m)", "Map with each value replaced by `(f v)`; same keyset.";
+    "rename-keys", Some "(rename-keys m {old new})", "Map with keys renamed per the lookup map; unmapped keys survive.";
+    "submap?", Some "(submap? a b)", "True when every entry of A appears in B.";
+    "some-vals", Some "(some-vals m)", "Map keeping only entries whose value is `Some x`, unwrapped to `x`.";
     "min", None, "Smaller of the two arguments.";
     "mod", None, "Integer remainder (sign of the divisor, like OCaml mod).";
     "name", None, "String name of a keyword or symbol, without the namespace.";
