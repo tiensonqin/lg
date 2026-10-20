@@ -256,7 +256,11 @@ a non-pair seq is a type error.
 
 **`:or` + `!`.** Supplying a default for a required key is a compile
 error `Can't supply default value for required key: :k` — the
-default could never hide a missing required key.
+default could never hide a missing required key. A `:or` default
+unifies with the map's value type: over a heterogeneous
+`(map k any)` map it is boxed to `dyn` at emit; over a homogeneous
+map a mismatched default type is a static E101 — mixing default
+types needs a dyn-valued map.
 
 **Checked keys.** The `!` variants `:keys!`/`:strs!`/`:syms!` make a
 missing key an error instead of an option: when the source map is a

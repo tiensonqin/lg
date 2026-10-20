@@ -56,3 +56,19 @@
 (println (str "qk " (str (qualified-keyword? :a/b)) " " (str (qualified-keyword? :a)) " " (str (simple-keyword? :a)) " " (str (simple-keyword? :a/b))))
 (println (str "me " (str (map-entry? [1 2])) " " (str (map-entry? [1])) " " (str (map-entry? 3))))
 (println (str "kw2 " (pr-str (keyword "ns" "name")) " " (pr-str (symbol "ns" "name"))))
+
+;; regression: :or defaults on dyn-valued (heterogeneous) maps — the
+;; default must convert to the map's value type instead of narrowing it
+(let [{:keys [role theme] :or {role "r" theme "l"} :excess ex} {:id 7 :name "a"}]
+  (println (str "dA " role "," theme "," (str (count ex)))))
+(let [{:keys! [id name] :keys [role] :or {role "r"}} {:id 7 :name "a"}]
+  (println (str "dB " (str id) "," name "," role)))
+(let [{:keys! [id name] :keys [role theme] :or {role "r" theme "l"} :excess extra :missing miss}
+      {:id 7 :name "ada" :age 36 :vip true}]
+  (println (str "dC " (str id) "," name "," role "," theme "," (str (count extra)) "," (str (count miss)))))
+;; keyword/symbol ctors accept nameable dyn args
+(let [mk (fn [k] (keyword "user" (name k)))]
+  (println (str "dD " (pr-str (mk :name)))))
+(let [m {:id 1 :name "ada"}]
+  (let [{:keys! [name]} m]
+    (println (str "dE " (pr-str (keyword "user" (str name)))))))

@@ -1428,17 +1428,21 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         | TAny -> "(Lg_rt.as_name " ^ a 0 ^ ")"
         | _ -> a 0)
    | "keyword" ->
+     (* ctor args are nameable: a dyn arg may be a DStr/DSym/DKw —
+        coerce via as_name, not as_string (which raises on DKw/DSym) *)
+     let nconv i = if is_any (t i) then "(Lg_rt.as_name " ^ a i ^ ")" else conv TString (t i) (a i) in
      if List.length args = 2 then
        buf_add b
-         ("(Clj_core.Keyword.of_string (" ^ conv TString (t 0) (a 0) ^ " ^ \"/\" ^ "
-          ^ conv TString (t 1) (a 1) ^ "))")
-     else buf_add b ("(Clj_core.Keyword.of_string " ^ conv TString (t 0) (a 0) ^ ")")
+         ("(Clj_core.Keyword.of_string (" ^ nconv 0 ^ " ^ \"/\" ^ "
+          ^ nconv 1 ^ "))")
+     else buf_add b ("(Clj_core.Keyword.of_string " ^ nconv 0 ^ ")")
    | "symbol" ->
+     let nconv i = if is_any (t i) then "(Lg_rt.as_name " ^ a i ^ ")" else conv TString (t i) (a i) in
      if List.length args = 2 then
        buf_add b
-         ("(Clj_core.Symbol.of_string (" ^ conv TString (t 0) (a 0) ^ " ^ \"/\" ^ "
-          ^ conv TString (t 1) (a 1) ^ "))")
-     else buf_add b ("(Clj_core.Symbol.of_string " ^ conv TString (t 0) (a 0) ^ ")")
+         ("(Clj_core.Symbol.of_string (" ^ nconv 0 ^ " ^ \"/\" ^ "
+          ^ nconv 1 ^ "))")
+     else buf_add b ("(Clj_core.Symbol.of_string " ^ nconv 0 ^ ")")
    | "str" | "pr-str" ->
      let parts = List.map (fun e -> printer_call e.ety e) args in
      buf_add b ("(" ^ String.concat " ^ " (if parts = [] then [ "\"\"" ] else parts) ^ ")")
@@ -1751,7 +1755,12 @@ and emit_builtin_call ?(call_local = false) b ret name args =
         if List.length args = 3 then buf_add b (dyn_map_get_or (box_of (List.nth args 2)) mstr kd)
         else buf_add b (dyn_map_get mstr kd)
       | _ ->
-        if List.length args = 3 then buf_add b ("(Clj_core.Map.get_or " ^ a 2 ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
+        if List.length args = 3 then
+          (* the default must convert to the map's value type: a raw
+             literal would both be ill-typed AND narrow the whole map
+             (get_or "r" m k forces m : (k, string) map) *)
+          let vt = match repr (t 1) with TMap (_, v) -> v | _ -> TAny in
+          buf_add b ("(Clj_core.Map.get_or " ^ conv vt (t 2) (a 2) ^ " " ^ a 1 ^ " " ^ a 0 ^ ")")
         else buf_add b ("(Clj_core.Map.get " ^ a 1 ^ " " ^ a 0 ^ ")"))
    | "req!" ->
      (* (req! m k): bare value, or `Failure "missing key ..."` — the

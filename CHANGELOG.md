@@ -27,6 +27,11 @@
   `rename-keys`, `submap?`, `some-vals`, `keyword`/`symbol`
   constructors (2-arity `ns/name` forms), `namespace`,
   `qualified-keyword?`/`simple-keyword?`, `map-entry?`.
+- Destructure emit fixes: `:or`/`get` defaults now convert to the
+  map's value type — a raw literal default on a dyn-valued map both
+  emitted ill-typed OCaml and narrowed the whole map's inferred
+  type; `keyword`/`symbol` ctor args coerce dyn via `as_name`
+  (nameable: DStr/DSym/DKw) instead of `as_string`.
 - Destructure bugfixes: `:or` defaults for non-symbol patterns
   (`{:q [x y] :or {q [..]}}`) resolve by key name; `{x :q}` Clojure
   direction restored; `{:kw sub-pattern}` entries no longer

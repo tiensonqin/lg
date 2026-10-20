@@ -559,5 +559,36 @@ let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "me ") ^ 
 
 # 58 "/Users/devin/repos/lg2/test/destrfull.lg"
 let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "kw2 ") ^ (Lg_rt.str_string ((Lg_rt.str_kw (Clj_core.Keyword.of_string ("ns" ^ "/" ^ "name"))))) ^ (Lg_rt.str_string " ") ^ (Lg_rt.str_string ((Lg_rt.str_sym (Clj_core.Symbol.of_string ("ns" ^ "/" ^ "name")))))))))))
+
+# 62 "/Users/devin/repos/lg2/test/destrfull.lg"
+let () = (ignore ((let _df__88 = "r" in (let _df__89 = "l" in (let dm__87 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 7)); ((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "a"))]) in (let role__90 = (Clj_core.Map.get_or (Lg_rt.DStr _df__88) dm__87 (Clj_core.Keyword.keyword "role")) in (let theme__91 = (Clj_core.Map.get_or (Lg_rt.DStr _df__89) dm__87 (Clj_core.Keyword.keyword "theme")) in (let (* @local *) ex__92 = (List.fold_left (fun m__d k__d -> Clj_core.Map.dissoc m__d (Lg_rt.as_kw k__d)) dm__87 (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Lg_rt.DKw (Clj_core.Keyword.keyword "role")); (Lg_rt.DKw (Clj_core.Keyword.keyword "theme"))]))) in 
+# 63 "/Users/devin/repos/lg2/test/destrfull.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dA ") ^ (Lg_rt.str_dyn role__90) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn theme__91) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_string ((Lg_rt.str_int (Clj_core.Map.count ex__92))))))))))))))))
+
+# 64 "/Users/devin/repos/lg2/test/destrfull.lg"
+let () = (ignore ((let _df__94 = "r" in (let dm__93 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 7)); ((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "a"))]) in (let id__95 = (match Clj_core.Map.get dm__93 (Clj_core.Keyword.keyword "id") with Some v -> v | None -> failwith "missing key :id") in (let name__96 = (match Clj_core.Map.get dm__93 (Clj_core.Keyword.keyword "name") with Some v -> v | None -> failwith "missing key :name") in (let role__97 = (Clj_core.Map.get_or (Lg_rt.DStr _df__94) dm__93 (Clj_core.Keyword.keyword "role")) in 
+# 65 "/Users/devin/repos/lg2/test/destrfull.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dB ") ^ (Lg_rt.str_string ((Lg_rt.str_dyn id__95))) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn name__96) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn role__97))))))))))))
+
+# 66 "/Users/devin/repos/lg2/test/destrfull.lg"
+let () = (ignore ((let _df__99 = "r" in (let _df__100 = "l" in (let dm__98 = 
+# 67 "/Users/devin/repos/lg2/test/destrfull.lg"
+(Clj_core.Map.of_list [((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 7)); ((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "ada")); ((Clj_core.Keyword.keyword "age"), (Lg_rt.DInt 36)); ((Clj_core.Keyword.keyword "vip"), (Lg_rt.DBool true))]) in (let _m__101 = 
+# 66 "/Users/devin/repos/lg2/test/destrfull.lg"
+(Clj_core.Map.of_list []) in (let _gt__102 = (Clj_core.Map.get dm__98 (Clj_core.Keyword.keyword "id")) in (let _m__103 = (if (_gt__102 <> None) then _m__101 else (Clj_core.Map.assoc _m__101 (Clj_core.Keyword.keyword "id") ())) in (let id__104 = _gt__102 in (let _gt__105 = (Clj_core.Map.get dm__98 (Clj_core.Keyword.keyword "name")) in (let _m__106 = (if (_gt__105 <> None) then _m__103 else (Clj_core.Map.assoc _m__103 (Clj_core.Keyword.keyword "name") ())) in (let name__107 = _gt__105 in (let role__108 = (Clj_core.Map.get_or (Lg_rt.DStr _df__99) dm__98 (Clj_core.Keyword.keyword "role")) in (let theme__109 = (Clj_core.Map.get_or (Lg_rt.DStr _df__100) dm__98 (Clj_core.Keyword.keyword "theme")) in (let (* @local *) extra__111 = (List.fold_left (fun m__d k__d -> Clj_core.Map.dissoc m__d (Lg_rt.as_kw k__d)) dm__98 (Clj_core.Vec.to_list (Clj_core.Vec.of_list [(Lg_rt.DKw (Clj_core.Keyword.keyword "id")); (Lg_rt.DKw (Clj_core.Keyword.keyword "name")); (Lg_rt.DKw (Clj_core.Keyword.keyword "role")); (Lg_rt.DKw (Clj_core.Keyword.keyword "theme"))]))) in (let (* @local *) miss__110 = _m__106 in 
+# 68 "/Users/devin/repos/lg2/test/destrfull.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dC ") ^ (Lg_rt.str_string ((Lg_rt.str_opt (Lg_rt.str_dyn) id__104))) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_opt (Lg_rt.str_dyn) name__107) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn role__108) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn theme__109) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_string ((Lg_rt.str_int (Clj_core.Map.count extra__111)))) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_string ((Lg_rt.str_int (Clj_core.Map.count miss__110))))))))))))))))))))))))
+
+# 70 "/Users/devin/repos/lg2/test/destrfull.lg"
+let () = (ignore ((let mk__113 = (fun k__112 -> (Clj_core.Keyword.of_string ("user" ^ "/" ^ (Clj_core.Keyword.name k__112)))) in 
+# 71 "/Users/devin/repos/lg2/test/destrfull.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dD ") ^ (Lg_rt.str_string ((Lg_rt.str_kw (mk__113 (Clj_core.Keyword.keyword "name"))))))))))))
+
+# 72 "/Users/devin/repos/lg2/test/destrfull.lg"
+let () = (ignore ((let m__114 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "id"), (Lg_rt.DInt 1)); ((Clj_core.Keyword.keyword "name"), (Lg_rt.DStr "ada"))]) in 
+# 73 "/Users/devin/repos/lg2/test/destrfull.lg"
+(let dm__115 = m__114 in (let name__116 = (match Clj_core.Map.get dm__115 (Clj_core.Keyword.keyword "name") with Some v -> v | None -> failwith "missing key :name") in 
+# 74 "/Users/devin/repos/lg2/test/destrfull.lg"
+(print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dE ") ^ (Lg_rt.str_string ((Lg_rt.str_kw (Clj_core.Keyword.of_string ("user" ^ "/" ^ ((Lg_rt.str_dyn name__116))))))))))))))))
 end
 

@@ -27,3 +27,8 @@ ns user None
 qk true false true false
 me true false false
 kw2 :ns/name ns/name
+dA r,l,2
+dB 7,a,r
+dC 7,ada,r,l,2,0
+dD :user/name
+dE :user/ada
