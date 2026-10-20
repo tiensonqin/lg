@@ -11,16 +11,31 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.5"
+          cache-prefix: v1
           opam-pin: false
+      - name: Git auth for private deps
+        env:
+          CLJ_CORE_PAT: ${{ secrets.CLJ_CORE_PAT }}
+        run: |
+          if [ -n "${CLJ_CORE_PAT:-}" ]; then
+            git config --global \
+              url."https://x-access-token:${CLJ_CORE_PAT}@github.com/logseq/clj-core".insteadOf \
+              "https://github.com/logseq/clj-core"
+            echo "clj-core auth configured"
+          else
+            echo "CLJ_CORE_PAT not set; clj-core must be public for the pin to work"
+          fi
       - name: Pin deps
         run: |
           opam install -y dune ocamlfind
           opam pin add -y -k git clj-core https://github.com/logseq/clj-core
           opam pin add -y -k git rrbvec https://github.com/logseq/rrbvec
+          opam update -y
+          opam upgrade -y
           opam install -y clj-core rrbvec
       - name: Build release tarball
         run: bash tools/release.sh "${GITHUB_REF_NAME#v}"

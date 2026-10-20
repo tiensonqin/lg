@@ -9,19 +9,39 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Setup OCaml 5.5.0
+      - name: Setup OCaml 5.5.0 (cached switch)
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.5.0"
+          cache-prefix: v1
           opam-repositories: |
             default: https://github.com/ocaml/opam-repository.git
+
+      # clj-core is a private repo; authenticate git fetches only when the
+      # CLJ_CORE_PAT secret is configured (a PAT with read access to
+      # logseq/clj-core). If the repo is public this step is a no-op.
+      - name: Git auth for private deps
+        env:
+          CLJ_CORE_PAT: ${{ secrets.CLJ_CORE_PAT }}
+        run: |
+          if [ -n "${CLJ_CORE_PAT:-}" ]; then
+            git config --global \
+              url."https://x-access-token:${CLJ_CORE_PAT}@github.com/logseq/clj-core".insteadOf \
+              "https://github.com/logseq/clj-core"
+            echo "clj-core auth configured"
+          else
+            echo "CLJ_CORE_PAT not set; clj-core must be public for the pin to work"
+          fi
 
       - name: Pin clj-core deps
         run: |
           opam pin add -yn rrbvec git+https://github.com/logseq/rrbvec.git#main
           opam pin add -yn clj-core git+https://github.com/logseq/clj-core.git#main
+          # Refresh pinned git deps in case the opam switch was restored from cache
+          opam update -y
+          opam upgrade -y
 
       - name: Install OCaml deps
         run: opam install -y ocamlfind dune clj-core ctypes ctypes-foreign melange eio eio_main eio_posix iomux
@@ -29,6 +49,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      # lg's own content-addressed build cache + dune's incremental build dir.
+      # Per-run unique key saves; prefix restore picks up the previous run's cache.
+      - name: Restore lg build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.lg/cache
+            _build
+          key: lg-build-${{ github.ref }}-${{ github.run_id }}
+          restore-keys: |
+            lg-build-${{ github.ref }}-
 
       - name: Build lg
         run: opam exec -- dune build
