@@ -32,3 +32,14 @@ dB 7,a,r
 dC 7,ada,r,l,2,0
 dD :user/name
 dE :user/ada
+dF normal,0
+dG normal,0
+dH {:actor u, :missing {}, :type :x}
+dH2 {:actor None, :missing {}, :type :x}
+dM :v,{:i2 ()}
+st 1,9
+sy 1,5
+amp 1
+mp 12
+dK 1|Failure("missing key :z")
+dK2 Failure("missing key :zz")

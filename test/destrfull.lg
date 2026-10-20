@@ -72,3 +72,30 @@
 (let [m {:id 1 :name "ada"}]
   (let [{:keys! [name]} m]
     (println (str "dE " (pr-str (keyword "user" (str name)))))))
+
+;; :or entries are independent per-key defaults (mixed types on a dyn map)
+(let [{:keys [priority retries] :or {priority "normal" retries 0}} {}]
+  (println (str "dF " priority "," retries)))
+;; multiple :or directives all contribute
+(let [{:keys [priority retries] :or {priority "normal"} :or {retries 0}} {}]
+  (println (str "dG " priority "," retries)))
+;; :missing folds nested sub-pattern misses flat into the outer map
+(defn missnested [ev]
+  (let [{:keys! [type] {:keys [login]} :actor :missing miss} ev]
+    {:type type :actor login :missing miss}))
+(println (str "dH " (pr-str (missnested {:type :x :actor {:login "u"}}))))
+(println (str "dH2 " (pr-str (missnested {:type :x}))))
+(let [{:keys! [s1] {:keys! [i2]} :inner :missing m2} {:s1 :v :inner {}}]
+  (println (str "dM " (pr-str s1) "," (pr-str m2))))
+;; :strs!/:syms! with :or on homogeneous maps
+(let [{:strs! [x] :strs [y] :or {y 9}} {"x" 1}] (println (str "st " (str x) "," (str y))))
+(let [{:syms! [p] :syms [q] :or {q 5}} {'p 1}] (println (str "sy " (str p) "," (str q))))
+;; & doc keys: checked but not bound
+(let [{:keys [a] & [dk]} {:a 1 :dk 9}] (println (str "amp " (str a))))
+;; map patterns in match position
+(println (match {:a 1 :b 2} {:keys [a b]} (str "mp " (str a) (str b)) _ "no"))
+;; req! builtin: bare value or catchable raise
+(defn reqf2 [m] (str (str (req! m :a)) "|" (try (str (req! m :z)) (catch e (exn-message e)))))
+(println (str "dK " (reqf2 {:a 1})))
+(defn kf2 [m] (let [{:keys! [zz]} m] zz))
+(println (try (str "dK2 " (str (kf2 {}))) (catch e (str "dK2 " (exn-message e)))))

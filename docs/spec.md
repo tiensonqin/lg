@@ -244,7 +244,10 @@ bind processed views of the map after `:or` defaults are merged in:
 nesting a map pattern under `:excess` merges the inner excess into
 the outer one — and `:missing s` collects the keys a `!`-checked
 binding failed to find (`soft` semantics: the local binds None, `s`
-gains `key → ()`).
+gains `key → ()`). Nested map patterns fold their own missing maps
+flat into the outer one; all folded maps share one key type, so
+mixing e.g. `:strs` and `:keys` misses under a single `:missing` is
+an E101.
 
 **Namespaced keys.** `:ns/keys [a]` / `:ns/strs [s]` / `:ns/syms [s]`
 bind `a`/`s` to the qualified key `:ns/a`/`"ns/s"`/`'ns/s`; entry
@@ -260,7 +263,19 @@ default could never hide a missing required key. A `:or` default
 unifies with the map's value type: over a heterogeneous
 `(map k any)` map it is boxed to `dyn` at emit; over a homogeneous
 map a mismatched default type is a static E101 — mixing default
-types needs a dyn-valued map.
+types needs a dyn-valued map. `:or` may repeat: every `:or` map
+contributes entries to one per-key defaults table (the first entry
+wins a duplicated key), and each entry types independently — on a
+map whose value type is still open the defaults widen it to `any`,
+so mixed-type tables like `{priority "normal" retries 0}` compile
+and each local binds `any`.
+
+**Option bindings.** An unchecked key (`:keys`/`:strs`/`:syms`)
+binds `(option v)`; a missing key binds `None`, which renders as
+the literal `None` under `str`/`pr-str`. That is correct option
+behavior, but it trips users who expected the value: use
+`:missing`/`get` when absence is expected data, or `!` when it is
+a bug.
 
 **Checked keys.** The `!` variants `:keys!`/`:strs!`/`:syms!` make a
 missing key an error instead of an option: when the source map is a
@@ -281,7 +296,9 @@ and a binding symbol after `&` is an error.
 edges), `test/dynmatch.lg` (dyn-arm join coercion),
 `test/destructure.lg`, `test/checkedkeys.lg`, `test/implicit.lg`,
 `test/sigimplicit.lg`, `test/keywords.lg` (keyword identifiers),
-`should_fail/cm_*.err` (static rejections), `should_fail/marity.lg`, `should_fail/ckeys_*.err`, `should_fail/amp_*.err`.
+`should_fail/cm_*.err` (static rejections), `should_fail/marity.lg`, `should_fail/ckeys_*.err`, `should_fail/amp_*.err`,
+`should_fail/or_*.err` (`:or`+`!`, dup `:or` keys, unbound `:or`
+symbols), `should_fail/miss_*.err` (`:missing` misuse).
 
 ## 5. Macros and compile-time evaluation
 

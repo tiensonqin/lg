@@ -1,0 +1,1 @@
+(let [{:keys [a] :select s :or {zz 1}} {:a 1}] a)

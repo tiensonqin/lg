@@ -507,9 +507,9 @@ let () = (ignore ((print_endline ((Lg_rt.str_string ((Lg_rt.str_string "dynid ")
 let () = (ignore ((let _df__42 = 7 in (let _df__43 = 8 in (let dm__41 = (Clj_core.Map.of_list [((Clj_core.Keyword.keyword "q"), 1)]) in (let s__44 = (Clj_core.Map.get_or _df__42 dm__41 (Clj_core.Keyword.keyword "q")) in (let t__45 = (Clj_core.Map.get_or _df__43 dm__41 (Clj_core.Keyword.keyword "r")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int s__44) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_int t__45))))))))))))
 
 # 49 "/Users/devin/repos/lg2/test/destructure.lg"
-let () = (ignore ((let _df__47 = 9 in (let dm__46 = (Clj_core.Map.of_list []) in (let u__48 = (Clj_core.Map.get_or _df__47 dm__46 (Clj_core.Keyword.keyword "q")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int u__48))))))))))
+let () = (ignore ((let _df__47 = 9 in (let dm__46 = (Clj_core.Map.of_list []) in (let u__48 = (Clj_core.Map.get_or (Lg_rt.DInt _df__47) dm__46 (Clj_core.Keyword.keyword "q")) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_dyn u__48))))))))))
 
 # 50 "/Users/devin/repos/lg2/test/destructure.lg"
-let () = (ignore ((let _df__50 = (Clj_core.Vec.of_list [3; 4]) in (let dm__49 = (Clj_core.Map.of_list []) in (let dv__51 = (Clj_core.Map.get_or _df__50 dm__49 (Clj_core.Keyword.keyword "q")) in (let x__52 = (Clj_core.Vec.nth dv__51 0) in (let y__53 = (Clj_core.Vec.nth dv__51 1) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_int x__52) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_int y__53))))))))))))
+let () = (ignore ((let _df__50 = (Clj_core.Vec.of_list [3; 4]) in (let dm__49 = (Clj_core.Map.of_list []) in (let dv__51 = (Lg_rt.as_vec (Clj_core.Map.get_or (Lg_rt.DVec (Clj_core.Vec.map (fun x -> (Lg_rt.DInt x)) _df__50)) dm__49 (Clj_core.Keyword.keyword "q"))) in (let x__52 = (Clj_core.Vec.nth dv__51 0) in (let y__53 = (Clj_core.Vec.nth dv__51 1) in (print_endline ((Lg_rt.str_string ((Lg_rt.str_dyn x__52) ^ (Lg_rt.str_string ",") ^ (Lg_rt.str_dyn y__53))))))))))))
 end
 

@@ -1673,14 +1673,15 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
     and excess_sym = dir_sym "excess"
     and missing_sym = dir_sym "missing" in
     let or_defaults =
-      match
-        List.find_map
-          (fun (k, v) -> match k with Atom (_, Keyword "or") -> Some v | _ -> None)
-          kvs
-      with
-      | Some (Map (_, ds)) -> ds
-      | Some f -> type_error (floc f) ":or expects a map"
-      | None -> []
+      (* every :or directive contributes its pairs (Clojure accepts several
+         :or maps; later duplicate keys are first-come-wins in the lookups) *)
+      List.concat_map
+        (fun (k, v) ->
+          match k, v with
+          | Atom (_, Keyword "or"), Map (_, ds) -> ds
+          | Atom (_, Keyword "or"), f -> type_error (floc f) ":or expects a map"
+          | _ -> [])
+        kvs
     in
     (* each default is evaluated once into a temp (Clojure binds all of
        them before the map itself); uses see `ELocal gdef` *)
@@ -1729,6 +1730,10 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
       unify ml rhs.ety (TMap (TKeyword, vt));
       match def with
       | Some df ->
+        (* Clojure's :or entries are independent per-key defaults, not a
+           shared dict: widen a free value type to dyn so mixed-type
+           defaults coexist. A concrete value type keeps the E101. *)
+        (match repr vt with TVar _ -> unify ml vt TAny | _ -> ());
         unify ml df.ety vt;
         mk ml vt (ECall (mk ml (TFun ([ TKeyword; TMap (TKeyword, vt); vt ], vt)) (EBuiltin "kw-get"), [ kw_e; tmp_e; df ]))
       | None ->
@@ -1740,6 +1745,7 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
       unify ml rhs.ety (TMap (TString, vt));
       match def with
       | Some df ->
+        (match repr vt with TVar _ -> unify ml vt TAny | _ -> ());
         unify ml df.ety vt;
         mk ml vt (ECall (mk ml (TFun ([ TString; TMap (TString, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; df ]))
       | None ->
@@ -1751,6 +1757,7 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
       unify ml rhs.ety (TMap (TSymbol, vt));
       match def with
       | Some df ->
+        (match repr vt with TVar _ -> unify ml vt TAny | _ -> ());
         unify ml df.ety vt;
         mk ml vt (ECall (mk ml (TFun ([ TSymbol; TMap (TSymbol, vt); vt ], vt)) (EBuiltin "get"), [ tmp_e; sk_e; df ]))
       | None ->
@@ -2189,7 +2196,11 @@ and bind_pattern ctx l pat rhs : (binder * expr) list =
                | Some b -> mk ml (TMap (mkt, TUnit)) (ELocal b)
                | None -> mk ml (TMap (mkt, TUnit)) (EMapLit [])
              in
-             let merged = if !submiss = [] then cur else merge2 cur (subs_map !submiss) in
+             (* flat merge: every sub-pattern's missing map folds into the
+                outer one, so all collected keys stay `key -> ()` markers *)
+             let merged =
+               List.fold_left merge2 cur (List.map snd !submiss)
+             in
              bind_pattern ctx ml (Atom (ml, Symbol sn)) merged
            | None -> [])
         ]
